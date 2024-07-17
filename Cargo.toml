@@ -1,0 +1,31 @@
+[package]
+name = "rogue"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = "1.16.1"
+cfg-if = "1"
+downcast = "0.11.0"
+env_logger = "0.11.3"
+glam = "0.28.0"
+hecs = "0.10.4"
+include-wgsl-oil = "0.2.6"
+log = "0.4.21"
+parking_lot = "0.12.1"
+pollster = "0.3.0"
+raw-window-handle = "0.6.2"
+rogue-macros = { path = "./macros" }
+winit = "0.30.0"
+wgpu = { version = "0.20.1", features = ["webgpu", "vulkan-portability"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+console_log = "1.0"
+wasm-bindgen = "0.2.92"
+wasm-bindgen-futures = "0.4.42"
+web-sys = { version = "0.3.69", features = [
+  "Document",
+  "Window",
+  "Element"
+]}
