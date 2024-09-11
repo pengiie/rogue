@@ -72,12 +72,16 @@ impl DeviceResource {
                 .expect("Couldn't get graphics device");
 
             let surface_caps = surface.get_capabilities(&adapter);
-            let surface_format = surface_caps
+            let surface_format = *surface_caps
                 .formats
                 .iter()
-                .find(|format| matches!(format, wgpu::TextureFormat::Rgba8Unorm))
-                .expect("Couldn't find compatible surface format")
-                .clone();
+                .find(|format| {
+                    matches!(
+                        format,
+                        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                    )
+                })
+                .expect("Couldn't find compatible surface format");
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: surface_format,
@@ -130,5 +134,9 @@ impl DeviceResource {
 
     pub fn instance(&self) -> &wgpu::Instance {
         &self.instance
+    }
+
+    pub fn surface_config(&self) -> &wgpu::SurfaceConfiguration {
+        &self.surface_config
     }
 }

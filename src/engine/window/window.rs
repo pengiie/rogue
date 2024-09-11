@@ -33,6 +33,7 @@ pub type WindowHandle = std::sync::Arc<WinitWindow>;
 #[derive(Resource)]
 pub struct Window {
     winit_window: WindowHandle,
+    is_first_frame: bool
 }
 
 impl raw_window_handle::HasDisplayHandle for Window {
@@ -53,7 +54,9 @@ impl raw_window_handle::HasWindowHandle for Window {
 
 impl Window {
     pub fn new(event_loop: &winit::event_loop::ActiveEventLoop) -> Self {
-        let mut window_attrs = WindowAttributes::default().with_title("Rogue");
+        let mut window_attrs = WindowAttributes::default()
+            .with_title("Rogue")
+            .with_resizable(true);
         cfg_if::cfg_if! {
             if #[cfg(target_arch = "wasm32")] {
                 use wasm_bindgen::JsCast;
@@ -76,10 +79,19 @@ impl Window {
 
         Self {
             winit_window: WindowHandle::new(winit_window),
+            is_first_frame: true,
         }
     }
 
-    pub fn set_cursor_grabbed(&mut self, grabbed: bool) {
+    pub fn finish_frame(&mut self) {
+        self.is_first_frame = false;
+    }
+
+    pub fn is_first_frame(&self) -> bool {
+        self.is_first_frame
+    }
+
+    pub fn set_cursor_grabbed(&self, grabbed: bool) {
         let grab_mode = if grabbed {
             winit::window::CursorGrabMode::Confined
         } else {
@@ -88,11 +100,11 @@ impl Window {
         self.winit_window.set_cursor_grab(grab_mode).unwrap();
     }
 
-    pub fn set_cursor_visible(&mut self, visible: bool) {
+    pub fn set_cursor_visible(&self, visible: bool) {
         self.winit_window.set_cursor_visible(visible);
     }
 
-    pub fn set_visible(&mut self, visible: bool) {
+    pub fn set_visible(&self, visible: bool) {
         self.winit_window.set_visible(visible);
     }
 

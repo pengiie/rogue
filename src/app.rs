@@ -1,7 +1,10 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use log::info;
-use winit::{event::WindowEvent as WinitWindowEvent, event_loop::EventLoop};
+use raw_window_handle::HasWindowHandle;
+use winit::{
+    application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
+};
 
 use crate::{
     engine::{
@@ -10,8 +13,11 @@ use crate::{
         input::Input,
         resource::ResourceBank,
         system::System,
-        window::window::Window,
+        ui::{gui::Egui, state::UIState},
+        voxel::voxel::VoxelWorld,
+        window::{time::Time, window::Window},
     },
+    game::player::player::Player,
     game_loop,
     settings::Settings,
 };
@@ -67,9 +73,13 @@ impl App {
                 winit::platform::web::{ActiveEventLoopExtWebSys, EventLoopExtWebSys},
                 event_loop.spawn_app(self);
             } else {
-                event_loop.run_app(&mut self);
+                let _ = event_loop.run_app(&mut self);
             }
         }
+    }
+
+    pub fn run_system<Marker>(&self, mut system: impl System<Marker>) {
+        system.run(self.resource_bank());
     }
 
     // Initialized after the window resize event, aka. after the window has been created and we
@@ -78,18 +88,28 @@ impl App {
         let settings = Settings::default();
         let ecs = ECSWorld::new();
         let input = Input::new();
+        let time = Time::new();
 
         let rb = self.resource_bank_mut();
         rb.insert(settings);
         rb.insert(ecs);
         rb.insert(input);
+        rb.insert(time);
     }
 
     fn init_post_graphics(&mut self) {
+        let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
+        let ui_state = UIState::default();
         let renderer = Renderer::new(&self.resource_bank().get_resource::<DeviceResource>());
+        let voxel_world = VoxelWorld::new();
 
         let rb = self.resource_bank_mut();
+        rb.insert(ui_state);
+        rb.insert(egui);
         rb.insert(renderer);
+        rb.insert(voxel_world);
+
+        self.run_system(Player::spawn_player);
     }
 }
 
@@ -99,7 +119,10 @@ impl winit::application::ApplicationHandler for App {
             self.initialized_window = true;
 
             let window = Window::new(event_loop);
+            let window_id = window.handle().id();
+            let event = winit::event::WindowEvent::Resized(window.handle().inner_size());
             self.resource_bank_mut().insert(window);
+            self.window_event(event_loop, window_id, event);
         }
     }
 
@@ -109,6 +132,21 @@ impl winit::application::ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        if self.resource_bank().has_resource::<Egui>() {
+            let window = self.resource_bank().get_resource::<Window>();
+            if self
+                .resource_bank()
+                .get_resource_mut::<Egui>()
+                .handle_window_event(&window, &event)
+            {
+                return;
+            }
+        }
+        if self.resource_bank().has_resource::<Input>() {
+            self.resource_bank()
+                .get_resource_mut::<Input>()
+                .handle_winit_window_event(event.clone());
+        }
         match event {
             WinitWindowEvent::RedrawRequested => {
                 // We need to always request a redraw even with `ControlFlow::Poll` event though I
@@ -130,10 +168,21 @@ impl winit::application::ApplicationHandler for App {
                 }
 
                 if !self.initialized_graphics {
+                    println!(
+                        "{:?}",
+                        self.resource_bank()
+                            .get_resource::<Window>()
+                            .handle()
+                            .inner_size(),
+                    );
                     return;
                 }
 
                 game_loop::game_loop(self);
+
+                self.resource_bank
+                    .get_resource_mut::<Window>()
+                    .finish_frame();
             }
             WinitWindowEvent::Resized(new_size) => {
                 if !self.did_first_resize {
@@ -172,6 +221,19 @@ impl winit::application::ApplicationHandler for App {
                 event_loop.exit();
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if self.resource_bank().has_resource::<Input>() {
+            self.resource_bank()
+                .get_resource_mut::<Input>()
+                .handle_winit_device_event(device_id, event);
         }
     }
 }

@@ -1,17 +1,25 @@
 use crate::{
     app::App,
-    engine::{graphics::renderer::Renderer, input::Input, system::System},
+    engine::{
+        graphics::renderer::Renderer, input::Input, system::System, ui::UI, window::time::Time,
+    },
+    game::player::player::Player,
 };
 
 pub fn game_loop(app: &App) {
+    app.run_system(Time::update);
+
+    // Update physics logic.
+    app.run_system(Player::update_player);
+
+    // Handle UI.
+    app.run_system(UI::update);
+    app.run_system(UI::draw);
+
     // Render the frame to the swapchain.
-    run_system(app, Renderer::write_render_data);
-    run_system(app, Renderer::render);
+    app.run_system(Renderer::write_render_data);
+    app.run_system(Renderer::render);
 
     // Discard any inputs cached for this frame.
-    run_system(app, Input::clear_inputs);
-}
-
-fn run_system<Marker>(app: &App, mut system: impl System<Marker>) {
-    system.run(app.resource_bank());
+    app.run_system(Input::clear_inputs);
 }

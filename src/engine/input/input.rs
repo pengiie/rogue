@@ -137,6 +137,7 @@ impl Input {
             WinitDeviceEvent::Key(key_event) => {
                 if let winit::keyboard::PhysicalKey::Code(winit_key_code) = key_event.physical_key {
                     if let Some(key) = keyboard::Key::from_winit_key_code(winit_key_code) {
+                        println!("device key: {:?}", key);
                         match key_event.state {
                             winit::event::ElementState::Pressed => {
                                 self.keyboard
@@ -168,6 +169,7 @@ impl Input {
             if !is_synthetic {
                 if let winit::keyboard::PhysicalKey::Code(winit_key_code) = event.physical_key {
                     if let Some(key) = keyboard::Key::from_winit_key_code(winit_key_code) {
+                        println!("window key: {:?}", key);
                         match event.state {
                             winit::event::ElementState::Pressed => {
                                 self.keyboard

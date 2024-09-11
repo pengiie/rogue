@@ -15,7 +15,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             camera_fov: consts::FRAC_PI_2,
-            mouse_sensitivity: 0.05,
+            mouse_sensitivity: 0.01,
         }
     }
 }

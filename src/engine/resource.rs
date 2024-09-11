@@ -25,6 +25,10 @@ impl ResourceBank {
         }
     }
 
+    pub fn has_resource<R: Resource>(&self) -> bool {
+        self.resources.contains_key(&TypeId::of::<R>())
+    }
+
     pub fn get_resource<R: Resource>(&self) -> Res<R> {
         Ref::map(
             self.resources

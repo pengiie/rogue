@@ -1,3 +1,5 @@
+#import lib/ray.wgsl as ray;
+
 @group(0) @binding(0) var u_backbuffer_img: texture_storage_2d<rgba8unorm, write>;
 
 @compute @workgroup_size(8, 8)

@@ -1,11 +1,7 @@
-pub struct Camera {
-    projection_matrix: glam::f32::Mat4,
-}
+pub struct Camera {}
 
 impl Camera {
     pub fn new() -> Self {
-        Self {
-            projection_matrix: glam::f32::Mat4::IDENTITY,
-        }
+        Self {}
     }
 }

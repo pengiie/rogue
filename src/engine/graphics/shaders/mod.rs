@@ -1,5 +1,12 @@
-#[include_wgsl_oil::include_wgsl_oil("./ray_compute.wgsl")]
-pub mod ray_march {}
+pub mod ui {
+    pub const SOURCE: &str = include_str!("./ui.wgsl");
+}
 
-#[include_wgsl_oil::include_wgsl_oil("./blit.wgsl")]
-pub mod blit {}
+pub mod blit {
+    pub const SOURCE: &str = include_str!("./blit.wgsl");
+}
+
+pub mod voxel_trace {
+    pub const SOURCE: &str = include_str!("./voxel_trace.wgsl");
+    pub const WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
+}
