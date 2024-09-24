@@ -14,7 +14,7 @@ use crate::{
         resource::ResourceBank,
         system::System,
         ui::{gui::Egui, state::UIState},
-        voxel::voxel::VoxelWorld,
+        voxel::world::VoxelWorld,
         window::{time::Time, window::Window},
     },
     game::player::player::Player,
@@ -101,7 +101,11 @@ impl App {
         let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
         let ui_state = UIState::default();
         let renderer = Renderer::new(&self.resource_bank().get_resource::<DeviceResource>());
-        let voxel_world = VoxelWorld::new();
+        let voxel_world = VoxelWorld::new(
+            self.resource_bank()
+                .get_resource::<DeviceResource>()
+                .device(),
+        );
 
         let rb = self.resource_bank_mut();
         rb.insert(ui_state);

@@ -64,7 +64,11 @@ impl DeviceResource {
                     &wgpu::DeviceDescriptor {
                         label: Some("rogue_device"),
                         required_features: wgpu::Features::empty(),
-                        required_limits: wgpu::Limits::default(),
+                        required_limits: wgpu::Limits {
+                            max_buffer_size: 1 << 30,
+                            max_storage_buffer_binding_size: 1 << 30,
+                            ..Default::default()
+                        },
                     },
                     None,
                 )

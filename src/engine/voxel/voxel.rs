@@ -6,7 +6,9 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use super::{esvo::VoxelModelESVO, flat::VoxelModelFlat};
+use crate::common::aabb::AABB;
+
+use super::{allocator::VoxelAllocator, esvo::VoxelModelESVO, flat::VoxelModelFlat};
 
 pub struct VoxelRange {
     pub data: VoxelModelFlat,
@@ -49,37 +51,59 @@ bitflags::bitflags! {
 
         // Color 8,8,8,8, Normal 10,10,10
         const COMPRESSED = 4;
+
+        // Max 8 attachments
     }
 }
 
 pub trait VoxelModelImpl {
     fn set_voxel_range(&mut self, range: VoxelRange);
-    fn get_node_data(&self) -> &[u8];
-    fn get_attachment_lookup_data(&self) -> &[u8];
-    fn get_attachments_data(&self) -> HashMap<Attributes, &[u8]>;
+    fn schema(&self) -> VoxelModelSchema;
 }
 
+#[derive(Clone, Copy)]
 pub enum VoxelModelSchema {
-    ESVO,
+    ESVO = 1,
 }
 
 pub struct VoxelModel {
     // TODO: Make the models store in memory pools so we can get contiguous cache access, only
     // important if we end up with a lot of models such as for breakables or something.
     model: Box<dyn VoxelModelImpl>,
+    aabb: AABB,
+    schema: VoxelModelSchema,
 }
 
 impl VoxelModel {
-    pub fn new(schema: VoxelModelSchema) -> Self {
+    pub fn new(schema: VoxelModelSchema, aabb: AABB) -> Self {
         Self {
-            model: Self::initialize_voxel_model(schema),
+            model: Self::initialize_voxel_model(schema.clone()),
+            aabb,
+            schema,
         }
+    }
+
+    pub fn from_impl(model: Box<dyn VoxelModelImpl>, aabb: AABB) -> Self {
+        let schema = model.deref().schema();
+        Self {
+            model,
+            aabb,
+            schema,
+        }
+    }
+
+    pub fn aabb(&self) -> &AABB {
+        &self.aabb
     }
 
     fn initialize_voxel_model(schema: VoxelModelSchema) -> Box<dyn VoxelModelImpl> {
         Box::new(match schema {
-            VoxelModelSchema::ESVO => VoxelModelESVO::new(),
+            VoxelModelSchema::ESVO => VoxelModelESVO::new(32),
         })
+    }
+
+    pub fn schema(&self) -> VoxelModelSchema {
+        self.schema
     }
 }
 
@@ -94,34 +118,5 @@ impl Deref for VoxelModel {
 impl DerefMut for VoxelModel {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.model.deref_mut()
-    }
-}
-
-#[derive(Resource)]
-pub struct VoxelWorld {
-    esvo: VoxelModel,
-}
-
-impl VoxelWorld {
-    pub fn new() -> Self {
-        let mut esvo = VoxelModel::new(VoxelModelSchema::ESVO);
-        esvo.set_voxel_range(VoxelRange::new_filled(
-            Vector3::new(0, 0, 0),
-            Vector3::new(10, 10, 10),
-            0xFFFF00FF,
-        ));
-        Self { esvo }
-    }
-
-    pub fn world_node_data(&self) -> &[u8] {
-        self.esvo.get_node_data()
-    }
-
-    pub fn world_attachment_lookup_data(&self) -> &[u8] {
-        self.esvo.get_attachment_lookup_data()
-    }
-
-    pub fn world_attachments_data(&self) -> HashMap<Attributes, &[u8]> {
-        self.esvo.get_attachments_data()
     }
 }

@@ -1,4 +1,5 @@
 mod app;
+mod common;
 mod engine;
 mod game;
 mod game_loop;

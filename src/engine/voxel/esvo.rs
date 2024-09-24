@@ -1,88 +1,88 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
-use fixedbitset::FixedBitSet;
+use egui::debug_text::print;
 use nalgebra::Vector3;
-use pollster::block_on;
-use wgpu::naga::valid;
 
-use super::voxel::{Attributes, VoxelModelImpl, VoxelRange};
+use crate::common::morton::morton_decode;
+
+use super::voxel::{Attributes, VoxelModelImpl, VoxelModelSchema, VoxelRange};
 
 pub(crate) struct VoxelModelESVO {
-    nodes: Nodes,
-    attachments: Attachments,
-    length: Vector3<u32>,
-    root: u32,
+    length: u32,
+
+    data: Vec<u32>,
+    bucket_lookup: Vec<BucketLookupInfo>,
 }
 
 impl VoxelModelESVO {
-    pub fn new() -> Self {
-        VoxelModelESVO {
-            nodes: Nodes::new(),
-            attachments: Attachments::new(),
-            length: Vector3::new(2, 2, 2),
-            root: 0,
+    pub fn new(length: u32) -> Self {
+        assert!(length.is_power_of_two());
+        let mut s = VoxelModelESVO {
+            length,
+
+            data: Vec::new(),
+            bucket_lookup: Vec::new(),
+        };
+
+        s.append_node(Self::new_node(0, false, 0, 0));
+
+        s
+    }
+
+    pub fn append_node(&mut self, node: u32) {
+        let bucket_index = self.get_free_bucket();
+        let bucket = &mut self.bucket_lookup[bucket_index as usize];
+
+        self.data[bucket.bucket_free_start as usize] = node;
+        bucket.node_size += 1;
+        bucket.bucket_free_start += 1;
+        if (bucket.bucket_free_start % 8192) == 0 {
+            bucket.bucket_free_start += 1;
         }
     }
-}
 
-impl VoxelModelImpl for VoxelModelESVO {
-    /// Sets a voxel range relative to the current models origin.
-    fn set_voxel_range(&mut self, range: VoxelRange) {
-        let esvo_min_length = range.length().map(|x| x.next_power_of_two());
-        let needs_resize = self
-            .length
-            .zip_fold(&esvo_min_length, false, |acc, a, b| acc || (a < b));
-        if needs_resize {}
-    }
-    fn get_node_data(&self) -> &[u8] {
-        bytemuck::cast_slice(self.nodes.nodes.as_slice())
-    }
-
-    fn get_attachment_lookup_data(&self) -> &[u8] {
-        bytemuck::cast_slice(self.attachments.lookup.as_slice())
-    }
-
-    fn get_attachments_data(&self) -> HashMap<Attributes, &[u8]> {
-        self.attachments
-            .attributes
+    pub fn get_free_bucket(&mut self) -> u32 {
+        self.bucket_lookup
             .iter()
-            .map(|(attr, data)| (*attr, bytemuck::cast_slice(data.as_slice())))
-            .collect::<_>()
+            .find_map(|info| {
+                if info.node_size < info.node_capacity {
+                    Some(info.index)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                self.push_empty_block();
+
+                self.bucket_lookup.len() as u32 - 1
+            })
     }
-    //fn get_range_mut(&self, point0: IVec3, point1: IVec3) -> VoxelRegion {}
-}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Block {
-    pub total_size: u32,
-    pub node_size: u32,
-    pub available_node_size: u32,
-}
+    pub fn push_empty_block(&mut self) {
+        let bucket_info = BucketLookupInfo::empty(
+            self.bucket_lookup.len() as u32,
+            self.data.len() as u32,
+            Self::node_count_from_length(16),
+        );
+        self.data
+            .resize(self.data.len() + bucket_info.bucket_total_size as usize, 0);
+        self.bucket_lookup.push(bucket_info);
+        self.data[bucket_info.bucket_info_start as usize] = bucket_info.bucket_node_start;
+        // TODO: Write attachment indices
+        self.data[bucket_info.bucket_info_start as usize + 1] = 0;
 
-struct Nodes {
-    nodes: Vec<u32>,
-    blocks: Vec<Block>,
-}
+        // Write page headers to point to block info
+        let mut i = bucket_info.bucket_absolute_start;
+        while i < bucket_info.bucket_info_start {
+            if (i % 8192) == 0 {
+                self.data[i as usize] = bucket_info.bucket_info_start;
+            }
 
-impl Nodes {
-    /// Initializes with an empty root node
-    fn new() -> Self {
-        Self {
-            nodes: vec![
-            //        // Page header - points to block info
-            //        3,
-            //        // Nodes
-            //        Self::make_node(1, false, 0b00000011, 0b00000010),
-            //        Self::make_node(0, false, 0b00000100, 0b00000100),
-            //        // Block info
-            //        1, // Block Start (Makes node 0 at index 0)
-            //        0, // Lookup Pointer
-                ],
-            blocks: vec![],
+            i = (i + 1).next_multiple_of(8192);
         }
     }
 
-    fn new_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> u32 {
+    const fn new_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> u32 {
         assert!(pointer < 0b1000000000000000, "Pointer is too big.");
         assert!(valid_mask < 0b100000000, "valid mask is too big.");
         assert!(leaf_mask < 0b100000000, "leaf mask is too big.");
@@ -97,59 +97,76 @@ impl Nodes {
         x
     }
 
-    /// Calculates (total size, block info start index)
-    const fn calculate_block_sizes(mut side_length: u32) -> (u32, u32) {
-        let mut total = 1;
-        while side_length > 1 {
-            total += side_length.pow(3);
-            side_length /= 2;
+    fn node_count_from_length(length: u32) -> u32 {
+        let mut count = 0;
+        for i in 0..length.trailing_zeros() {
+            count += (length >> i).pow(3);
         }
 
-        let page_header_count = (total / 8192) + 1;
-        let block_info_start_index = total + page_header_count;
-        let total = total + page_header_count + 2;
-
-        (total, block_info_start_index)
-    }
-    const BLOCK_SIZE: (u32, u32) = Self::calculate_block_sizes(32);
-    fn create_block(&mut self) -> Block {}
-
-    fn find_or_create_block(&mut self, needed_size: u32) -> Block {
-        for block in &self.blocks {
-            if block.available_node_size >= needed_size {
-                return block.clone();
-            }
-        }
-
-        self.create_block()
-    }
-
-    fn append_node(&mut self, node: u32) {
-        let block = self.find_or_create_block(1);
+        count
     }
 }
 
-struct Attachments {
-    lookup: Vec<u32>,
-    attributes: HashMap<Attributes, Vec<u32>>,
+impl VoxelModelImpl for VoxelModelESVO {
+    /// Sets a voxel range relative to the current models origin.
+    fn set_voxel_range(&mut self, range: VoxelRange) {}
+
+    fn schema(&self) -> VoxelModelSchema {
+        VoxelModelSchema::ESVO
+    }
 }
 
-impl Attachments {
-    fn new() -> Self {
-        let mut attributes = HashMap::new();
-        attributes.insert(Attributes::ALBEDO, vec![0xFF00FF00, 0xFF000000]);
+#[derive(Clone, Copy)]
+struct BucketLookupInfo {
+    index: u32,
+    node_capacity: u32,
+    node_size: u32,
+    // Pointers relative to start of esvo data
+    bucket_absolute_start: u32,
+    bucket_node_start: u32,
+    bucket_free_start: u32,
+    bucket_info_start: u32,
+    bucket_total_size: u32,
+}
+
+impl BucketLookupInfo {
+    pub fn empty(index: u32, mut start_offset: u32, desired_node_count: u32) -> Self {
+        let mut left = start_offset;
+        let mut i = 0;
+        while i < desired_node_count {
+            let next_page_header = left.next_multiple_of(8192);
+            let nodes_between = (next_page_header - left).min(desired_node_count - i);
+            i += nodes_between;
+            left += nodes_between + 1;
+        }
+
+        let bucket_absolute_start = start_offset;
+        if (start_offset % 8192) == 0 {
+            start_offset += 1;
+        }
+
+        println!("totla size; {:?}", (left + Self::bucket_info_size()) * 4);
+
         Self {
-            lookup: vec![
-                Self::make_lookup_slot(0, 0b00000010),
-                Self::make_lookup_slot(1, 0b00000100),
-            ],
-            attributes,
+            index,
+            node_capacity: desired_node_count,
+            node_size: 0,
+            bucket_absolute_start,
+            bucket_node_start: start_offset,
+            bucket_free_start: start_offset,
+            bucket_info_start: left - 1,
+            bucket_total_size: left + Self::bucket_info_size(),
         }
     }
 
-    fn make_lookup_slot(raw_attachment_pointer: u32, attribute_mask: u32) -> u32 {
-        assert!(attribute_mask & 0xFF == attribute_mask);
+    const fn bucket_info_size() -> u32 {
+        let mut x = 0;
 
-        (raw_attachment_pointer << 8) | attribute_mask
+        // Bucket start index
+        x += 1;
+        // Albedo attachment index (Absolute in data buffer)
+        x += 1;
+
+        x
     }
 }

@@ -24,7 +24,7 @@ use crate::{
         physics::transform::Transform,
         resource::{Res, ResMut},
         ui::{gui::Egui, state::UIState},
-        voxel::voxel::{Attributes, VoxelWorld},
+        voxel::{voxel::Attributes, world::VoxelWorld},
     },
     game::player::player::Player,
 };
@@ -45,6 +45,9 @@ pub struct CameraBuffer {
 #[repr(C)]
 pub struct WorldBuffer {
     camera: CameraBuffer,
+    voxel_model_count: u32,
+    // Padding for struct alignment of 16
+    padding: [f32; 15],
 }
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable, Debug)]
@@ -60,10 +63,12 @@ pub struct Renderer {
     backbuffer: wgpu::Texture,
     backbuffer_sampler: wgpu::Sampler,
 
-    esvo_nodes_buffer: wgpu::Buffer,
-    esvo_lookup_buffer: wgpu::Buffer,
-    esvo_attachment_buffers: HashMap<Attributes, wgpu::Buffer>,
-    world_buffer: wgpu::Buffer,
+    /// Holds the camera data.
+    world_info_buffer: wgpu::Buffer,
+    /// The acceleration buffer for voxel model bounds interaction.
+    world_acceleration_buffer: wgpu::Buffer,
+    /// The buffer containing all voxel model data, heterogenous.
+    world_data_buffer: wgpu::Buffer,
 
     ray_bind_group_layout: wgpu::BindGroupLayout,
     ray_bind_group: wgpu::BindGroup,
@@ -108,7 +113,7 @@ impl Renderer {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -118,16 +123,6 @@ impl Renderer {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
@@ -135,7 +130,7 @@ impl Renderer {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding: 4,
+                        binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -161,46 +156,32 @@ impl Renderer {
 
         let (backbuffer, backbuffer_view) = Self::create_backbuffer(device, 1080, 720);
 
-        let world_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("world_buffer"),
+        let world_info_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("world_info_buffer"),
             size: std::mem::size_of::<WorldBuffer>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let esvo_nodes_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("esvo_nodes_buffer"),
-            size: MAX_ESVO_NODES as u64 * 4,
+        let world_acceleration_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("world_acceleration_buffer"),
+            size: 4 * 1000, // 1000 voxel models
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let esvo_lookup_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("esvo_lookup_buffer"),
-            size: MAX_ESVO_NODES as u64 * 4,
+
+        let world_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("world_data_buffer"),
+            size: 1 << 28,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let esvo_attachment_buffers = [Attributes::ALBEDO]
-            .into_iter()
-            .map(|attr| {
-                (
-                    attr,
-                    device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("esvo_attachment_buffer"),
-                        size: MAX_ESVO_NODES as u64 * 8,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                )
-            })
-            .collect::<HashMap<Attributes, wgpu::Buffer>>();
         let ray_bind_group = Self::create_ray_bind_group(
             device,
             &ray_bind_group_layout,
             &backbuffer_view,
-            &esvo_nodes_buffer,
-            &esvo_lookup_buffer,
-            &esvo_attachment_buffers,
-            &world_buffer,
+            &world_info_buffer,
+            &world_acceleration_buffer,
+            &world_data_buffer,
         );
 
         let blit_bind_group_layout =
@@ -419,10 +400,9 @@ impl Renderer {
             backbuffer,
             backbuffer_sampler,
 
-            esvo_nodes_buffer,
-            esvo_lookup_buffer,
-            esvo_attachment_buffers,
-            world_buffer,
+            world_info_buffer,
+            world_acceleration_buffer,
+            world_data_buffer,
 
             ray_bind_group_layout,
             ray_bind_group,
@@ -477,19 +457,10 @@ impl Renderer {
         device: &DeviceResource,
         layout: &wgpu::BindGroupLayout,
         backbuffer_view: &wgpu::TextureView,
-        esvo_nodes_buffer: &wgpu::Buffer,
-        esvo_lookup_buffer: &wgpu::Buffer,
-        esvo_attachments_buffer: &HashMap<Attributes, wgpu::Buffer>,
-        world_buffer: &wgpu::Buffer,
+        world_info_buffer: &wgpu::Buffer,
+        world_acceleration_buffer: &wgpu::Buffer,
+        world_data_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
-        let attachment_buffers = esvo_attachments_buffer
-            .iter()
-            .map(|(_attr, buffer)| wgpu::BufferBinding {
-                buffer,
-                offset: 0,
-                size: None,
-            })
-            .collect::<Vec<_>>();
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ray bind group"),
             layout: &layout,
@@ -501,7 +472,7 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: esvo_nodes_buffer,
+                        buffer: world_info_buffer,
                         offset: 0,
                         size: None,
                     }),
@@ -509,7 +480,7 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: world_buffer,
+                        buffer: world_acceleration_buffer,
                         offset: 0,
                         size: None,
                     }),
@@ -517,16 +488,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: esvo_lookup_buffer,
+                        buffer: world_data_buffer,
                         offset: 0,
                         size: None,
                     }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Buffer(
-                        attachment_buffers.first().unwrap().clone(),
-                    ),
                 },
             ],
         })
@@ -541,7 +506,7 @@ impl Renderer {
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ui_bind_group"),
-            layout: &layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -571,7 +536,7 @@ impl Renderer {
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("blit_bind_group"),
-            layout: &layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -579,7 +544,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&backbuffer_view),
+                    resource: wgpu::BindingResource::TextureView(backbuffer_view),
                 },
             ],
         })
@@ -587,7 +552,7 @@ impl Renderer {
 
     pub fn on_resize(&mut self, device: &DeviceResource, width: u32, height: u32) {
         // Add to app.resize and recreate bind groups with new image
-        let (backbuffer, backbuffer_view) = Self::create_backbuffer(device, width, height);
+        let (backbuffer, _backbuffer_view) = Self::create_backbuffer(device, width, height);
 
         self.backbuffer = backbuffer;
     }
@@ -615,36 +580,33 @@ impl Renderer {
                 .try_into()
                 .unwrap();
             let half_fov = ui_state.player_fov.to_radians() / 2.0;
-            let world_data = WorldBuffer {
+            let world_info = WorldBuffer {
                 camera: CameraBuffer {
                     transform: camera_transform_arr,
                     rotation: camera_transform_arr_small,
                     half_fov,
                     padding: [0.0; 3],
                 },
+                voxel_model_count: voxel_world.get_voxel_models().len() as u32,
+                padding: [0.0; 15],
             };
-
-            device
-                .queue()
-                .write_buffer(&renderer.world_buffer, 0, bytemuck::bytes_of(&world_data));
+            println!(
+                "Voxel model count: {}",
+                voxel_world.get_voxel_models().len() as u32
+            );
 
             device.queue().write_buffer(
-                &renderer.esvo_nodes_buffer,
+                &renderer.world_info_buffer,
                 0,
-                voxel_world.world_node_data(),
+                bytemuck::bytes_of(&world_info),
             );
+
+            let world_acceleration_data = voxel_world.get_acceleration_data();
             device.queue().write_buffer(
-                &renderer.esvo_lookup_buffer,
+                &renderer.world_acceleration_buffer,
                 0,
-                voxel_world.world_attachment_lookup_data(),
+                bytemuck::cast_slice(&world_acceleration_data),
             );
-            for (attr, data) in voxel_world.world_attachments_data() {
-                device.queue().write_buffer(
-                    renderer.esvo_attachment_buffers.get(&attr).unwrap(),
-                    0,
-                    data,
-                );
-            }
         }
 
         'ui: {
@@ -663,9 +625,9 @@ impl Renderer {
             // Update textures.
             if let Some(texture_deltas) = egui.textures_delta() {
                 for (id, delta) in &texture_deltas.set {
-                    let sampler = if renderer.ui_samplers.contains_key(&delta.options) {
-                        renderer.ui_samplers.get(&delta.options).unwrap()
-                    } else {
+                    let sampler = if let std::collections::hash_map::Entry::Vacant(e) =
+                        renderer.ui_samplers.entry(delta.options)
+                    {
                         let options = &delta.options;
                         let wrap_mode = match options.wrap_mode {
                             egui::TextureWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
@@ -695,7 +657,9 @@ impl Renderer {
                             border_color: None,
                         });
 
-                        renderer.ui_samplers.insert(delta.options, sampler);
+                        e.insert(sampler);
+                        renderer.ui_samplers.get(&delta.options).unwrap()
+                    } else {
                         renderer.ui_samplers.get(&delta.options).unwrap()
                     };
                     if delta.is_whole() {
@@ -720,34 +684,13 @@ impl Renderer {
                                 let texture_view =
                                     texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-                                let bind_group =
-                                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                        label: Some("ui_bind_group"),
-                                        layout: &renderer.ui_bind_group_layout,
-                                        entries: &[
-                                            wgpu::BindGroupEntry {
-                                                binding: 0,
-                                                resource: wgpu::BindingResource::Sampler(sampler),
-                                            },
-                                            wgpu::BindGroupEntry {
-                                                binding: 1,
-                                                resource: wgpu::BindingResource::TextureView(
-                                                    &texture_view,
-                                                ),
-                                            },
-                                            wgpu::BindGroupEntry {
-                                                binding: 2,
-                                                resource: wgpu::BindingResource::Buffer(
-                                                    wgpu::BufferBinding {
-                                                        buffer: &renderer.ui_uniform_buffer,
-                                                        offset: 0,
-                                                        size: None,
-                                                    },
-                                                ),
-                                            },
-                                        ],
-                                    });
-
+                                let bind_group = Self::create_ui_bind_group(
+                                    &device,
+                                    &renderer.ui_bind_group_layout,
+                                    sampler,
+                                    &texture_view,
+                                    &renderer.ui_uniform_buffer,
+                                );
                                 renderer.ui_textures.insert(*id, (texture, bind_group));
                             }
 
