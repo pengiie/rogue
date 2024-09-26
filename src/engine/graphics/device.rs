@@ -16,6 +16,7 @@ use crate::engine::window::window::{Window, WindowHandle};
 pub struct DeviceResource {
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
+    surface_resized: bool,
     surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -101,6 +102,7 @@ impl DeviceResource {
             Self {
                 instance,
                 surface,
+                surface_resized: true,
                 surface_config,
                 device,
                 queue,
@@ -108,11 +110,20 @@ impl DeviceResource {
         }
     }
 
+    pub fn finish_frame(&mut self) {
+        self.surface_resized = false;
+    }
+
+    pub fn did_surface_resize(&self) -> bool {
+        self.surface_resized
+    }
+
     pub fn resize_surface(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.surface_config.width = new_size.width;
             self.surface_config.height = new_size.height;
             self.surface.configure(&self.device, &self.surface_config);
+            self.surface_resized = true;
         }
     }
 

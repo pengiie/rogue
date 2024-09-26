@@ -26,7 +26,7 @@ impl Player {
         Self {
             euler: Vector3::zeros(),
             paused: true,
-            movement_speed: 0.5,
+            movement_speed: 1.0,
         }
     }
     pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>) {
@@ -67,11 +67,11 @@ impl Player {
 
         let mut translation = Vector3::new(0.0, 0.0, 0.0);
         if input_axes.x != 0.0 || input_axes.y != 0.0 {
-            let rotated_xz = transform
-                .isometry
-                .rotation
-                .transform_vector(&Vector3::new(input_axes.x, 0.0, input_axes.y))
-                .normalize();
+            let rotated_xz = transform.isometry.rotation.transform_vector(&Vector3::new(
+                input_axes.x,
+                0.0,
+                input_axes.y,
+            ));
             translation.x = rotated_xz.x;
             translation.z = rotated_xz.z;
         }
@@ -83,8 +83,13 @@ impl Player {
             translation.y = -1.0;
         }
 
+        let mut speed = player.movement_speed;
+        if input.is_key_down(Key::LControl) {
+            speed = 5.0;
+        }
+
         transform.isometry.translation.vector +=
-            translation * player.movement_speed * time.delta_time().as_secs_f32();
+            translation * speed * time.delta_time().as_secs_f32();
         //println!("FPS: {:?}", time.fps());
     }
 }

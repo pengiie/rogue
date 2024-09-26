@@ -17,6 +17,7 @@ pub fn game_loop(app: &App) {
     app.run_system(UI::draw);
 
     // Render the frame to the swapchain.
+    app.run_system(Renderer::update_gpu_objects);
     app.run_system(Renderer::write_render_data);
     app.run_system(Renderer::render);
 

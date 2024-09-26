@@ -27,6 +27,7 @@ use crate::{
         voxel::{voxel::Attributes, world::VoxelWorld},
     },
     game::player::player::Player,
+    settings::{GraphicsSettingsAttributes, GraphicsSettingsSet, Settings},
 };
 
 use super::{camera::Camera, device::DeviceResource, shaders};
@@ -60,7 +61,10 @@ const MAX_ESVO_NODES: u32 = 10_000;
 
 #[derive(Resource)]
 pub struct Renderer {
-    backbuffer: wgpu::Texture,
+    graphics_settings: GraphicsSettingsSet,
+
+    backbuffer: Option<(wgpu::Texture, wgpu::TextureView)>,
+    backbuffer_prev: Option<(wgpu::Texture, wgpu::TextureView)>,
     backbuffer_sampler: wgpu::Sampler,
 
     /// Holds the camera data.
@@ -71,11 +75,11 @@ pub struct Renderer {
     world_data_buffer: wgpu::Buffer,
 
     ray_bind_group_layout: wgpu::BindGroupLayout,
-    ray_bind_group: wgpu::BindGroup,
+    ray_bind_group: Option<wgpu::BindGroup>,
     ray_pipeline: wgpu::ComputePipeline,
 
     blit_bind_group_layout: wgpu::BindGroupLayout,
-    blit_bind_group: wgpu::BindGroup,
+    blit_bind_group: Option<wgpu::BindGroup>,
     blit_pipeline: wgpu::RenderPipeline,
 
     ui_vertex_buffer: wgpu::Buffer,
@@ -97,7 +101,7 @@ impl Renderer {
         });
         let ray_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Ray bind group layout"),
+                label: Some("Ray bind group eayout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -154,8 +158,6 @@ impl Renderer {
             compilation_options: PipelineCompilationOptions::default(),
         });
 
-        let (backbuffer, backbuffer_view) = Self::create_backbuffer(device, 1080, 720);
-
         let world_info_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world_info_buffer"),
             size: std::mem::size_of::<WorldBuffer>() as u64,
@@ -175,14 +177,6 @@ impl Renderer {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let ray_bind_group = Self::create_ray_bind_group(
-            device,
-            &ray_bind_group_layout,
-            &backbuffer_view,
-            &world_info_buffer,
-            &world_acceleration_buffer,
-            &world_data_buffer,
-        );
 
         let blit_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -220,12 +214,6 @@ impl Renderer {
             anisotropy_clamp: 1,
             border_color: None,
         });
-        let blit_bind_group = Self::create_blit_bind_group(
-            device,
-            &blit_bind_group_layout,
-            &backbuffer_sampler,
-            &backbuffer_view,
-        );
         let blit_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit_shader_module"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shaders::blit::SOURCE)),
@@ -397,7 +385,10 @@ impl Renderer {
         });
 
         Self {
-            backbuffer,
+            graphics_settings: GraphicsSettingsSet::new(),
+
+            backbuffer: None,
+            backbuffer_prev: None,
             backbuffer_sampler,
 
             world_info_buffer,
@@ -405,11 +396,11 @@ impl Renderer {
             world_data_buffer,
 
             ray_bind_group_layout,
-            ray_bind_group,
+            ray_bind_group: None,
             ray_pipeline,
 
             blit_bind_group_layout,
-            blit_bind_group,
+            blit_bind_group: None,
             blit_pipeline,
 
             ui_samplers: HashMap::new(),
@@ -428,11 +419,7 @@ impl Renderer {
         wgpu::TextureFormat::Rgba8Unorm
     }
 
-    fn create_backbuffer(
-        device: &DeviceResource,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
+    fn update_backbuffer_textures(&mut self, device: &DeviceResource, width: u32, height: u32) {
         let backbuffer = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Backbuffer"),
             size: wgpu::Extent3d {
@@ -447,54 +434,74 @@ impl Renderer {
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        let backbuffer_view = backbuffer.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let view = backbuffer.create_view(&wgpu::TextureViewDescriptor::default());
+        let backbuffer_prev = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backbuffer"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::backbuffer_format(),
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let backbuffer_prev_view =
+            backbuffer_prev.create_view(&wgpu::TextureViewDescriptor::default());
 
-        (backbuffer, view)
+        self.backbuffer = Some((backbuffer, backbuffer_view));
+        self.backbuffer_prev = Some((backbuffer_prev, backbuffer_prev_view));
     }
 
-    fn create_ray_bind_group(
-        device: &DeviceResource,
-        layout: &wgpu::BindGroupLayout,
-        backbuffer_view: &wgpu::TextureView,
-        world_info_buffer: &wgpu::Buffer,
-        world_acceleration_buffer: &wgpu::Buffer,
-        world_data_buffer: &wgpu::Buffer,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ray bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(backbuffer_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: world_info_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: world_acceleration_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: world_data_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                },
-            ],
-        })
+    fn update_ray_bind_group(&mut self, device: &DeviceResource) {
+        self.ray_bind_group = Some(
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ray bind group"),
+                layout: &self.ray_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self
+                                .backbuffer
+                                .as_ref()
+                                .expect(
+                                    "Shouldn't update ray bind group if backbuffer doesn't exist.",
+                                )
+                                .1,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.world_info_buffer,
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.world_acceleration_buffer,
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.world_data_buffer,
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                ],
+            }),
+        );
     }
 
     fn create_ui_bind_group(
@@ -528,33 +535,51 @@ impl Renderer {
         })
     }
 
-    fn create_blit_bind_group(
-        device: &DeviceResource,
-        layout: &wgpu::BindGroupLayout,
-        backbuffer_sampler: &wgpu::Sampler,
-        backbuffer_view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit_bind_group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(backbuffer_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(backbuffer_view),
-                },
-            ],
-        })
+    fn update_blit_bind_group(&mut self, device: &DeviceResource) {
+        self.blit_bind_group = Some(
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit_bind_group"),
+                layout: &self.blit_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&self.backbuffer_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self
+                                .backbuffer
+                                .as_ref()
+                                .expect("Cant create bind group without required texture")
+                                .1,
+                        ),
+                    },
+                ],
+            }),
+        );
     }
 
-    pub fn on_resize(&mut self, device: &DeviceResource, width: u32, height: u32) {
-        // Add to app.resize and recreate bind groups with new image
-        let (backbuffer, _backbuffer_view) = Self::create_backbuffer(device, width, height);
+    pub fn update_gpu_objects(
+        mut renderer: ResMut<Renderer>,
+        device: Res<DeviceResource>,
+        settings: Res<Settings>,
+    ) {
+        renderer
+            .graphics_settings
+            .refresh_updates(&settings.graphics);
 
-        self.backbuffer = backbuffer;
+        let updates = renderer.graphics_settings.updates().clone();
+        for update in updates {
+            match update {
+                GraphicsSettingsAttributes::RenderSize((width, height)) => {
+                    // Resize backbuffers and recreate any bind groups that rely on them.
+                    renderer.update_backbuffer_textures(&device, width, height);
+                    renderer.update_ray_bind_group(&device);
+                    renderer.update_blit_bind_group(&device);
+                }
+            }
+        }
     }
 
     pub fn write_render_data(
@@ -590,10 +615,10 @@ impl Renderer {
                 voxel_model_count: voxel_world.get_voxel_models().len() as u32,
                 padding: [0.0; 15],
             };
-            println!(
-                "Voxel model count: {}",
-                voxel_world.get_voxel_models().len() as u32
-            );
+            //println!(
+            //    "Voxel model count: {}",
+            //    voxel_world.get_voxel_models().len() as u32
+            //);
 
             device.queue().write_buffer(
                 &renderer.world_info_buffer,
@@ -854,6 +879,15 @@ impl Renderer {
     }
 
     pub fn render(renderer: ResMut<Renderer>, device: Res<DeviceResource>, egui: Res<Egui>) {
+        let Some(backbuffer) = &renderer.backbuffer else {
+            return;
+        };
+        let Some(blit_bind_group) = &renderer.blit_bind_group else {
+            return;
+        };
+        let Some(ray_bind_group) = &renderer.ray_bind_group else {
+            return;
+        };
         let swapchain_texture = device
             .surface()
             .get_current_texture()
@@ -877,10 +911,10 @@ impl Renderer {
             });
 
             compute_pass.set_pipeline(&renderer.ray_pipeline);
-            compute_pass.set_bind_group(0, &renderer.ray_bind_group, &[]);
+            compute_pass.set_bind_group(0, &ray_bind_group, &[]);
             compute_pass.dispatch_workgroups(
-                (renderer.backbuffer.width() as f32 / WORKGROUP_SIZE[0] as f32).ceil() as u32,
-                (renderer.backbuffer.height() as f32 / WORKGROUP_SIZE[1] as f32).ceil() as u32,
+                (backbuffer.0.width() as f32 / WORKGROUP_SIZE[0] as f32).ceil() as u32,
+                (backbuffer.0.height() as f32 / WORKGROUP_SIZE[1] as f32).ceil() as u32,
                 1,
             );
         }
@@ -902,7 +936,7 @@ impl Renderer {
             });
 
             render_pass.set_pipeline(&renderer.blit_pipeline);
-            render_pass.set_bind_group(0, &renderer.blit_bind_group, &[]);
+            render_pass.set_bind_group(0, blit_bind_group, &[]);
 
             render_pass.draw(0..6, 0..1);
         }

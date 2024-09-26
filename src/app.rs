@@ -187,6 +187,9 @@ impl winit::application::ApplicationHandler for App {
                 self.resource_bank
                     .get_resource_mut::<Window>()
                     .finish_frame();
+                self.resource_bank
+                    .get_resource_mut::<DeviceResource>()
+                    .finish_frame();
             }
             WinitWindowEvent::Resized(new_size) => {
                 if !self.did_first_resize {
@@ -219,6 +222,12 @@ impl winit::application::ApplicationHandler for App {
                     self.resource_bank()
                         .get_resource_mut::<DeviceResource>()
                         .resize_surface(new_size);
+
+                    // TODO: Option to change between depending on window resize mode.
+                    self.resource_bank()
+                        .get_resource_mut::<Settings>()
+                        .graphics
+                        .render_size = (new_size.width, new_size.height);
                 }
             }
             WinitWindowEvent::CloseRequested => {
