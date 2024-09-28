@@ -15,8 +15,8 @@ impl Time {
     pub fn new() -> Self {
         Self {
             delta_time: Duration::ZERO,
-                last_time: Instant::now(),
-                frame_count: 0
+            last_time: Instant::now(),
+            frame_count: 0,
         }
     }
 
@@ -30,8 +30,12 @@ impl Time {
     pub fn delta_time(&self) -> Duration {
         self.delta_time
     }
-    
+
     pub fn fps(&self) -> u32 {
         f32::floor(1.0 / self.delta_time.as_secs_f32()) as u32
+    }
+
+    pub fn frame_count(&self) -> u32 {
+        self.frame_count
     }
 }

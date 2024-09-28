@@ -47,7 +47,8 @@ struct Camera {
 
 struct WorldInfo {
   camera: Camera,
-  voxel_model_count: u32
+  voxel_model_count: u32,
+  frame_count: u32,
 };
 
 struct WorldAcceleration {
@@ -58,10 +59,12 @@ struct WorldData {
   data: array<u32>
 }
 
-@group(0) @binding(0) var u_backbuffer_img: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var<uniform> u_world_info: WorldInfo; 
-@group(0) @binding(2) var<storage, read> u_world_acceleration: WorldAcceleration; 
-@group(0) @binding(3) var<storage, read> u_world_data: WorldData; 
+@group(0) @binding(0) var u_backbuffer: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(1) var u_radiance_total: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var u_radiance_total_prev: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> u_world_info: WorldInfo; 
+@group(0) @binding(4) var<storage, read> u_world_acceleration: WorldAcceleration; 
+@group(0) @binding(5) var<storage, read> u_world_data: WorldData; 
 
 fn ray_to_point(ray: Ray, point: vec3f) -> vec3f {
   return ray.invDir * (point - ray.origin);
@@ -174,7 +177,7 @@ fn ray_to_aabb(ray: Ray, aabb: AABB) -> RayAABBInfo {
 //   pointer: u32,
 //   octant: u32,
 // }
-// 
+//
 // fn trace_esvo(ray: ray, root: aabb) -> traceResult {
 //   let root_intersection = ray_to_aabb(ray, root);
 //   if(root_intersection.hit) {
@@ -329,27 +332,43 @@ fn trace_voxel_model(voxel_model: VoxelModelHit, ray: Ray) {
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let dimensions = textureDimensions(u_backbuffer_img);
+  let dimensions = textureDimensions(u_backbuffer);
   let coords = id.xy;
   if (coords.x >= dimensions.x || coords.y >= dimensions.y) {
     return;
   }
+
+  let offset = vec2f(
+    f32(u_world_info.frame_count % 4) * 0.25 - 0.5,
+    f32((u_world_info.frame_count % 16) / 4) * 0.25 - 0.5
+  );
   
-  let ndc = vec2f(coords) / vec2f(dimensions);
+  let ndc = (vec2f(coords) + offset) / vec2f(dimensions);
   let uv = vec2f(ndc.x * 2.0 - 1.0, 1.0 - ndc.y * 2.0);
+
   let aspect_ratio = f32(dimensions.x) / f32(dimensions.y);
+  var scaled_uv = vec2f(uv.x * aspect_ratio, uv.y) * tan(u_world_info.camera.half_fov);
 
   let ct = u_world_info.camera.transform;
-  let rayDir = normalize(vec3f(vec2f(uv.x * aspect_ratio, uv.y) * tan(u_world_info.camera.half_fov), 1.0) * u_world_info.camera.rotation);
   let rayOrigin = vec3f(ct[0][3], ct[1][3], ct[2][3]);
+  let rayDir = normalize(vec3f(scaled_uv, 1.0) * u_world_info.camera.rotation);
   let ray = Ray(rayOrigin, rayDir, 1.0 / rayDir);
 
   let next_voxel_model = get_next_voxel_model(ray);
-  var color = vec4f(rayDir, 1.0);
+  var radiance = vec3f(rayDir);
   if (next_voxel_model.schema != 0) {
-    color = vec4f(0.75);
+    radiance = vec3f(0.75);
     trace_voxel_model(next_voxel_model, ray);
   }
 
-  textureStore(u_backbuffer_img, coords, color);  
+  var radiance_prev = vec3f(0.0);
+  if (u_world_info.frame_count > 1) {
+    radiance_prev = textureLoad(u_radiance_total_prev, coords, 0).xyz;
+  }
+
+  let total_radiance = radiance_prev + radiance;
+  textureStore(u_radiance_total, coords, vec4f(total_radiance, 0.0));
+
+  let avg_radiance = total_radiance / f32(u_world_info.frame_count);
+  textureStore(u_backbuffer, coords, vec4f(avg_radiance, 1.0));  
 }

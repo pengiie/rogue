@@ -25,6 +25,7 @@ use crate::{
         resource::{Res, ResMut},
         ui::{gui::Egui, state::UIState},
         voxel::{voxel::Attributes, world::VoxelWorld},
+        window::time::Time,
     },
     game::player::player::Player,
     settings::{GraphicsSettingsAttributes, GraphicsSettingsSet, Settings},
@@ -47,8 +48,10 @@ pub struct CameraBuffer {
 pub struct WorldBuffer {
     camera: CameraBuffer,
     voxel_model_count: u32,
+    // The frame count of the current transform of the camera.
+    frame_count: u32,
     // Padding for struct alignment of 16
-    padding: [f32; 15],
+    padding: [f32; 14],
 }
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable, Debug)]
@@ -63,9 +66,16 @@ const MAX_ESVO_NODES: u32 = 10_000;
 pub struct Renderer {
     graphics_settings: GraphicsSettingsSet,
 
+    // Elapsed frames since last camera transform update.
+    frame_count: u32,
+    last_camera_transform: [f32; 16],
+
     backbuffer: Option<(wgpu::Texture, wgpu::TextureView)>,
-    backbuffer_prev: Option<(wgpu::Texture, wgpu::TextureView)>,
-    backbuffer_sampler: wgpu::Sampler,
+    radiance_total: Option<(wgpu::Texture, wgpu::TextureView)>,
+    radiance_total_prev: Option<(wgpu::Texture, wgpu::TextureView)>,
+
+    sampler_nearest: wgpu::Sampler,
+    sampler_linear: wgpu::Sampler,
 
     /// Holds the camera data.
     world_info_buffer: wgpu::Buffer,
@@ -116,6 +126,26 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: Self::radiance_format(),
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -124,7 +154,7 @@ impl Renderer {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding: 2,
+                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -134,7 +164,7 @@ impl Renderer {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        binding: 3,
+                        binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -200,14 +230,28 @@ impl Renderer {
                     },
                 ],
             });
-        let backbuffer_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("backbuffer_sampler"),
+        let sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sampler_nearest"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 0.0,
+            compare: None,
+            anisotropy_clamp: 1,
+            border_color: None,
+        });
+        let sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sampler_linear"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             compare: None,
@@ -387,9 +431,14 @@ impl Renderer {
         Self {
             graphics_settings: GraphicsSettingsSet::new(),
 
+            frame_count: 0,
+            last_camera_transform: [0.0; 16],
+
             backbuffer: None,
-            backbuffer_prev: None,
-            backbuffer_sampler,
+            radiance_total: None,
+            radiance_total_prev: None,
+            sampler_nearest,
+            sampler_linear,
 
             world_info_buffer,
             world_acceleration_buffer,
@@ -419,9 +468,13 @@ impl Renderer {
         wgpu::TextureFormat::Rgba8Unorm
     }
 
+    fn radiance_format() -> wgpu::TextureFormat {
+        wgpu::TextureFormat::Rgba32Float
+    }
+
     fn update_backbuffer_textures(&mut self, device: &DeviceResource, width: u32, height: u32) {
         let backbuffer = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Backbuffer"),
+            label: Some("backbuffer"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -436,8 +489,8 @@ impl Renderer {
         });
         let backbuffer_view = backbuffer.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let backbuffer_prev = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Backbuffer"),
+        let radiance_total = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("radiance_total"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -446,15 +499,37 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: Self::backbuffer_format(),
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            format: Self::radiance_format(),
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let backbuffer_prev_view =
-            backbuffer_prev.create_view(&wgpu::TextureViewDescriptor::default());
+        let radiance_total_view =
+            radiance_total.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let radiance_total_prev = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("radiance_total_prev"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::radiance_format(),
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let radiance_total_prev_view =
+            radiance_total_prev.create_view(&wgpu::TextureViewDescriptor::default());
 
         self.backbuffer = Some((backbuffer, backbuffer_view));
-        self.backbuffer_prev = Some((backbuffer_prev, backbuffer_prev_view));
+        self.radiance_total = Some((radiance_total, radiance_total_view));
+        self.radiance_total_prev = Some((radiance_total_prev, radiance_total_prev_view));
     }
 
     fn update_ray_bind_group(&mut self, device: &DeviceResource) {
@@ -477,6 +552,30 @@ impl Renderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self
+                                .radiance_total
+                                .as_ref()
+                                .expect(
+                                    "Shouldn't update ray bind group if backbuffer doesn't exist.",
+                                )
+                                .1,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self
+                                .radiance_total_prev
+                                .as_ref()
+                                .expect(
+                                    "Shouldn't update ray bind group if backbuffer doesn't exist.",
+                                )
+                                .1,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: &self.world_info_buffer,
                             offset: 0,
@@ -484,7 +583,7 @@ impl Renderer {
                         }),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 2,
+                        binding: 4,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: &self.world_acceleration_buffer,
                             offset: 0,
@@ -492,7 +591,7 @@ impl Renderer {
                         }),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 3,
+                        binding: 5,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: &self.world_data_buffer,
                             offset: 0,
@@ -543,7 +642,7 @@ impl Renderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Sampler(&self.backbuffer_sampler),
+                        resource: wgpu::BindingResource::Sampler(&self.sampler_nearest),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -574,9 +673,13 @@ impl Renderer {
             match update {
                 GraphicsSettingsAttributes::RenderSize((width, height)) => {
                     // Resize backbuffers and recreate any bind groups that rely on them.
+                    println!("Resized backbuffers to {} x {}", width, height);
                     renderer.update_backbuffer_textures(&device, width, height);
                     renderer.update_ray_bind_group(&device);
                     renderer.update_blit_bind_group(&device);
+
+                    // New total radiance texture so average must be reset.
+                    renderer.frame_count = 0;
                 }
             }
         }
@@ -591,13 +694,21 @@ impl Renderer {
         ui_state: Res<UIState>,
     ) {
         'voxel_trace: {
-            let mut query = ecs_world.query::<&Transform>().with::<(&Camera)>();
+            let mut query = ecs_world.query::<&Transform>().with::<&Camera>();
             let Some((_, camera_transform)) = query.into_iter().next() else {
                 break 'voxel_trace;
             };
 
             let camera_transform = camera_transform.to_matrix().transpose();
             let camera_transform_arr: [f32; 16] = camera_transform.as_slice().try_into().unwrap();
+
+            // Update frame count if the camera transform changed.
+            if renderer.last_camera_transform != camera_transform_arr {
+                renderer.last_camera_transform = camera_transform_arr;
+                renderer.frame_count = 0;
+            }
+            renderer.frame_count += 1;
+
             let camera_transform_arr_small: [f32; 12] = camera_transform_arr
                 .into_iter()
                 .take(12)
@@ -613,7 +724,8 @@ impl Renderer {
                     padding: [0.0; 3],
                 },
                 voxel_model_count: voxel_world.get_voxel_models().len() as u32,
-                padding: [0.0; 15],
+                frame_count: renderer.frame_count,
+                padding: [0.0; 14],
             };
             //println!(
             //    "Voxel model count: {}",
@@ -662,7 +774,7 @@ impl Renderer {
                             }
                         };
                         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                            label: Some("backbuffer_sampler"),
+                            label: Some("ui_sampler"),
                             address_mode_u: wrap_mode,
                             address_mode_w: wrap_mode,
                             address_mode_v: wrap_mode,
@@ -882,6 +994,12 @@ impl Renderer {
         let Some(backbuffer) = &renderer.backbuffer else {
             return;
         };
+        let Some(radiance_total) = &renderer.radiance_total else {
+            return;
+        };
+        let Some(radiance_total_prev) = &renderer.radiance_total_prev else {
+            return;
+        };
         let Some(blit_bind_group) = &renderer.blit_bind_group else {
             return;
         };
@@ -911,7 +1029,7 @@ impl Renderer {
             });
 
             compute_pass.set_pipeline(&renderer.ray_pipeline);
-            compute_pass.set_bind_group(0, &ray_bind_group, &[]);
+            compute_pass.set_bind_group(0, ray_bind_group, &[]);
             compute_pass.dispatch_workgroups(
                 (backbuffer.0.width() as f32 / WORKGROUP_SIZE[0] as f32).ceil() as u32,
                 (backbuffer.0.height() as f32 / WORKGROUP_SIZE[1] as f32).ceil() as u32,
@@ -919,6 +1037,30 @@ impl Renderer {
             );
         }
 
+        // Copy backbuffer to history
+        {
+            encoder.copy_texture_to_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &radiance_total.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyTexture {
+                    texture: &radiance_total_prev.0,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: radiance_total.0.width(),
+                    height: radiance_total.0.height(),
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        // Blit backbuffer to swapchain texture
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("blit_render_pass"),
