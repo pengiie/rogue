@@ -330,6 +330,45 @@ fn trace_voxel_model(voxel_model: VoxelModelHit, ray: Ray) {
   }
 }
 
+var<private> seed: u32 = 1;
+fn init_seed(coord: vec2<u32>) {
+  var n = seed;
+  n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589; // hash by Hugo Elias
+  n += coord.y;
+  n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
+  n += coord.x;
+  n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
+  seed = n;
+}
+
+fn rand() -> u32 {
+  seed = seed * 0x343fd + 0x269ec3;
+  return (seed >> 16) & 32767;
+}
+
+fn frand() -> f32 {
+  return f32(rand()) / 32767.0;
+}
+
+fn dither(v: vec3f) -> vec3f {
+  let n = frand()+frand() - 1.0;  // triangular noise
+  return v + n * exp2(-8.0);
+}
+
+fn lrgb_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    let cutoff = rgb < vec3<f32>(0.0031308);
+    let lower = rgb * vec3<f32>(12.92);
+    let higher = vec3<f32>(1.055) * pow(rgb, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
+    return select(higher, lower, cutoff);
+}
+
+fn srgb_to_lrgb(srgb: vec3<f32>) -> vec3<f32> {
+    let cutoff = srgb < vec3<f32>(0.04045);
+    let lower = srgb / vec3<f32>(12.92);
+    let higher = pow((srgb + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
+    return select(higher, lower, cutoff);
+}
+
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let dimensions = textureDimensions(u_backbuffer);
@@ -337,6 +376,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (coords.x >= dimensions.x || coords.y >= dimensions.y) {
     return;
   }
+  init_seed(coords);
 
   let offset = vec2f(
     f32(u_world_info.frame_count % 4) * 0.25 - 0.5,
@@ -352,10 +392,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let ct = u_world_info.camera.transform;
   let rayOrigin = vec3f(ct[0][3], ct[1][3], ct[2][3]);
   let rayDir = normalize(vec3f(scaled_uv, 1.0) * u_world_info.camera.rotation);
-  let ray = Ray(rayOrigin, rayDir, 1.0 / rayDir);
+  let invRayDir = 1.0 / rayDir;
+  let ray = Ray(rayOrigin, rayDir, invRayDir);
 
   let next_voxel_model = get_next_voxel_model(ray);
-  var radiance = vec3f(rayDir);
+
+  // Linear scale to make the room a box skybox
+  //let linear_scale = 1.0 / max(max(abs(rayDir.x), abs(rayDir.y)), abs(rayDir.z));
+  //var radiance = vec3f(srgb_to_lrgb((rayDir * linear_scale + 1) * 0.5));
+
+  // Colors each axes face rgb (xyz) irrespective of sign. Sinusoidal-like interpolation
+  //var radiance = vec3f(srgb_to_lrgb(abs(rayDir)));
+
+  // Colors each axes on the unit circle interpolating linearly based on ray angle.
+  var radiance = vec3f(srgb_to_lrgb(vec3f(acos(-rayDir) / 3.14)));
+
   if (next_voxel_model.schema != 0) {
     radiance = vec3f(0.75);
     trace_voxel_model(next_voxel_model, ray);
@@ -369,6 +420,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let total_radiance = radiance_prev + radiance;
   textureStore(u_radiance_total, coords, vec4f(total_radiance, 0.0));
 
-  let avg_radiance = total_radiance / f32(u_world_info.frame_count);
-  textureStore(u_backbuffer, coords, vec4f(avg_radiance, 1.0));  
+  var avg_radiance = total_radiance / f32(u_world_info.frame_count);
+
+  // Convert to sRGB then dither to avoid any banding.
+  let gamma_corrected_color = lrgb_to_srgb(avg_radiance);
+  let backbuffer_color = vec4f(dither(gamma_corrected_color), 1.0);
+
+  textureStore(u_backbuffer, coords, backbuffer_color);  
 }

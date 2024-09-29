@@ -114,6 +114,10 @@ impl VoxelModelImpl for VoxelModelESVO {
     fn schema(&self) -> VoxelModelSchema {
         VoxelModelSchema::ESVO
     }
+
+    fn length(&self) -> Vector3<u32> {
+        Vector3::new(self.length, self.length, self.length)
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -11,7 +11,6 @@ use log::{debug, info};
 use nalgebra::{ComplexField, Matrix3, Matrix4};
 use rogue_macros::Resource;
 use wgpu::{
-    naga::{back, keywords},
     CommandEncoderDescriptor, ComputePassDescriptor, PipelineCompilationOptions, ShaderModule,
 };
 
@@ -24,7 +23,10 @@ use crate::{
         physics::transform::Transform,
         resource::{Res, ResMut},
         ui::{gui::Egui, state::UIState},
-        voxel::{voxel::Attributes, world::VoxelWorld},
+        voxel::{
+            voxel::Attributes,
+            voxel_world::{VoxelWorld, VoxelWorldGpu},
+        },
         window::time::Time,
     },
     game::player::player::Player,
@@ -79,10 +81,6 @@ pub struct Renderer {
 
     /// Holds the camera data.
     world_info_buffer: wgpu::Buffer,
-    /// The acceleration buffer for voxel model bounds interaction.
-    world_acceleration_buffer: wgpu::Buffer,
-    /// The buffer containing all voxel model data, heterogenous.
-    world_data_buffer: wgpu::Buffer,
 
     ray_bind_group_layout: wgpu::BindGroupLayout,
     ray_bind_group: Option<wgpu::BindGroup>,
@@ -192,19 +190,6 @@ impl Renderer {
             label: Some("world_info_buffer"),
             size: std::mem::size_of::<WorldBuffer>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let world_acceleration_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("world_acceleration_buffer"),
-            size: 4 * 1000, // 1000 voxel models
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let world_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("world_data_buffer"),
-            size: 1 << 28,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -441,8 +426,6 @@ impl Renderer {
             sampler_linear,
 
             world_info_buffer,
-            world_acceleration_buffer,
-            world_data_buffer,
 
             ray_bind_group_layout,
             ray_bind_group: None,
@@ -532,7 +515,7 @@ impl Renderer {
         self.radiance_total_prev = Some((radiance_total_prev, radiance_total_prev_view));
     }
 
-    fn update_ray_bind_group(&mut self, device: &DeviceResource) {
+    fn update_ray_bind_group(&mut self, device: &DeviceResource, voxel_world_gpu: &VoxelWorldGpu) {
         self.ray_bind_group = Some(
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ray bind group"),
@@ -585,7 +568,7 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.world_acceleration_buffer,
+                            buffer: voxel_world_gpu.world_acceleration_buffer(),
                             offset: 0,
                             size: None,
                         }),
@@ -593,7 +576,7 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.world_data_buffer,
+                            buffer: voxel_world_gpu.world_data_buffer(),
                             offset: 0,
                             size: None,
                         }),
@@ -661,9 +644,12 @@ impl Renderer {
 
     pub fn update_gpu_objects(
         mut renderer: ResMut<Renderer>,
+        voxel_world_gpu: Res<VoxelWorldGpu>,
         device: Res<DeviceResource>,
         settings: Res<Settings>,
     ) {
+        let mut update_ray_bind_group = false;
+
         renderer
             .graphics_settings
             .refresh_updates(&settings.graphics);
@@ -675,13 +661,17 @@ impl Renderer {
                     // Resize backbuffers and recreate any bind groups that rely on them.
                     println!("Resized backbuffers to {} x {}", width, height);
                     renderer.update_backbuffer_textures(&device, width, height);
-                    renderer.update_ray_bind_group(&device);
+                    update_ray_bind_group = true;
                     renderer.update_blit_bind_group(&device);
 
                     // New total radiance texture so average must be reset.
                     renderer.frame_count = 0;
                 }
             }
+        }
+
+        if update_ray_bind_group || voxel_world_gpu.is_dirty() {
+            renderer.update_ray_bind_group(&device, &voxel_world_gpu);
         }
     }
 
@@ -690,6 +680,7 @@ impl Renderer {
         device: Res<DeviceResource>,
         ecs_world: Res<ECSWorld>,
         voxel_world: Res<VoxelWorld>,
+        voxel_world_gpu: Res<VoxelWorldGpu>,
         egui: Res<Egui>,
         ui_state: Res<UIState>,
     ) {
@@ -723,7 +714,7 @@ impl Renderer {
                     half_fov,
                     padding: [0.0; 3],
                 },
-                voxel_model_count: voxel_world.get_voxel_models().len() as u32,
+                voxel_model_count: voxel_world_gpu.renderable_voxel_model_count(),
                 frame_count: renderer.frame_count,
                 padding: [0.0; 14],
             };
@@ -736,13 +727,6 @@ impl Renderer {
                 &renderer.world_info_buffer,
                 0,
                 bytemuck::bytes_of(&world_info),
-            );
-
-            let world_acceleration_data = voxel_world.get_acceleration_data();
-            device.queue().write_buffer(
-                &renderer.world_acceleration_buffer,
-                0,
-                bytemuck::cast_slice(&world_acceleration_data),
             );
         }
 
@@ -1084,88 +1068,88 @@ impl Renderer {
         }
 
         // UI Pass
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ui_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &swapchain_texture_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations::<wgpu::Color> {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            render_pass.set_pipeline(&renderer.ui_pipeline);
+        // {
+        //     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        //         label: Some("ui_pass"),
+        //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        //             view: &swapchain_texture_view,
+        //             resolve_target: None,
+        //             ops: wgpu::Operations::<wgpu::Color> {
+        //                 load: wgpu::LoadOp::Load,
+        //                 store: wgpu::StoreOp::Store,
+        //             },
+        //         })],
+        //         depth_stencil_attachment: None,
+        //         timestamp_writes: None,
+        //         occlusion_query_set: None,
+        //     });
+        //     render_pass.set_pipeline(&renderer.ui_pipeline);
 
-            let mut index_slices = renderer.ui_index_buffer_slices.iter();
-            let mut vertex_slices = renderer.ui_vertex_buffer_slices.iter();
-            for epaint::ClippedPrimitive {
-                clip_rect,
-                primitive,
-            } in egui.primitives()
-            {
-                {
-                    let rect = clip_rect;
-                    if rect.width() == 0.0 || rect.height() == 0.0 {
-                        continue;
-                    }
-                    let pixels_per_point = egui.pixels_per_point();
-                    let clip_min_x = pixels_per_point * clip_rect.min.x;
-                    let clip_min_y = pixels_per_point * clip_rect.min.y;
-                    let clip_max_x = pixels_per_point * clip_rect.max.x;
-                    let clip_max_y = pixels_per_point * clip_rect.max.y;
+        //     let mut index_slices = renderer.ui_index_buffer_slices.iter();
+        //     let mut vertex_slices = renderer.ui_vertex_buffer_slices.iter();
+        //     for epaint::ClippedPrimitive {
+        //         clip_rect,
+        //         primitive,
+        //     } in egui.primitives()
+        //     {
+        //         {
+        //             let rect = clip_rect;
+        //             if rect.width() == 0.0 || rect.height() == 0.0 {
+        //                 continue;
+        //             }
+        //             let pixels_per_point = egui.pixels_per_point();
+        //             let clip_min_x = pixels_per_point * clip_rect.min.x;
+        //             let clip_min_y = pixels_per_point * clip_rect.min.y;
+        //             let clip_max_x = pixels_per_point * clip_rect.max.x;
+        //             let clip_max_y = pixels_per_point * clip_rect.max.y;
 
-                    // Round to integer:
-                    let clip_min_x = clip_min_x.round() as u32;
-                    let clip_min_y = clip_min_y.round() as u32;
-                    let clip_max_x = clip_max_x.round() as u32;
-                    let clip_max_y = clip_max_y.round() as u32;
+        //             // Round to integer:
+        //             let clip_min_x = clip_min_x.round() as u32;
+        //             let clip_min_y = clip_min_y.round() as u32;
+        //             let clip_max_x = clip_max_x.round() as u32;
+        //             let clip_max_y = clip_max_y.round() as u32;
 
-                    // Clamp:
-                    let texture_size = swapchain_texture.texture.size();
-                    let clip_min_x = clip_min_x.clamp(0, texture_size.width);
-                    let clip_min_y = clip_min_y.clamp(0, texture_size.height);
-                    let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.width);
-                    let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.height);
-                    render_pass.set_scissor_rect(
-                        clip_min_x,
-                        clip_min_y,
-                        clip_max_x - clip_min_x,
-                        clip_max_y - clip_min_y,
-                    );
-                }
-                match primitive {
-                    epaint::Primitive::Mesh(mesh) => {
-                        let slice = vertex_slices.next().unwrap();
-                        let vertex_buffer_slice = renderer
-                            .ui_vertex_buffer
-                            .slice(slice.start as u64..slice.end as u64);
-                        let slice = index_slices.next().unwrap();
-                        let index_buffer_slice = renderer
-                            .ui_index_buffer
-                            .slice(slice.start as u64..slice.end as u64);
+        //             // Clamp:
+        //             let texture_size = swapchain_texture.texture.size();
+        //             let clip_min_x = clip_min_x.clamp(0, texture_size.width);
+        //             let clip_min_y = clip_min_y.clamp(0, texture_size.height);
+        //             let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.width);
+        //             let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.height);
+        //             render_pass.set_scissor_rect(
+        //                 clip_min_x,
+        //                 clip_min_y,
+        //                 clip_max_x - clip_min_x,
+        //                 clip_max_y - clip_min_y,
+        //             );
+        //         }
+        //         match primitive {
+        //             epaint::Primitive::Mesh(mesh) => {
+        //                 let slice = vertex_slices.next().unwrap();
+        //                 let vertex_buffer_slice = renderer
+        //                     .ui_vertex_buffer
+        //                     .slice(slice.start as u64..slice.end as u64);
+        //                 let slice = index_slices.next().unwrap();
+        //                 let index_buffer_slice = renderer
+        //                     .ui_index_buffer
+        //                     .slice(slice.start as u64..slice.end as u64);
 
-                        if let Some((_texture, bind_group)) =
-                            renderer.ui_textures.get(&mesh.texture_id)
-                        {
-                            render_pass.set_bind_group(0, bind_group, &[]);
-                            render_pass.set_vertex_buffer(0, vertex_buffer_slice);
-                            render_pass
-                                .set_index_buffer(index_buffer_slice, wgpu::IndexFormat::Uint32);
+        //                 if let Some((_texture, bind_group)) =
+        //                     renderer.ui_textures.get(&mesh.texture_id)
+        //                 {
+        //                     render_pass.set_bind_group(0, bind_group, &[]);
+        //                     render_pass.set_vertex_buffer(0, vertex_buffer_slice);
+        //                     render_pass
+        //                         .set_index_buffer(index_buffer_slice, wgpu::IndexFormat::Uint32);
 
-                            render_pass.draw_indexed(0..mesh.indices.len() as u32, 0, 0..1);
-                        } else {
-                            todo!("Couldnt find the thingy");
-                        }
-                    }
-                    epaint::Primitive::Callback(_) => todo!(),
-                }
-            }
-        }
+        //                     render_pass.draw_indexed(0..mesh.indices.len() as u32, 0, 0..1);
+        //                 } else {
+        //                     todo!("Couldnt find the thingy");
+        //                 }
+        //             }
+        //             epaint::Primitive::Callback(_) => todo!(),
+        //         }
+        //     }
+        // }
 
         device.queue().submit([encoder.finish()]);
         swapchain_texture.present();

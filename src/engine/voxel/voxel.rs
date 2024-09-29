@@ -3,10 +3,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use hecs::Bundle;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::common::aabb::AABB;
+use crate::{common::aabb::AABB, engine::physics::transform::Transform};
 
 use super::{allocator::VoxelAllocator, esvo::VoxelModelESVO, flat::VoxelModelFlat};
 
@@ -56,9 +57,10 @@ bitflags::bitflags! {
     }
 }
 
-pub trait VoxelModelImpl {
+pub trait VoxelModelImpl: Send + Sync {
     fn set_voxel_range(&mut self, range: VoxelRange);
     fn schema(&self) -> VoxelModelSchema;
+    fn length(&self) -> Vector3<u32>;
 }
 
 #[derive(Clone, Copy)]
@@ -66,34 +68,34 @@ pub enum VoxelModelSchema {
     ESVO = 1,
 }
 
+#[derive(Bundle)]
+pub struct RenderableVoxelModel {
+    pub voxel_model: VoxelModel,
+    pub transform: Transform,
+}
+
 pub struct VoxelModel {
     // TODO: Make the models store in memory pools so we can get contiguous cache access, only
     // important if we end up with a lot of models such as for breakables or something.
     model: Box<dyn VoxelModelImpl>,
-    aabb: AABB,
     schema: VoxelModelSchema,
 }
 
 impl VoxelModel {
-    pub fn new(schema: VoxelModelSchema, aabb: AABB) -> Self {
+    pub fn new(schema: VoxelModelSchema) -> Self {
         Self {
             model: Self::initialize_voxel_model(schema.clone()),
-            aabb,
             schema,
         }
     }
 
-    pub fn from_impl(model: Box<dyn VoxelModelImpl>, aabb: AABB) -> Self {
+    pub fn from_impl(model: Box<dyn VoxelModelImpl>) -> Self {
         let schema = model.deref().schema();
-        Self {
-            model,
-            aabb,
-            schema,
-        }
+        Self { model, schema }
     }
 
-    pub fn aabb(&self) -> &AABB {
-        &self.aabb
+    pub fn length(&self) -> Vector3<u32> {
+        self.model.length()
     }
 
     fn initialize_voxel_model(schema: VoxelModelSchema) -> Box<dyn VoxelModelImpl> {

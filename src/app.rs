@@ -14,10 +14,10 @@ use crate::{
         resource::ResourceBank,
         system::System,
         ui::{gui::Egui, state::UIState},
-        voxel::world::VoxelWorld,
+        voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
-    game::player::player::Player,
+    game::{player::player::Player, world::game_world::GameWorld},
     game_loop,
     settings::Settings,
 };
@@ -106,12 +106,19 @@ impl App {
                 .get_resource::<DeviceResource>()
                 .device(),
         );
+        let voxel_world_gpu = VoxelWorldGpu::new();
 
         let rb = self.resource_bank_mut();
         rb.insert(ui_state);
         rb.insert(egui);
         rb.insert(renderer);
         rb.insert(voxel_world);
+        rb.insert(voxel_world_gpu);
+
+        // Game Stuff
+
+        let game_world = GameWorld::new();
+        rb.insert(game_world);
 
         self.run_system(Player::spawn_player);
     }

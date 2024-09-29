@@ -19,6 +19,10 @@ impl VoxelModelImpl for VoxelModelFlat {
     fn schema(&self) -> super::voxel::VoxelModelSchema {
         todo!()
     }
+
+    fn length(&self) -> Vector3<u32> {
+        todo!()
+    }
 }
 
 impl VoxelModelFlat {

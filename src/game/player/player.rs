@@ -85,7 +85,7 @@ impl Player {
 
         let mut speed = player.movement_speed;
         if input.is_key_down(Key::LControl) {
-            speed = 5.0;
+            speed = 6.0;
         }
 
         transform.isometry.translation.vector +=
