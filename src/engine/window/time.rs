@@ -9,6 +9,8 @@ pub struct Time {
     delta_time: Duration,
     last_time: Instant,
     frame_count: u32,
+
+    start_time: Instant,
 }
 
 impl Time {
@@ -17,6 +19,8 @@ impl Time {
             delta_time: Duration::ZERO,
             last_time: Instant::now(),
             frame_count: 0,
+
+            start_time: Instant::now(),
         }
     }
 
@@ -29,6 +33,10 @@ impl Time {
 
     pub fn delta_time(&self) -> Duration {
         self.delta_time
+    }
+
+    pub fn start_time(&self) -> Instant {
+        self.start_time
     }
 
     pub fn fps(&self) -> u32 {

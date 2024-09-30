@@ -718,10 +718,6 @@ impl Renderer {
                 frame_count: renderer.frame_count,
                 padding: [0.0; 14],
             };
-            //println!(
-            //    "Voxel model count: {}",
-            //    voxel_world.get_voxel_models().len() as u32
-            //);
 
             device.queue().write_buffer(
                 &renderer.world_info_buffer,

@@ -23,6 +23,10 @@ impl VoxelModelImpl for VoxelModelFlat {
     fn length(&self) -> Vector3<u32> {
         todo!()
     }
+
+    fn model_clone(&self) -> Box<dyn VoxelModelImpl> {
+        todo!()
+    }
 }
 
 impl VoxelModelFlat {

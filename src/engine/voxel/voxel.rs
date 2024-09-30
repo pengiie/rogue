@@ -61,7 +61,11 @@ pub trait VoxelModelImpl: Send + Sync {
     fn set_voxel_range(&mut self, range: VoxelRange);
     fn schema(&self) -> VoxelModelSchema;
     fn length(&self) -> Vector3<u32>;
+
+    fn model_clone(&self) -> Box<dyn VoxelModelImpl>;
 }
+
+pub type BoxedVoxelModel = Box<dyn VoxelModelImpl>;
 
 #[derive(Clone, Copy)]
 pub enum VoxelModelSchema {
@@ -77,7 +81,7 @@ pub struct RenderableVoxelModel {
 pub struct VoxelModel {
     // TODO: Make the models store in memory pools so we can get contiguous cache access, only
     // important if we end up with a lot of models such as for breakables or something.
-    model: Box<dyn VoxelModelImpl>,
+    model: BoxedVoxelModel,
     schema: VoxelModelSchema,
 }
 
@@ -89,16 +93,22 @@ impl VoxelModel {
         }
     }
 
-    pub fn from_impl(model: Box<dyn VoxelModelImpl>) -> Self {
-        let schema = model.deref().schema();
-        Self { model, schema }
+    pub fn from_impl<T>(model: T) -> Self
+    where
+        T: VoxelModelImpl + 'static,
+    {
+        let schema = model.schema();
+        Self {
+            model: Box::new(model),
+            schema,
+        }
     }
 
     pub fn length(&self) -> Vector3<u32> {
         self.model.length()
     }
 
-    fn initialize_voxel_model(schema: VoxelModelSchema) -> Box<dyn VoxelModelImpl> {
+    fn initialize_voxel_model(schema: VoxelModelSchema) -> BoxedVoxelModel {
         Box::new(match schema {
             VoxelModelSchema::ESVO => VoxelModelESVO::new(32),
         })
@@ -106,6 +116,15 @@ impl VoxelModel {
 
     pub fn schema(&self) -> VoxelModelSchema {
         self.schema
+    }
+}
+
+impl Clone for VoxelModel {
+    fn clone(&self) -> Self {
+        Self {
+            model: self.model.model_clone(),
+            schema: self.schema.clone(),
+        }
     }
 }
 

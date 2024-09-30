@@ -7,6 +7,7 @@ use crate::common::morton::morton_decode;
 
 use super::voxel::{Attributes, VoxelModelImpl, VoxelModelSchema, VoxelRange};
 
+#[derive(Clone)]
 pub(crate) struct VoxelModelESVO {
     length: u32,
 
@@ -117,6 +118,10 @@ impl VoxelModelImpl for VoxelModelESVO {
 
     fn length(&self) -> Vector3<u32> {
         Vector3::new(self.length, self.length, self.length)
+    }
+
+    fn model_clone(&self) -> Box<dyn VoxelModelImpl> {
+        Box::new(self.clone())
     }
 }
 
