@@ -1,11 +1,15 @@
 use std::{collections::HashMap, ops::Range};
 
+use downcast::Downcast;
 use egui::debug_text::print;
 use nalgebra::Vector3;
 
 use crate::common::morton::morton_decode;
 
-use super::voxel::{Attributes, VoxelModelImpl, VoxelModelSchema, VoxelRange};
+use super::voxel::{
+    Attributes, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+    VoxelModelImplConcrete, VoxelModelSchema, VoxelRange,
+};
 
 #[derive(Clone)]
 pub(crate) struct VoxelModelESVO {
@@ -13,16 +17,23 @@ pub(crate) struct VoxelModelESVO {
 
     data: Vec<u32>,
     bucket_lookup: Vec<BucketLookupInfo>,
+
+    updates: Option<Vec<VoxelModelESVOUpdate>>,
 }
 
 impl VoxelModelESVO {
-    pub fn new(length: u32) -> Self {
+    pub fn new(length: u32, track_updates: bool) -> Self {
         assert!(length.is_power_of_two());
         let mut s = VoxelModelESVO {
             length,
 
             data: Vec::new(),
             bucket_lookup: Vec::new(),
+            updates: if track_updates {
+                Some(Vec::new())
+            } else {
+                None
+            },
         };
 
         s.append_node(Self::new_node(0, false, 0, 0));
@@ -108,6 +119,10 @@ impl VoxelModelESVO {
     }
 }
 
+impl VoxelModelImplConcrete for VoxelModelESVO {
+    type Gpu = VoxelModelESVOGpu;
+}
+
 impl VoxelModelImpl for VoxelModelESVO {
     /// Sets a voxel range relative to the current models origin.
     fn set_voxel_range(&mut self, range: VoxelRange) {}
@@ -120,9 +135,63 @@ impl VoxelModelImpl for VoxelModelESVO {
         Vector3::new(self.length, self.length, self.length)
     }
 
-    fn model_clone(&self) -> Box<dyn VoxelModelImpl> {
-        Box::new(self.clone())
+    //    fn model_clone(&self) -> Box<dyn VoxelModelImpl> {
+    //        Box::new(self.clone())
+    //    }
+    //
+    //    fn take_updates(&mut self) -> Vec<VoxelModelUpdate> {
+    //        self.updates.take().map_or(Vec::new(), |updates| {
+    //            updates
+    //                .into_iter()
+    //                .map(|update| VoxelModelUpdate::ESVO(update))
+    //                .collect::<Vec<VoxelModelUpdate>>()
+    //        })
+    //    }
+}
+
+pub struct VoxelModelESVOGpu {
+    data_allocation: Option<Range<u32>>,
+    attachment_lookup_allocations: Option<Range<u32>>,
+    raw_attachment_allocations: Option<Range<u32>>,
+}
+
+impl VoxelModelGpuImpl for VoxelModelESVOGpu {
+    fn aggregate_model_info(&self) -> Vec<u32> {
+        vec![]
     }
+
+    fn write_gpu_updates(
+        &mut self,
+        allocator: &mut super::voxel_allocator::VoxelAllocator,
+        model: &dyn VoxelModelImpl,
+    ) {
+        let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
+        todo!("Implementing this in the next commit")
+    }
+}
+
+impl VoxelModelGpuImplConcrete for VoxelModelESVOGpu {
+    fn new() -> Self {
+        Self {
+            data_allocation: None,
+            attachment_lookup_allocations: None,
+            raw_attachment_allocations: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum VoxelModelESVOUpdate {
+    Data {
+        updated_region: Range<usize>,
+    },
+    AttachmentLookup {
+        attachment: Attributes,
+        updated_region: Range<usize>,
+    },
+    RawAttachment {
+        updated_region: Range<usize>,
+    },
 }
 
 #[derive(Clone, Copy)]

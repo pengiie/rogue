@@ -1,4 +1,7 @@
-use std::borrow::Borrow;
+use std::{
+    borrow::Borrow,
+    ops::{Deref, DerefMut},
+};
 
 use hecs::Entity;
 use nalgebra::Vector3;
@@ -15,8 +18,12 @@ use crate::{
 };
 
 use super::{
-    allocator::VoxelAllocator,
-    voxel::{VoxelModel, VoxelModelSchema, VoxelRange},
+    esvo::{VoxelModelESVO, VoxelModelESVOGpu},
+    voxel::{
+        VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelImpl, VoxelModelImplConcrete,
+        VoxelModelSchema, VoxelRange,
+    },
+    voxel_allocator::VoxelAllocator,
 };
 
 #[derive(Resource)]
@@ -113,39 +120,82 @@ impl VoxelWorldGpu {
     }
 
     pub fn write_render_data(
-        voxel_world: Res<VoxelWorld>,
+        mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         ecs_world: Res<ECSWorld>,
         device: Res<DeviceResource>,
     ) {
-        let mut renderable_voxel_models_query = ecs_world.query::<(&VoxelModel, &Transform)>();
+        // Write acceleration buffer data.
+        {
+            // TODO: These will get quite ugly with more voxel models, in the short term we make a make
+            // to quickly make these and zip them up into dyn impls. Long term we fork hecs or
+            // hand-roll our own EC lib with dynamic typeid component queries so we can have better
+            // voxel model queries with a typeid registry of the different model types. I could've
+            // just used an enum with some match statements but... now we are here.
+            let mut renderable_voxel_models_query = ecs_world.query::<(
+                &VoxelModel<VoxelModelESVO>,
+                &VoxelModelGpu<<VoxelModelESVO as VoxelModelImplConcrete>::Gpu>,
+                &Transform,
+            )>();
+            let mut renderable_voxel_models = renderable_voxel_models_query
+                .into_iter()
+                .map(|(entity, (model, model_gpu, transform))| {
+                    (
+                        entity,
+                        (
+                            model.deref() as &dyn VoxelModelImpl,
+                            model_gpu.deref() as &dyn VoxelModelGpuImpl,
+                            transform,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
 
-        let renderable_voxel_model_count = renderable_voxel_models_query.iter().len();
-        let mut acceleration_data = Vec::with_capacity(renderable_voxel_model_count * 8); // ptr + type + vec3 + vec3
-        for (entity, (voxel_model, transform)) in renderable_voxel_models_query.iter() {
-            let aabb = AABB::new(
-                transform.isometry.translation.vector,
-                transform.isometry.translation.vector + voxel_model.length().map(|x| x as f32),
+            let renderable_voxel_model_count = renderable_voxel_models.len();
+            let mut acceleration_data = Vec::with_capacity(renderable_voxel_model_count * 8); // ptr + type + vec3 + vec3
+            for (entity, (voxel_model, voxel_model_gpu, transform)) in &renderable_voxel_models {
+                let aabb = AABB::new(
+                    transform.isometry.translation.vector,
+                    transform.isometry.translation.vector + voxel_model.length().map(|x| x as f32),
+                );
+                let min_bits = aabb.min.map(|x| x.to_bits()).data.0[0];
+                let max_bits = aabb.max.map(|x| x.to_bits()).data.0[0];
+
+                acceleration_data.push(0);
+                acceleration_data.push(voxel_model.schema() as u32);
+                acceleration_data.push(min_bits[0]);
+                acceleration_data.push(min_bits[1]);
+                acceleration_data.push(min_bits[2]);
+                acceleration_data.push(max_bits[0]);
+                acceleration_data.push(max_bits[1]);
+                acceleration_data.push(max_bits[2]);
+            }
+
+            // Used in the gpu world info to know the limits of the acceleration buffer.
+            voxel_world_gpu.rendered_voxel_model_count = renderable_voxel_model_count as u32;
+
+            device.queue().write_buffer(
+                voxel_world_gpu.world_acceleration_buffer(),
+                0,
+                bytemuck::cast_slice(&acceleration_data),
             );
-            let min_bits = aabb.min.map(|x| x.to_bits()).data.0[0];
-            let max_bits = aabb.max.map(|x| x.to_bits()).data.0[0];
-
-            acceleration_data.push(0);
-            acceleration_data.push(voxel_model.schema() as u32);
-            acceleration_data.push(min_bits[0]);
-            acceleration_data.push(min_bits[1]);
-            acceleration_data.push(min_bits[2]);
-            acceleration_data.push(max_bits[0]);
-            acceleration_data.push(max_bits[1]);
-            acceleration_data.push(max_bits[2]);
         }
 
-        voxel_world_gpu.rendered_voxel_model_count = renderable_voxel_model_count as u32;
-        device.queue().write_buffer(
-            voxel_world_gpu.world_acceleration_buffer(),
-            0,
-            bytemuck::cast_slice(&acceleration_data),
-        );
+        // Update gpu model buffer data.
+        {
+            for (entity, (voxel_model, voxel_model_gpu)) in ecs_world
+                .query::<((
+                    &mut VoxelModel<VoxelModelESVO>,
+                    &mut VoxelModelGpu<VoxelModelESVOGpu>,
+                ))>()
+                .into_iter()
+            {
+                voxel_model_gpu.deref_mut().write_gpu_updates(
+                    &mut voxel_world.allocator,
+                    voxel_model.deref_mut() as &mut dyn VoxelModelImpl,
+                );
+            }
+        }
     }
 
     pub fn renderable_voxel_model_count(&self) -> u32 {

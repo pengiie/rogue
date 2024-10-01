@@ -1,4 +1,8 @@
-use std::time::{Duration, Instant};
+use core::f32;
+use std::{
+    borrow::Borrow,
+    time::{Duration, Instant},
+};
 
 use nalgebra::{Translation3, Vector3};
 use rogue_macros::Resource;
@@ -50,32 +54,31 @@ impl GameWorld {
             game_world.loaded_test_models = true;
 
             // Green box 4x4
-            let voxel_model = VoxelModel::from_impl(VoxelModelESVO::new(4));
+            let voxel_model = VoxelModel::new(VoxelModelESVO::new(4, true));
 
-            ecs_world.spawn(RenderableVoxelModel {
-                transform: Transform::with_translation(Translation3::new(1.0, 0.0, 1.0)),
-                voxel_model: voxel_model.clone(),
-            });
-
-            ecs_world.spawn(RenderableVoxelModel {
-                transform: Transform::with_translation(Translation3::new(-5.0, 0.0, 2.0)),
-                voxel_model: voxel_model.clone(),
-            });
-
-            ecs_world.spawn(RenderableVoxelModel {
-                transform: Transform::with_translation(Translation3::new(4.5, 6.0, -5.0)),
-                voxel_model: voxel_model.clone(),
-            });
+            ecs_world.spawn(RenderableVoxelModel::new(
+                Transform::with_translation(Translation3::new(1.0, 0.0, 1.0)),
+                voxel_model.clone(),
+            ));
+            ecs_world.spawn(RenderableVoxelModel::new(
+                Transform::with_translation(Translation3::new(-5.0, 0.0, 2.0)),
+                voxel_model.clone(),
+            ));
+            ecs_world.spawn(RenderableVoxelModel::new(
+                Transform::with_translation(Translation3::new(4.5, 6.0, -5.0)),
+                voxel_model.clone(),
+            ));
         }
     }
 
     pub fn update_test_models_position(mut ecs_world: ResMut<ECSWorld>, time: Res<Time>) {
-        for (entity, (transform, voxel_model)) in ecs_world
-            .query_mut::<(&mut Transform, &VoxelModel)>()
-            .into_iter()
-        {
+        let q = ecs_world
+            .query_mut::<(&mut Transform, &VoxelModel<VoxelModelESVO>)>()
+            .into_iter();
+
+        for (entity, (transform, voxel_model)) in q {
             transform.isometry.translation.y =
-                ((6.28 * time.start_time().elapsed().as_secs_f32()) / 2.0).cos() * -4.0
+                ((f32::consts::TAU * time.start_time().elapsed().as_secs_f32()) / 2.0).cos() * -4.0
                     - (voxel_model.length().y as f32 * 0.5);
         }
     }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bitflags::Flags;
 use nalgebra::Vector3;
 
-use super::voxel::{Attributes, VoxelModelImpl};
+use super::voxel::{Attributes, VoxelModelGpuNone, VoxelModelImpl};
 
 /// A float 1D array representing a 3D voxel region.
 pub struct VoxelModelFlat {
@@ -21,10 +21,6 @@ impl VoxelModelImpl for VoxelModelFlat {
     }
 
     fn length(&self) -> Vector3<u32> {
-        todo!()
-    }
-
-    fn model_clone(&self) -> Box<dyn VoxelModelImpl> {
         todo!()
     }
 }
