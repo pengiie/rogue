@@ -34,27 +34,35 @@ impl VoxelRange {
     pub fn length(&self) -> Vector3<u32> {
         self.length
     }
-
-    pub fn new_filled(position: Vector3<u32>, length: Vector3<u32>, color: u32) -> Self {
-        let mut attributes = HashMap::new();
-        attributes.insert(Attributes::COMPRESSED, color);
-        let data = VoxelModelFlat::new_filled(attributes, length);
-
-        Self::new(data, position, length)
-    }
 }
 
-bitflags::bitflags! {
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-    pub struct Attributes: u32 {
-        const NONE = 0;
-        const ALBEDO = 1;
-        const NORMAL = 2;
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct Attachment {
+    name: &'static str,
 
-        // Color 8,8,8,8, Normal 10,10,10
-        const COMPRESSED = 4;
+    // Size in terms of u32s
+    size: u32,
+    renderable_index: u8,
+}
 
-        // Max 8 attachments
+impl Attachment {
+    pub const ALBEDO: Attachment = Attachment {
+        name: "albedo",
+        size: 1,
+        renderable_index: 0,
+    };
+    pub const COMPRESSED: Attachment = Attachment {
+        name: "compressed",
+        size: 1,
+        renderable_index: 1,
+    };
+
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    pub fn renderable_index(&self) -> u8 {
+        self.renderable_index
     }
 }
 

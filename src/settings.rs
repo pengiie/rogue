@@ -1,8 +1,12 @@
 use std::f32::consts;
 
+use downcast::Any;
 use rogue_macros::Resource;
 
-use crate::common::set::{AttributeSet, AttributeSetImpl};
+use crate::{
+    common::set::{AttributeSet, AttributeSetImpl},
+    engine::graphics::renderer::Antialiasing,
+};
 
 pub type GraphicsSettingsSet = AttributeSet<GraphicsSettings>;
 
@@ -11,17 +15,20 @@ pub type GraphicsSettingsSet = AttributeSet<GraphicsSettings>;
 #[derive(Clone)]
 pub enum GraphicsSettingsAttributes {
     RenderSize((u32, u32)),
+    Antialiasing(Antialiasing),
 }
 
 #[derive(Clone)]
 pub struct GraphicsSettings {
     pub render_size: (u32, u32),
+    pub antialiasing: Antialiasing,
 }
 
 impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
             render_size: (1080, 720),
+            antialiasing: Antialiasing::None,
         }
     }
 }
@@ -34,12 +41,18 @@ impl AttributeSetImpl for GraphicsSettings {
         if self.render_size != last.render_size {
             updates.push(GraphicsSettingsAttributes::RenderSize(self.render_size));
         }
+        if self.antialiasing != last.antialiasing {
+            updates.push(GraphicsSettingsAttributes::Antialiasing(self.antialiasing));
+        }
 
         updates
     }
 
     fn aggregate_all_fields(&self) -> Vec<GraphicsSettingsAttributes> {
-        vec![GraphicsSettingsAttributes::RenderSize(self.render_size)]
+        vec![
+            GraphicsSettingsAttributes::RenderSize(self.render_size),
+            GraphicsSettingsAttributes::Antialiasing(self.antialiasing),
+        ]
     }
 }
 

@@ -15,7 +15,8 @@ use crate::{
         resource::{Res, ResMut},
         voxel::{
             esvo::VoxelModelESVO,
-            voxel::{RenderableVoxelModel, VoxelModel, VoxelModelSchema},
+            flat::VoxelModelFlat,
+            voxel::{Attachment, RenderableVoxelModel, VoxelModel, VoxelModelSchema},
         },
         window::time::Time,
     },
@@ -53,8 +54,15 @@ impl GameWorld {
         if !game_world.loaded_test_models {
             game_world.loaded_test_models = true;
 
+            let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 4));
+            for (position, mut voxel) in flat_model.xyz_iter_mut() {
+                if position.y == 0 {
+                    voxel.set_attachment(Attachment::ALBEDO, 0xFF00FFFFu32);
+                }
+            }
+
             // Green box 4x4
-            let voxel_model = VoxelModel::new(VoxelModelESVO::new(4, true));
+            let voxel_model = VoxelModel::<VoxelModelESVO>::new(flat_model.into());
 
             ecs_world.spawn(RenderableVoxelModel::new(
                 Transform::with_translation(Translation3::new(1.0, 0.0, 1.0)),

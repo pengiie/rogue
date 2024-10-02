@@ -421,6 +421,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   textureStore(u_radiance_total, coords, vec4f(total_radiance, 0.0));
 
   var avg_radiance = total_radiance / f32(u_world_info.frame_count);
+  avg_radiance = radiance;
 
   // Convert to sRGB then dither to avoid any banding.
   let gamma_corrected_color = lrgb_to_srgb(avg_radiance);

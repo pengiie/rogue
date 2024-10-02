@@ -7,18 +7,18 @@ use nalgebra::Vector3;
 use crate::common::morton::morton_decode;
 
 use super::voxel::{
-    Attributes, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+    Attachment, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
     VoxelModelImplConcrete, VoxelModelSchema, VoxelRange,
 };
 
 #[derive(Clone)]
 pub(crate) struct VoxelModelESVO {
-    length: u32,
+    pub length: u32,
 
-    data: Vec<u32>,
-    bucket_lookup: Vec<BucketLookupInfo>,
+    pub data: Vec<u32>,
+    pub bucket_lookup: Vec<BucketLookupInfo>,
 
-    updates: Option<Vec<VoxelModelESVOUpdate>>,
+    pub updates: Option<Vec<VoxelModelESVOUpdate>>,
 }
 
 impl VoxelModelESVO {
@@ -166,7 +166,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
-        todo!("Implementing this in the next commit")
+        // todo!("Implementing this in the next commit")
     }
 }
 
@@ -186,7 +186,7 @@ pub enum VoxelModelESVOUpdate {
         updated_region: Range<usize>,
     },
     AttachmentLookup {
-        attachment: Attributes,
+        attachment: Attachment,
         updated_region: Range<usize>,
     },
     RawAttachment {
@@ -195,7 +195,7 @@ pub enum VoxelModelESVOUpdate {
 }
 
 #[derive(Clone, Copy)]
-struct BucketLookupInfo {
+pub struct BucketLookupInfo {
     index: u32,
     node_capacity: u32,
     node_size: u32,

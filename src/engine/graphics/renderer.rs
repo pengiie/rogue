@@ -23,10 +23,7 @@ use crate::{
         physics::transform::Transform,
         resource::{Res, ResMut},
         ui::{gui::Egui, state::UIState},
-        voxel::{
-            voxel::Attributes,
-            voxel_world::{VoxelWorld, VoxelWorldGpu},
-        },
+        voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
         window::time::Time,
     },
     game::player::player::Player,
@@ -34,6 +31,12 @@ use crate::{
 };
 
 use super::{camera::Camera, device::DeviceResource, shaders};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Antialiasing {
+    None,
+    TAA,
+}
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable)]
 #[repr(C)]
@@ -667,6 +670,11 @@ impl Renderer {
                     // New total radiance texture so average must be reset.
                     renderer.frame_count = 0;
                 }
+                GraphicsSettingsAttributes::Antialiasing(antialiasing) => {
+                    // TODO: Update pipeline with constructed shader based on if we want
+                    // antialiasing. Aggregate all the updates at the end though, or i guess we can
+                    // just implement that later.
+                }
             }
         }
 
@@ -1064,88 +1072,88 @@ impl Renderer {
         }
 
         // UI Pass
-        // {
-        //     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        //         label: Some("ui_pass"),
-        //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-        //             view: &swapchain_texture_view,
-        //             resolve_target: None,
-        //             ops: wgpu::Operations::<wgpu::Color> {
-        //                 load: wgpu::LoadOp::Load,
-        //                 store: wgpu::StoreOp::Store,
-        //             },
-        //         })],
-        //         depth_stencil_attachment: None,
-        //         timestamp_writes: None,
-        //         occlusion_query_set: None,
-        //     });
-        //     render_pass.set_pipeline(&renderer.ui_pipeline);
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ui_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &swapchain_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations::<wgpu::Color> {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(&renderer.ui_pipeline);
 
-        //     let mut index_slices = renderer.ui_index_buffer_slices.iter();
-        //     let mut vertex_slices = renderer.ui_vertex_buffer_slices.iter();
-        //     for epaint::ClippedPrimitive {
-        //         clip_rect,
-        //         primitive,
-        //     } in egui.primitives()
-        //     {
-        //         {
-        //             let rect = clip_rect;
-        //             if rect.width() == 0.0 || rect.height() == 0.0 {
-        //                 continue;
-        //             }
-        //             let pixels_per_point = egui.pixels_per_point();
-        //             let clip_min_x = pixels_per_point * clip_rect.min.x;
-        //             let clip_min_y = pixels_per_point * clip_rect.min.y;
-        //             let clip_max_x = pixels_per_point * clip_rect.max.x;
-        //             let clip_max_y = pixels_per_point * clip_rect.max.y;
+            let mut index_slices = renderer.ui_index_buffer_slices.iter();
+            let mut vertex_slices = renderer.ui_vertex_buffer_slices.iter();
+            for epaint::ClippedPrimitive {
+                clip_rect,
+                primitive,
+            } in egui.primitives()
+            {
+                {
+                    let rect = clip_rect;
+                    if rect.width() == 0.0 || rect.height() == 0.0 {
+                        continue;
+                    }
+                    let pixels_per_point = egui.pixels_per_point();
+                    let clip_min_x = pixels_per_point * clip_rect.min.x;
+                    let clip_min_y = pixels_per_point * clip_rect.min.y;
+                    let clip_max_x = pixels_per_point * clip_rect.max.x;
+                    let clip_max_y = pixels_per_point * clip_rect.max.y;
 
-        //             // Round to integer:
-        //             let clip_min_x = clip_min_x.round() as u32;
-        //             let clip_min_y = clip_min_y.round() as u32;
-        //             let clip_max_x = clip_max_x.round() as u32;
-        //             let clip_max_y = clip_max_y.round() as u32;
+                    // Round to integer:
+                    let clip_min_x = clip_min_x.round() as u32;
+                    let clip_min_y = clip_min_y.round() as u32;
+                    let clip_max_x = clip_max_x.round() as u32;
+                    let clip_max_y = clip_max_y.round() as u32;
 
-        //             // Clamp:
-        //             let texture_size = swapchain_texture.texture.size();
-        //             let clip_min_x = clip_min_x.clamp(0, texture_size.width);
-        //             let clip_min_y = clip_min_y.clamp(0, texture_size.height);
-        //             let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.width);
-        //             let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.height);
-        //             render_pass.set_scissor_rect(
-        //                 clip_min_x,
-        //                 clip_min_y,
-        //                 clip_max_x - clip_min_x,
-        //                 clip_max_y - clip_min_y,
-        //             );
-        //         }
-        //         match primitive {
-        //             epaint::Primitive::Mesh(mesh) => {
-        //                 let slice = vertex_slices.next().unwrap();
-        //                 let vertex_buffer_slice = renderer
-        //                     .ui_vertex_buffer
-        //                     .slice(slice.start as u64..slice.end as u64);
-        //                 let slice = index_slices.next().unwrap();
-        //                 let index_buffer_slice = renderer
-        //                     .ui_index_buffer
-        //                     .slice(slice.start as u64..slice.end as u64);
+                    // Clamp:
+                    let texture_size = swapchain_texture.texture.size();
+                    let clip_min_x = clip_min_x.clamp(0, texture_size.width);
+                    let clip_min_y = clip_min_y.clamp(0, texture_size.height);
+                    let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.width);
+                    let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.height);
+                    render_pass.set_scissor_rect(
+                        clip_min_x,
+                        clip_min_y,
+                        clip_max_x - clip_min_x,
+                        clip_max_y - clip_min_y,
+                    );
+                }
+                match primitive {
+                    epaint::Primitive::Mesh(mesh) => {
+                        let slice = vertex_slices.next().unwrap();
+                        let vertex_buffer_slice = renderer
+                            .ui_vertex_buffer
+                            .slice(slice.start as u64..slice.end as u64);
+                        let slice = index_slices.next().unwrap();
+                        let index_buffer_slice = renderer
+                            .ui_index_buffer
+                            .slice(slice.start as u64..slice.end as u64);
 
-        //                 if let Some((_texture, bind_group)) =
-        //                     renderer.ui_textures.get(&mesh.texture_id)
-        //                 {
-        //                     render_pass.set_bind_group(0, bind_group, &[]);
-        //                     render_pass.set_vertex_buffer(0, vertex_buffer_slice);
-        //                     render_pass
-        //                         .set_index_buffer(index_buffer_slice, wgpu::IndexFormat::Uint32);
+                        if let Some((_texture, bind_group)) =
+                            renderer.ui_textures.get(&mesh.texture_id)
+                        {
+                            render_pass.set_bind_group(0, bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, vertex_buffer_slice);
+                            render_pass
+                                .set_index_buffer(index_buffer_slice, wgpu::IndexFormat::Uint32);
 
-        //                     render_pass.draw_indexed(0..mesh.indices.len() as u32, 0, 0..1);
-        //                 } else {
-        //                     todo!("Couldnt find the thingy");
-        //                 }
-        //             }
-        //             epaint::Primitive::Callback(_) => todo!(),
-        //         }
-        //     }
-        // }
+                            render_pass.draw_indexed(0..mesh.indices.len() as u32, 0, 0..1);
+                        } else {
+                            todo!("Couldnt find the thingy");
+                        }
+                    }
+                    epaint::Primitive::Callback(_) => todo!(),
+                }
+            }
+        }
 
         device.queue().submit([encoder.finish()]);
         swapchain_texture.present();

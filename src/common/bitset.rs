@@ -1,11 +1,13 @@
 pub struct Bitset {
     data: Vec<u32>,
+    bits: usize,
 }
 
 impl Bitset {
     pub fn new(bits: usize) -> Self {
         Self {
             data: vec![0; bits.next_multiple_of(32)],
+            bits,
         }
     }
 
@@ -21,5 +23,10 @@ impl Bitset {
 
     pub fn get_bit(&self, bit: usize) -> bool {
         (self.data[bit / 32] & (1 << (bit % 32))) > 0
+    }
+
+    /// Length of the bitset in the number of bits.
+    pub fn bits(&self) -> usize {
+        self.bits
     }
 }
