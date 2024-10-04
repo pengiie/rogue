@@ -12,7 +12,7 @@ fn main() {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
             console_log::init_with_level(log::Level::Debug).expect("Couldnt init console logger.");
         } else {
-            env_logger::init();
+            env_logger::builder().filter(Some("naga"), log::LevelFilter::Info).filter(Some("wgpu_hal"), log::LevelFilter::Info).filter(Some("wgpu_core"), log::LevelFilter::Info).init();
         }
     }
 

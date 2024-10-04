@@ -281,34 +281,40 @@ fn ray_to_aabb(ray: Ray, aabb: AABB) -> RayAABBInfo {
 // }
 
 struct VoxelModelHit {
-  data_ptr: u32,
+  // The pointer to where this model's data ptrs are located in u_world_acceleration.
+  data_ptrs_ptr: u32,
+  data_ptrs_size: u32,
   schema: u32,
   hit_info: RayAABBInfo,
 }
 
 fn get_next_voxel_model(ray: Ray) -> VoxelModelHit {
-  var closest: VoxelModelHit = VoxelModelHit(0, 0, RayAABBInfo(0.0, 0.0, vec3f(0.0), vec3f(0.0), false));
+  var closest: VoxelModelHit = VoxelModelHit(0, 0, 0, RayAABBInfo(0.0, 0.0, vec3f(0.0), vec3f(0.0), false));
   var min_t = 100000.0;
-  for (var i = 0u; i < u_world_info.voxel_model_count; i++) {
-    let model_index = i * 8;
+  var current_index = 0u;
+  for (var _i = 0u; _i < u_world_info.voxel_model_count; _i++) {
+    let model_data_size = u_world_acceleration.data[current_index];
     let min = bitcast<vec3<f32>>(vec3<u32>(
-      u_world_acceleration.data[model_index + 2],
-      u_world_acceleration.data[model_index + 3],
-      u_world_acceleration.data[model_index + 4],
+      u_world_acceleration.data[current_index + 2],
+      u_world_acceleration.data[current_index + 3],
+      u_world_acceleration.data[current_index + 4],
     ));
     let max = bitcast<vec3<f32>>(vec3<u32>(
-      u_world_acceleration.data[model_index + 5],
-      u_world_acceleration.data[model_index + 6],
-      u_world_acceleration.data[model_index + 7],
+      u_world_acceleration.data[current_index + 5],
+      u_world_acceleration.data[current_index + 6],
+      u_world_acceleration.data[current_index + 7],
     ));
 
     let hit_info = ray_to_aabb(ray, aabb_min_max(min, max));
     if (hit_info.hit) {
-      closest = VoxelModelHit(u_world_acceleration.data[model_index],
-                              u_world_acceleration.data[model_index + 1],
+      closest = VoxelModelHit(current_index + 8,
+                              model_data_size - 8,
+                              u_world_acceleration.data[current_index + 1],
                               hit_info);
       min_t = hit_info.t_enter;
     }
+
+    current_index = current_index + model_data_size;
   }
 
   return closest;

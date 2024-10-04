@@ -579,7 +579,7 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: voxel_world_gpu.world_data_buffer(),
+                            buffer: voxel_world_gpu.world_data_buffer().expect("Shouldn't update ray bind group if world data buffer doesn't exist."),
                             offset: 0,
                             size: None,
                         }),

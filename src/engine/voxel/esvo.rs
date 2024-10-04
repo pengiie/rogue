@@ -6,13 +6,18 @@ use std::{
 
 use downcast::Downcast;
 use egui::debug_text::print;
+use log::debug;
 use nalgebra::Vector3;
+use wgpu::core::device;
 
-use crate::common::morton::morton_decode;
+use crate::{common::morton::morton_decode, engine::graphics::device::DeviceResource};
 
-use super::voxel::{
-    Attachment, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-    VoxelModelImplConcrete, VoxelModelSchema, VoxelRange,
+use super::{
+    voxel::{
+        Attachment, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelImplConcrete, VoxelModelSchema, VoxelRange,
+    },
+    voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
 };
 
 #[derive(Clone)]
@@ -89,18 +94,15 @@ impl VoxelModelESVO {
                 }
             })
             .unwrap_or_else(|| {
-                self.push_empty_block();
+                self.push_empty_bucket();
 
                 self.bucket_lookup.len() as u32 - 1
             })
     }
 
-    pub fn push_empty_block(&mut self) {
-        let bucket_info = BucketLookupInfo::empty(
-            self.bucket_lookup.len() as u32,
-            self.data.len() as u32,
-            Self::node_count_from_length(16),
-        );
+    pub fn push_empty_bucket(&mut self) {
+        let bucket_info =
+            BucketLookupInfo::empty(self.bucket_lookup.len() as u32, self.data.len() as u32, 32);
         self.data
             .resize(self.data.len() + bucket_info.bucket_total_size as usize, 0);
         self.bucket_lookup.push(bucket_info);
@@ -225,41 +227,54 @@ impl std::fmt::Debug for VoxelModelESVO {
 }
 
 pub struct VoxelModelESVOGpu {
-    data_allocation: Option<Range<u32>>,
-    attachment_lookup_allocations: Option<Range<u32>>,
-    raw_attachment_allocations: Option<Range<u32>>,
+    data_allocation: Option<VoxelDataAllocation>,
+    attachment_lookup_allocations: Option<VoxelDataAllocation>,
+    raw_attachment_allocations: Option<VoxelDataAllocation>,
 
-    initialized: bool,
+    initialized_data: bool,
 }
 
 impl VoxelModelGpuImpl for VoxelModelESVOGpu {
-    fn aggregate_model_info(&self) -> Vec<u32> {
-        vec![]
+    fn aggregate_model_info(&self) -> Option<Vec<u32>> {
+        let Some(data_allocation) = &self.data_allocation else {
+            return None;
+        };
+        Some(vec![
+            // World data ptr
+            data_allocation.start_index(),
+        ])
+    }
+
+    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+        let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
+
+        if self.data_allocation.is_none() {
+            let data_allocation_size = model.data.len() as u64 * 4;
+            self.data_allocation = Some(
+                allocator
+                    .allocate(data_allocation_size)
+                    .expect("Failed to allocate ESVO."),
+            );
+        }
     }
 
     fn write_gpu_updates(
         &mut self,
-        allocator: &mut super::voxel_allocator::VoxelAllocator,
+        device: &DeviceResource,
+        allocator: &mut VoxelAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
 
-        if !self.initialized {
-            // Nothing should be allocated yet.
-            assert!(
-                self.data_allocation.is_none()
-                    && self.attachment_lookup_allocations.is_none()
-                    && self.raw_attachment_allocations.is_none()
+        if !self.initialized_data && self.data_allocation.is_some() {
+            allocator.write_world_data(
+                device,
+                self.data_allocation.as_ref().unwrap(),
+                bytemuck::cast_slice::<u32, u8>(model.data.as_slice()),
             );
 
-            let data_allocation_size = 10000;
-            self.data_allocation = Some(allocator.allocate(data_allocation_size));
-            self.attachment_lookup_allocations = Some(allocator.allocate(data_allocation_size));
-            self.raw_attachment_allocations = Some(allocator.allocate(data_allocation_size));
-            self.initialized = true;
+            self.initialized_data = true;
         }
-
-        todo!("Finish esvo data allocation and writing");
         // todo!("Implementing this in the next commit")
     }
 }
@@ -271,7 +286,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelESVOGpu {
             attachment_lookup_allocations: None,
             raw_attachment_allocations: None,
 
-            initialized: false,
+            initialized_data: false,
         }
     }
 }
@@ -304,14 +319,18 @@ pub struct BucketLookupInfo {
 }
 
 impl BucketLookupInfo {
-    pub fn empty(index: u32, mut start_offset: u32, desired_node_count: u32) -> Self {
+    pub fn empty(index: u32, mut start_offset: u32, desired_bucket_size: u32) -> Self {
+        assert!(desired_bucket_size.is_power_of_two());
+
+        let node_capacity = desired_bucket_size - Self::bucket_info_size();
+
+        let mut page_header_count = 0;
         let mut left = start_offset;
-        let mut i = 0;
-        while i < desired_node_count {
-            let next_page_header = left.next_multiple_of(8192);
-            let nodes_between = (next_page_header - left).min(desired_node_count - i);
-            i += nodes_between;
-            left += nodes_between + 1;
+        let bucket_info_start = start_offset + node_capacity;
+        while left < bucket_info_start {
+            page_header_count += 1;
+
+            left = (left + 1).next_multiple_of(8192);
         }
 
         let bucket_absolute_start = start_offset;
@@ -321,13 +340,13 @@ impl BucketLookupInfo {
 
         Self {
             index,
-            node_capacity: desired_node_count,
+            node_capacity: node_capacity - page_header_count,
             node_size: 0,
             bucket_absolute_start,
             bucket_node_start: start_offset,
             bucket_free_start: start_offset,
-            bucket_info_start: left - 1,
-            bucket_total_size: left + Self::bucket_info_size(),
+            bucket_info_start,
+            bucket_total_size: desired_bucket_size,
         }
     }
 

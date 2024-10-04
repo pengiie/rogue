@@ -8,7 +8,10 @@ use hecs::Bundle;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::{common::aabb::AABB, engine::physics::transform::Transform};
+use crate::{
+    common::aabb::AABB,
+    engine::{graphics::device::DeviceResource, physics::transform::Transform},
+};
 
 use super::{esvo::VoxelModelESVO, flat::VoxelModelFlat, voxel_allocator::VoxelAllocator};
 
@@ -81,9 +84,16 @@ pub trait VoxelModelImplConcrete: VoxelModelImpl + Clone {
 pub trait VoxelModelGpuImpl: Send + Sync {
     // Returns the pointers required to traverse this data structure.
     // Can encode other model specific data here as well.
-    fn aggregate_model_info(&self) -> Vec<u32>;
+    fn aggregate_model_info(&self) -> Option<Vec<u32>>;
 
-    fn write_gpu_updates(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl);
+    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl);
+
+    fn write_gpu_updates(
+        &mut self,
+        device: &DeviceResource,
+        allocator: &mut VoxelAllocator,
+        model: &dyn VoxelModelImpl,
+    );
 }
 pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
     fn new() -> Self;
@@ -92,11 +102,20 @@ pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
 pub struct VoxelModelGpuNone;
 
 impl VoxelModelGpuImpl for VoxelModelGpuNone {
-    fn aggregate_model_info(&self) -> Vec<u32> {
+    fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         unimplemented!("This gpu model is not renderable.")
     }
 
-    fn write_gpu_updates(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+        unimplemented!("This gpu model is not renderable.")
+    }
+
+    fn write_gpu_updates(
+        &mut self,
+        device: &DeviceResource,
+        allocator: &mut VoxelAllocator,
+        model: &dyn VoxelModelImpl,
+    ) {
         unimplemented!("This gpu model is not renderable.")
     }
 }
