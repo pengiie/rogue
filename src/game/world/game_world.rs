@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use log::debug;
 use nalgebra::{Translation3, Vector3};
 use rogue_macros::Resource;
 
@@ -63,6 +64,7 @@ impl GameWorld {
 
             // Green box 4x4
             let voxel_model = VoxelModel::<VoxelModelESVO>::new(flat_model.into());
+            debug!("{:?}", voxel_model);
 
             ecs_world.spawn(RenderableVoxelModel::new(
                 Transform::with_translation(Translation3::new(1.0, 0.0, 1.0)),

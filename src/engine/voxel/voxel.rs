@@ -139,6 +139,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct VoxelModel<T: VoxelModelImpl> {
     model: T,
 }

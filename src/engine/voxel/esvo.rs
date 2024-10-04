@@ -1,4 +1,8 @@
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{btree_map::IterMut, HashMap},
+    fmt::Write,
+    ops::Range,
+};
 
 use downcast::Downcast;
 use egui::debug_text::print;
@@ -22,9 +26,9 @@ pub(crate) struct VoxelModelESVO {
 }
 
 impl VoxelModelESVO {
-    pub fn new(length: u32, track_updates: bool) -> Self {
+    pub fn empty(length: u32, track_updates: bool) -> Self {
         assert!(length.is_power_of_two());
-        let mut s = VoxelModelESVO {
+        VoxelModelESVO {
             length,
 
             data: Vec::new(),
@@ -34,11 +38,32 @@ impl VoxelModelESVO {
             } else {
                 None
             },
-        };
+        }
+    }
 
-        s.append_node(Self::new_node(0, false, 0, 0));
+    pub fn new(length: u32, track_updates: bool) -> Self {
+        let mut esvo = Self::empty(length, track_updates);
+        esvo.append_node(Self::encode_node(0, false, 0, 0));
 
-        s
+        esvo
+    }
+
+    pub fn with_nodes(nodes: Vec<u32>, length: u32, track_updates: bool) -> Self {
+        let mut esvo = Self::empty(length, track_updates);
+
+        // Start at 1 since i == 0 is a page header.
+        let mut last_index = 1;
+        let mut added_page_headers = 0;
+        for node in nodes {
+            // As we write update the child_ptr to account for page headers.
+            esvo.append_node(node + (added_page_headers << 17));
+            if esvo.data.len() - last_index > 0 {
+                added_page_headers += 1;
+            }
+            last_index = esvo.data.len();
+        }
+
+        esvo
     }
 
     pub fn append_node(&mut self, node: u32) {
@@ -94,7 +119,7 @@ impl VoxelModelESVO {
         }
     }
 
-    const fn new_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> u32 {
+    pub const fn encode_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> u32 {
         assert!(pointer < 0b1000000000000000, "Pointer is too big.");
         assert!(valid_mask < 0b100000000, "valid mask is too big.");
         assert!(leaf_mask < 0b100000000, "leaf mask is too big.");
@@ -107,6 +132,15 @@ impl VoxelModelESVO {
         x |= leaf_mask;
 
         x
+    }
+
+    pub const fn decode_node(node: u32) -> (u32, bool, u32, u32) {
+        let child_ptr = node >> 17;
+        let far = if ((node >> 16) & 1) == 1 { true } else { false };
+        let value_mask = (node >> 8) & 0xFF;
+        let leaf_mask = node & 0xFF;
+
+        (child_ptr, far, value_mask, leaf_mask)
     }
 
     fn node_count_from_length(length: u32) -> u32 {
@@ -149,10 +183,53 @@ impl VoxelModelImpl for VoxelModelESVO {
     //    }
 }
 
+impl std::fmt::Debug for VoxelModelESVO {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("ESVO height={}\n", self.length.trailing_zeros()));
+        for (i, node) in self.data.iter().enumerate() {
+            if i > 20 {
+                break;
+            }
+
+            if (i % 8192) == 0 {
+                f.write_str(&format!("[{}] Page Header, Block info: {}\n", i, node))?
+            } else {
+                let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node);
+                let value_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                    str.push_str(if (value_mask & (1 << octant)) > 0 {
+                        "1"
+                    } else {
+                        "0"
+                    });
+
+                    str
+                });
+                let leaf_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                    str.push_str(if (leaf_mask & (1 << octant)) > 0 {
+                        "1"
+                    } else {
+                        "0"
+                    });
+
+                    str
+                });
+                f.write_str(&format!(
+                    "[{}] Child ptr: {}, Far: {}, Value Mask: {}, Leaf Mask: {}\n",
+                    i, child_ptr, far, value_mask_str, leaf_mask_str,
+                ))?
+            }
+        }
+
+        f.write_str("")
+    }
+}
+
 pub struct VoxelModelESVOGpu {
     data_allocation: Option<Range<u32>>,
     attachment_lookup_allocations: Option<Range<u32>>,
     raw_attachment_allocations: Option<Range<u32>>,
+
+    initialized: bool,
 }
 
 impl VoxelModelGpuImpl for VoxelModelESVOGpu {
@@ -166,6 +243,23 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
+
+        if !self.initialized {
+            // Nothing should be allocated yet.
+            assert!(
+                self.data_allocation.is_none()
+                    && self.attachment_lookup_allocations.is_none()
+                    && self.raw_attachment_allocations.is_none()
+            );
+
+            let data_allocation_size = 10000;
+            self.data_allocation = Some(allocator.allocate(data_allocation_size));
+            self.attachment_lookup_allocations = Some(allocator.allocate(data_allocation_size));
+            self.raw_attachment_allocations = Some(allocator.allocate(data_allocation_size));
+            self.initialized = true;
+        }
+
+        todo!("Finish esvo data allocation and writing");
         // todo!("Implementing this in the next commit")
     }
 }
@@ -176,6 +270,8 @@ impl VoxelModelGpuImplConcrete for VoxelModelESVOGpu {
             data_allocation: None,
             attachment_lookup_allocations: None,
             raw_attachment_allocations: None,
+
+            initialized: false,
         }
     }
 }
@@ -194,7 +290,7 @@ pub enum VoxelModelESVOUpdate {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BucketLookupInfo {
     index: u32,
     node_capacity: u32,
@@ -223,8 +319,6 @@ impl BucketLookupInfo {
             start_offset += 1;
         }
 
-        println!("totla size; {:?}", (left + Self::bucket_info_size()) * 4);
-
         Self {
             index,
             node_capacity: desired_node_count,
@@ -246,5 +340,19 @@ impl BucketLookupInfo {
         x += 1;
 
         x
+    }
+}
+
+/// Iterates over all the node data given a range of node indices, not including page headers, the
+/// iterator then iterates over abstracting away the page headers.
+pub struct VoxelModelESVOIterMut<'a> {
+    pub esvo_model: &'a mut VoxelModelESVO,
+}
+
+impl<'a> Iterator for VoxelModelESVOIterMut<'a> {
+    type Item = (&'a mut u32); // (node)
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
     }
 }
