@@ -27,6 +27,7 @@ pub struct GraphicsSettings {
 impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
+            // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
             render_size: (1080, 720),
             antialiasing: Antialiasing::None,
         }

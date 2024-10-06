@@ -54,18 +54,48 @@ impl VoxelModelESVO {
     }
 
     pub fn with_nodes(nodes: Vec<u32>, length: u32, track_updates: bool) -> Self {
+        for (i, node) in nodes.iter().enumerate() {
+            let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node);
+            let value_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                str.push_str(if (value_mask & (1 << octant)) > 0 {
+                    "1"
+                } else {
+                    "0"
+                });
+
+                str
+            });
+            let leaf_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                str.push_str(if (leaf_mask & (1 << octant)) > 0 {
+                    "1"
+                } else {
+                    "0"
+                });
+
+                str
+            });
+            debug!(
+                "[{}] Child ptr: {}, Far: {}, Value Mask: {}, Leaf Mask: {}\n",
+                i, child_ptr, far, value_mask_str, leaf_mask_str,
+            );
+        }
         let mut esvo = Self::empty(length, track_updates);
 
-        // Start at 1 since i == 0 is a page header.
-        let mut last_index = 1;
-        let mut added_page_headers = 0;
+        // The next index to be written.
+        let mut next_index = 1;
+        let mut added_struct_padding = 0;
         for node in nodes {
             // As we write update the child_ptr to account for page headers.
-            esvo.append_node(node + (added_page_headers << 17));
-            if esvo.data.len() - last_index > 0 {
-                added_page_headers += 1;
+            esvo.append_node(node + (added_struct_padding << 17));
+
+            let next_free_bucket = esvo.get_free_bucket() as usize;
+            let next_free = esvo.bucket_lookup[next_free_bucket].bucket_free_start;
+
+            if next_free - next_index > 1 {
+                added_struct_padding += next_free - next_index - 1;
             }
-            last_index = esvo.data.len();
+
+            next_index = next_free;
         }
 
         esvo
@@ -197,7 +227,7 @@ impl std::fmt::Debug for VoxelModelESVO {
                 f.write_str(&format!("[{}] Page Header, Block info: {}\n", i, node))?
             } else {
                 let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node);
-                let value_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                let value_mask_str = (0..8).rev().fold(String::new(), |mut str, octant| {
                     str.push_str(if (value_mask & (1 << octant)) > 0 {
                         "1"
                     } else {
@@ -206,7 +236,7 @@ impl std::fmt::Debug for VoxelModelESVO {
 
                     str
                 });
-                let leaf_mask_str = (0..8).fold(String::new(), |mut str, octant| {
+                let leaf_mask_str = (0..8).rev().fold(String::new(), |mut str, octant| {
                     str.push_str(if (leaf_mask & (1 << octant)) > 0 {
                         "1"
                     } else {
@@ -239,9 +269,10 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         let Some(data_allocation) = &self.data_allocation else {
             return None;
         };
+
         Some(vec![
-            // World data ptr
-            data_allocation.start_index(),
+            // World data ptr (divide by 4 since 4 bytes in a u32)
+            data_allocation.start_index() >> 2,
         ])
     }
 
@@ -267,15 +298,16 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
 
         if !self.initialized_data && self.data_allocation.is_some() {
+            debug!("Writing initial data");
             allocator.write_world_data(
                 device,
                 self.data_allocation.as_ref().unwrap(),
                 bytemuck::cast_slice::<u32, u8>(model.data.as_slice()),
             );
+            debug!("Writing data {:?}", model.data.as_slice());
 
             self.initialized_data = true;
         }
-        // todo!("Implementing this in the next commit")
     }
 }
 

@@ -4,6 +4,7 @@ use std::{
 };
 
 use hecs::Entity;
+use log::debug;
 use nalgebra::{allocator, Vector3};
 use rogue_macros::Resource;
 
@@ -27,15 +28,11 @@ use super::{
 };
 
 #[derive(Resource)]
-pub struct VoxelWorld {
-    allocator: VoxelAllocator,
-}
+pub struct VoxelWorld {}
 
 impl VoxelWorld {
-    pub fn new(device: &wgpu::Device) -> Self {
-        Self {
-            allocator: VoxelAllocator::new(device, 1 << 16),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
 
     // pub fn get_acceleration_data(&self) -> Box<[u32]> {
@@ -140,6 +137,9 @@ impl VoxelWorldGpu {
         ecs_world: Res<ECSWorld>,
         device: Res<DeviceResource>,
     ) {
+        let Some(allocator) = &mut voxel_world_gpu.allocator else {
+            return;
+        };
         // Update gpu model buffer data (Do this first so the allocation data is ready )
         {
             for (entity, (voxel_model, voxel_model_gpu)) in ecs_world
@@ -151,7 +151,7 @@ impl VoxelWorldGpu {
             {
                 voxel_model_gpu.deref_mut().write_gpu_updates(
                     &device,
-                    &mut voxel_world.allocator,
+                    allocator,
                     voxel_model.deref_mut() as &mut dyn VoxelModelImpl,
                 );
             }
@@ -207,6 +207,7 @@ impl VoxelWorldGpu {
                 acceleration_data.push(max_bits[0]);
                 acceleration_data.push(max_bits[1]);
                 acceleration_data.push(max_bits[2]);
+                //debug!("{:?}: {:?}", entity, model_info);
                 acceleration_data.append(&mut model_info);
             }
 

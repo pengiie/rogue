@@ -20,7 +20,7 @@ pub fn game_loop(app: &App) {
         // TICK UPDATES
         app.run_system(GameWorld::tick);
         app.run_system(GameWorld::load_test_models);
-        app.run_system(GameWorld::update_test_models_position);
+        //app.run_system(GameWorld::update_test_models_position);
     }
 
     // ------- PHYSICS ---------

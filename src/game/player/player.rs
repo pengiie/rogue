@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 
-use nalgebra::{AbstractRotation, Rotation3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{AbstractRotation, Rotation3, Translation3, UnitQuaternion, Vector2, Vector3};
 
 use crate::{
     engine::{
@@ -34,7 +34,11 @@ impl Player {
             panic!("Player already spawned.");
         }
 
-        ecs_world.spawn((Player::new(), Camera::new(), Transform::new()));
+        ecs_world.spawn((
+            Player::new(),
+            Camera::new(),
+            Transform::with_translation(Translation3::new(0.0, 1.0, 0.0)),
+        ));
     }
 
     pub fn update_player(

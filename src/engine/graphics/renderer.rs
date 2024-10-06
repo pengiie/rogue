@@ -203,14 +203,14 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -628,7 +628,7 @@ impl Renderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler_nearest),
+                        resource: wgpu::BindingResource::Sampler(&self.sampler_linear),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -679,6 +679,7 @@ impl Renderer {
         }
 
         if update_ray_bind_group || voxel_world_gpu.is_dirty() {
+            debug!("Updating ray bind group.");
             renderer.update_ray_bind_group(&device, &voxel_world_gpu);
         }
     }

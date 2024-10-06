@@ -101,11 +101,7 @@ impl App {
         let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
         let ui_state = UIState::default();
         let renderer = Renderer::new(&self.resource_bank().get_resource::<DeviceResource>());
-        let voxel_world = VoxelWorld::new(
-            self.resource_bank()
-                .get_resource::<DeviceResource>()
-                .device(),
-        );
+        let voxel_world = VoxelWorld::new();
         let voxel_world_gpu = VoxelWorldGpu::new();
 
         let rb = self.resource_bank_mut();

@@ -47,6 +47,8 @@ impl VoxelAllocator {
             data.len() as u64,
             allocation.range.end - allocation.range.start
         );
+        let offset = allocation.range.start;
+        debug!("offset: {}", offset);
         device
             .queue()
             .write_buffer(self.world_data_buffer(), allocation.range.start, data)
@@ -58,6 +60,7 @@ impl VoxelAllocator {
 }
 
 pub struct VoxelDataAllocation {
+    /// Currently, used as a unique identifier hash for an allocation.
     traversal: u64,
     range: std::ops::Range<u64>,
 }
@@ -70,15 +73,14 @@ impl VoxelDataAllocation {
 
 impl std::fmt::Debug for VoxelDataAllocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let traversal_str = (0..16).fold(String::new(), |mut str, bit| {
-            str.push_str(if (self.traversal & (1 << bit)) > 0 {
+        let mut traversal_str = String::new();
+        for i in (0..64).rev() {
+            traversal_str.push_str(if (self.traversal & (1 << i)) > 0 {
                 "1"
             } else {
                 "0"
             });
-
-            str
-        });
+        }
         f.debug_struct("VoxelDataAllocation")
             .field("traversal", &traversal_str)
             .field("range", &self.range)
@@ -122,7 +124,7 @@ impl VoxelAllocatorTree {
         let child_size = self.size >> 1;
         let new_child = |dir| {
             let mut new_child = Box::new(VoxelAllocatorTree::new(
-                (self.traversal << 1) & dir,
+                self.traversal | (dir << self.size.trailing_zeros()),
                 self.start_index + child_size * dir,
                 child_size,
             ));
@@ -130,7 +132,6 @@ impl VoxelAllocatorTree {
 
             (new_child, allocation)
         };
-        let is_parent = needed_size == child_size;
         if let Some(left) = &mut self.left {
             // The left node exists so traverse down to see if there is a free space.
             if let Some(found) = left.allocate(needed_size) {
@@ -149,7 +150,7 @@ impl VoxelAllocatorTree {
             }
         } else {
             let (new_child, allocation) = new_child(1);
-            self.left = Some(new_child);
+            self.right = Some(new_child);
             return Some(allocation);
         }
 

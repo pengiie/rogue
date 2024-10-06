@@ -237,13 +237,7 @@ impl From<VoxelModelFlat> for VoxelModelESVO {
         let mut levels: Vec<Vec<Option<u32>>> = vec![vec![]; height as usize + 1];
 
         for i in 0..volume {
-            let pos = {
-                let mut p = morton_decode(i as u64);
-                // Make is so y is inverted meaning the first octant written follows y == 0 in
-                // voxel model space, essentially fixes it so y is upward in the morton ordering.
-                p.y = length - p.y - 1;
-                p
-            };
+            let pos = morton_decode(i as u64);
             let mut exists = false;
 
             if flat.in_bounds(pos) {
