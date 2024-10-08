@@ -57,13 +57,22 @@ impl GameWorld {
 
             let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 4));
             for (position, mut voxel) in flat_model.xyz_iter_mut() {
+                debug!("Position: {:?}", position);
                 if position.y == 0 {
-                    voxel.set_attachment(Attachment::ALBEDO, 0xFF00FFFFu32);
+                    voxel.set_attachment(
+                        Attachment::ALBEDO,
+                        Attachment::encode_albedo(
+                            position.x as f32 / 3.0,
+                            position.y as f32 / 3.0,
+                            position.z as f32 / 3.0,
+                            1.0,
+                        ),
+                    );
                 }
             }
 
             // Green box 4x4
-            let voxel_model = VoxelModel::<VoxelModelESVO>::new(flat_model.into());
+            let voxel_model = VoxelModel::<VoxelModelESVO>::new((&flat_model).into());
             debug!("{:?}", voxel_model);
 
             ecs_world.spawn(RenderableVoxelModel::new(

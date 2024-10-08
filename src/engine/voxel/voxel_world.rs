@@ -207,7 +207,6 @@ impl VoxelWorldGpu {
                 acceleration_data.push(max_bits[0]);
                 acceleration_data.push(max_bits[1]);
                 acceleration_data.push(max_bits[2]);
-                //debug!("{:?}: {:?}", entity, model_info);
                 acceleration_data.append(&mut model_info);
             }
 

@@ -211,32 +211,42 @@ fn esvo_ray_aabb_normal(ray_aabb_info: RayAABBInfo, ray: Ray) -> vec3f {
   );
 }
 
-// fn get_node_child_albedo(node_ptr: u32, octant: u32) -> vec3f {
-//   let page_header_ptr = node_ptr & ~(0x1FFFu);
-//   let block_info_ptr = page_header_ptr + u_esvo_nodes.data[page_header_ptr];
-//   let block_start_ptr = u_esvo_nodes.data[block_info_ptr]; // Coincides with page header. 
-//   let lookup_offset = node_ptr - block_start_ptr;
-//   let lookup_ptr = u_esvo_nodes.data[block_info_ptr + 1] + lookup_offset;
-//   let lookup_info = u_esvo_lookup.data[lookup_ptr];
-//   let attachment_mask = lookup_info & 0xffu;
-//   let octant_bit = 0x1u << octant;
-//   let has_attachment = (attachment_mask & octant_bit) > 0;
-//   if(!has_attachment) {
-//     return vec3f(0.7, 0.8, 0.2);
-//   }
-// 
-//   let raw_offset = countonebits(attachment_mask & (octant_bit - 1));
-//   let raw_ptr = (lookup_info >> 8) + raw_offset;
-//   let raw_packed_albedo = u_esvo_attachment.data[raw_ptr];
-//   let albedo_r = raw_packed_albedo >> 24;
-//   let albedo_g = (raw_packed_albedo >> 16) & 0xFFu;
-//   let albedo_b = (raw_packed_albedo >> 8) & 0xFFu;
-//   let albedo = vec3f(f32(albedo_r) / 255.0, f32(albedo_g) / 255.0, f32(albedo_b) / 255.0);
-// 
-//   return albedo;
-// }
-// 
-// struct
+// Returns the raw attachment ptr into the raw buffer, or 0xFFFF_FFFF if it doesn't exist.
+fn esvo_get_node_attachment_ptr(esvo_data_ptrs_ptr: u32,
+                                attachment_index: u32,
+                                node_index: u32,
+                                octant: u32) -> u32 {
+  let node_data_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr];
+  let attachment_lookup_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 1 + attachment_index];
+  let attachment_raw_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 2 + attachment_index];
+
+  // Get the current bucket info index
+  let page_header_index = node_index & ~(0x1FFFu);
+  let bucket_info_index = page_header_index + u_world_data.data[node_data_ptr + page_header_index];
+
+  // Coincides with page header, the start index of this bucket. 
+  let bucket_info_ptr = node_data_ptr + bucket_info_index;
+  let bucket_start_index = u_world_data.data[bucket_info_ptr]; 
+  let lookup_offset = node_index - bucket_start_index;
+  let lookup_index = u_world_data.data[bucket_info_ptr + 1] + lookup_offset;
+  let lookup_info = u_world_data.data[attachment_lookup_ptr + lookup_index];
+
+  // Check that the voxel has this attachment type.
+  let attachment_mask = lookup_info & 0xFFu;
+  let octant_bit = 0x1u << octant;
+  let has_attachment = (attachment_mask & octant_bit) > 0;
+  if(!has_attachment) {
+    return 0xFFFFFFFFu;
+  }
+
+  let word_size = 1u;
+  // TODO: Switch on the attachment index for word size changes.
+  let raw_offset = countOneBits(attachment_mask & (octant_bit - 1));
+  let raw_ptr = attachment_raw_ptr + (lookup_info >> 8) + raw_offset * word_size;
+
+  return raw_ptr;
+}
+
 struct VoxelModelTrace {
   hit: bool,
   radiance: vec3f,
@@ -273,38 +283,43 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
 
   for (var i = 0; i < 16; i++) {
     let curr_hit_info = ray_to_aabb(ray, curr_aabb);
-    let in_octant = (curr_node_data & (0x100u << curr_octant)) > 0;
+    let value_mask = (curr_node_data >> 8) & 0xFF;
+    let in_octant = (value_mask & (0x1u << curr_octant)) > 0;
 
     if (in_octant && should_push) {
-       let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
-       if (is_leaf) {
-         return voxel_model_trace_hit(
-           vec3f(
-             f32((curr_octant & 1) != 0),
-             f32((curr_octant & 2) != 0),
-             f32((curr_octant & 4) != 0),
-           )
-         );
-       }
-       
-       stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
-       curr_height += 1u;
+      let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
+      if (is_leaf) {
+        let albedo_ptr = esvo_get_node_attachment_ptr(
+          voxel_model.data_ptrs_ptr,
+          0u,
+          curr_node_index,
+          curr_octant
+        );
 
-       let child_offset = curr_node_data >> 17;
-       curr_octant = esvo_next_octant(ray, curr_aabb, curr_hit_info.t_enter);
-       curr_aabb = esvo_next_octant_aabb(curr_aabb, curr_octant);
-       curr_node_index = curr_node_index + child_offset;
-       curr_node_data = u_world_data.data[node_data_ptr + curr_node_index];
+        // Check if this voxel has albedo, if it doesn't then skip it.
+        if (albedo_ptr != 0xFFFFFFFFu) {
+          let compresed_albedo = u_world_data.data[albedo_ptr];
+          let albedo = vec3f(
+            f32((compresed_albedo >> 24u) & 0xFFu) / 255.0,
+            f32((compresed_albedo >> 16u) & 0xFFu) / 255.0,
+            f32((compresed_albedo >> 8u) & 0xFFu) / 255.0,
+          );
+          return voxel_model_trace_hit(albedo);
+        }
+      }
+      
+      stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
+      curr_height += 1u;
 
-       continue;
+      let child_offset = curr_node_data >> 17;
+      let octant_offset = countOneBits(value_mask & ((1u << curr_octant) - 1));
+      curr_octant = esvo_next_octant(ray, curr_aabb, curr_hit_info.t_enter);
+      curr_aabb = esvo_next_octant_aabb(curr_aabb, curr_octant);
+      curr_node_index = curr_node_index + child_offset + octant_offset;
+      curr_node_data = u_world_data.data[node_data_ptr + curr_node_index];
+
+      continue;
     }
-    //  return voxel_model_trace_hit(
-    //    vec3f(
-    //      f32((curr_octant & 1) != 0),
-    //      f32((curr_octant & 2) != 0),
-    //      f32((curr_octant & 4) != 0),
-    //    )
-    //  );
 
     let exit = vec3<bool>(
       curr_hit_info.t_exit == curr_hit_info.t_max.x,

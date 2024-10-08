@@ -111,10 +111,16 @@ impl VoxelAllocatorTree {
 
     fn allocate(&mut self, needed_size: u64) -> Option<VoxelDataAllocation> {
         assert!(needed_size.is_power_of_two());
+        // This node is already allocated don't search any further.
+        if self.is_allocated {
+            return None;
+        }
 
+        // This node is free and it fits our needed size so allocate it.
         if needed_size == self.size {
-            // This node is already allocated and fits the size so don't search further.
-            if self.is_allocated {
+            // Ensure it doesnt have any children, if it does then that mean something is allocated
+            // within it's range.
+            if self.left.is_some() || self.right.is_some() {
                 return None;
             } else {
                 return Some(self.make_allocated());
@@ -132,6 +138,7 @@ impl VoxelAllocatorTree {
 
             (new_child, allocation)
         };
+
         if let Some(left) = &mut self.left {
             // The left node exists so traverse down to see if there is a free space.
             if let Some(found) = left.allocate(needed_size) {

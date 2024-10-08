@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     collections::HashMap,
     fmt::{Pointer, Write},
@@ -194,6 +195,18 @@ impl<'a> VoxelModelFlatVoxelAccess<'a> {
     pub fn is_empty(&self) -> bool {
         !self.flat_model.presence_data.get_bit(self.index)
     }
+
+    pub fn get_attachment_data(&self) -> HashMap<Attachment, &'a [u32]> {
+        self.flat_model
+            .attachment_data
+            .iter()
+            .map(|(attachment, data)| {
+                let i = attachment.size() as usize * self.index;
+                let data = &data[i..(i + attachment.size() as usize)];
+                (attachment.clone(), data)
+            })
+            .collect::<HashMap<_, _>>()
+    }
 }
 
 pub struct VoxelModelFlatVoxelAccessMut<'a> {
@@ -227,117 +240,207 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
     }
 }
 
-impl From<VoxelModelFlat> for VoxelModelESVO {
-    fn from(flat: VoxelModelFlat) -> Self {
+#[derive(Clone, PartialEq, Eq)]
+enum FlatESVONode {
+    // TODO: allow internal nodes to also hold interpolated attachment data if applicable
+    // (interpolation of the attachment depending on the type of attachment)
+    NonLeaf {
+        node_data: u32,
+        attachment_lookup_node_data: Option<HashMap<Attachment, u32>>,
+    },
+    Leaf {
+        attachment_data: HashMap<Attachment, Vec<u32>>,
+    },
+}
+
+impl From<&VoxelModelFlat> for VoxelModelESVO {
+    fn from(flat: &VoxelModelFlat) -> Self {
         let length = flat.length().map(|x| x.next_power_of_two()).max().max(2);
         let volume = length.pow(3);
         let height = length.trailing_zeros();
         let mut esvo_nodes = Vec::new();
+        let mut esvo_attachment_raw: HashMap<Attachment, Vec<u32>> = HashMap::new();
 
-        let mut levels: Vec<Vec<Option<u32>>> = vec![vec![]; height as usize + 1];
+        // levels(vec) -> octants(vec) -> exists?(option) ->
+        //   (node data, has_attachments?(option) -> (attachment, child_octants_attachment_data)(hashmap))
+        let mut levels: Vec<Vec<Option<FlatESVONode>>> = vec![vec![]; height as usize + 1];
 
         for i in 0..volume {
             let pos = morton_decode(i as u64);
             let mut exists = false;
+            let mut attachment_data = None;
 
             if flat.in_bounds(pos) {
                 let voxel = flat.get_voxel(flat.get_voxel_index(pos));
                 exists = !voxel.is_empty();
+                attachment_data = Some(voxel.get_attachment_data());
             }
-            levels
-                .last_mut()
-                .unwrap()
-                .push(if exists { Some(0) } else { None });
+            // let mut attachment_data_index = if let Some(attachment_data) = attachment_data {
+            //     attachment_data.into_iter().map(|(attachment, data)| {
+            //         let access = esvo_attachment_raw.entry(attachment.clone()).or_insert_with(Vec::new());
+            //         let raw_index = access.len();
+
+            //         (attachment,)
+            //     }).collect::<HashMap<_, _>>()
+            // } else {None};
+            // Do a copy of the attachment data.
+            let attachment_data = attachment_data
+                .map(|attachment_data| {
+                    attachment_data
+                        .into_iter()
+                        .map(|(attachment, data_ref)| {
+                            (
+                                attachment,
+                                data_ref.into_iter().map(|x| *x).collect::<Vec<_>>(),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>()
+                })
+                .expect("");
+            levels.last_mut().unwrap().push(if exists {
+                Some(FlatESVONode::Leaf { attachment_data })
+            } else {
+                None
+            });
 
             // We need to pop our octant, which may need to pop up the chain so we iterate over
             // each level bottom up.
             if levels.last().unwrap().len() == 8 {
                 for h in (1..=height).rev() {
-                    let nodes = &levels[h as usize];
+                    let nodes = &mut levels[h as usize];
                     // Pop.
                     if nodes.len() == 8 {
-                        let mut children_nodes = Vec::new();
-                        let mut child_ptr = 0;
-                        let mut child_mask = 0;
-                        for (octant, node) in nodes.iter().enumerate() {
-                            if node.is_some() {
-                                child_mask |= 1 << octant;
-                                children_nodes.push(node.clone());
-                                if h < height {
-                                    child_ptr = esvo_nodes.len();
-                                    let n = VoxelModelESVO::decode_node(node.unwrap());
-                                    let updated_child_ptr = if h + 1 < height - 1 {
-                                        esvo_nodes.len() - n.0 as usize
-                                    } else {
-                                        n.0 as usize
-                                    };
-                                    esvo_nodes.push(VoxelModelESVO::encode_node(
-                                        updated_child_ptr as u32,
-                                        n.1,
-                                        n.2,
-                                        n.3,
-                                    ));
+                        let mut child_mask = 0u32;
+                        let mut leaf_mask = 0u32;
+                        let mut raw_attachment_indices = HashMap::new();
+                        let mut to_add_esvo_nodes = Vec::new();
+                        for (octant, node) in nodes.drain(..).enumerate() {
+                            if let Some(node) = node {
+                                let octant_bit = 1 << octant;
+                                child_mask |= octant_bit;
+                                match node {
+                                    FlatESVONode::Leaf { attachment_data } => {
+                                        leaf_mask |= octant_bit;
+
+                                        // Write attachment data and store the pointers for the
+                                        // lookup entry.
+                                        for (attachment, mut value) in attachment_data {
+                                            let attachment_raw_ref = esvo_attachment_raw
+                                                .entry(attachment.clone())
+                                                .or_default();
+                                            let lookup_entry = raw_attachment_indices
+                                                .entry(attachment)
+                                                .or_insert_with(|| {
+                                                    (attachment_raw_ref.len() as u32, 0)
+                                                });
+                                            attachment_raw_ref.append(&mut value);
+                                            lookup_entry.1 |= octant_bit;
+                                        }
+                                    }
+                                    FlatESVONode::NonLeaf {
+                                        node_data,
+                                        attachment_lookup_node_data,
+                                    } => {
+                                        let n = VoxelModelESVO::decode_node(node_data);
+                                        // The 3rd to last layer and above will have nodes that use
+                                        // a child pointer to reference children nodes. This is a
+                                        // relative pointer however so we must change that here,
+                                        // the leaf data nodes (2nd to last layer) have child
+                                        // pointers that don't point to anything.
+                                        // TODO: Implement far pointers for special cases.
+                                        let updated_child_ptr = if h < height - 2 {
+                                            esvo_nodes.len()
+                                                - n.0 as usize
+                                                - n.2.count_ones() as usize
+                                        } else {
+                                            n.0 as usize
+                                        };
+
+                                        to_add_esvo_nodes.push((
+                                            VoxelModelESVO::encode_node(
+                                                updated_child_ptr as u32,
+                                                n.1,
+                                                n.2,
+                                                n.3,
+                                            ),
+                                            attachment_lookup_node_data,
+                                        ));
+                                    }
                                 }
                             }
                         }
 
+                        // Add the esvo child nodes in reverse order since we reverse the whole
+                        // list at the end we need our child offsets to be relative with an offset
+                        // of 0 closest to the parent.
+                        to_add_esvo_nodes.reverse();
+                        esvo_nodes.append(&mut to_add_esvo_nodes);
+
                         let leaf_mask = if h == height { child_mask } else { 0 };
                         let node = if child_mask > 0 {
-                            Some(VoxelModelESVO::encode_node(
-                                child_ptr as u32,
-                                false,
-                                child_mask,
-                                leaf_mask,
-                            ))
+                            let node_data =
+                                VoxelModelESVO::encode_node(0u32, false, child_mask, leaf_mask);
+
+                            let attachment_lookup_node_data = if raw_attachment_indices.is_empty() {
+                                None
+                            } else {
+                                Some(
+                                    raw_attachment_indices
+                                        .into_iter()
+                                        .map(|(attachment, (index, mask))| {
+                                            debug!("mask {}", mask);
+                                            (
+                                                attachment,
+                                                VoxelModelESVO::encode_attachment_lookup(
+                                                    index, mask,
+                                                ),
+                                            )
+                                        })
+                                        .collect::<HashMap<_, _>>(),
+                                )
+                            };
+                            Some(FlatESVONode::NonLeaf {
+                                node_data,
+                                attachment_lookup_node_data,
+                            })
                         } else {
                             None
                         };
-                        levels[h as usize - 1].push(node);
 
-                        levels[h as usize].clear();
+                        levels[h as usize - 1].push(node);
                     }
                 }
             }
         }
 
-        esvo_nodes.push(levels.first().unwrap().first().unwrap().map_or(0, |node| {
-            let n = VoxelModelESVO::decode_node(node);
-            let updated_child_ptr = if height > 1 {
-                esvo_nodes.len() - n.0 as usize
-            } else {
-                n.0 as usize
-            };
-            VoxelModelESVO::encode_node(updated_child_ptr as u32, n.1, n.2, n.3)
-        }));
+        esvo_nodes.push(levels.first().unwrap().first().unwrap().clone().map_or(
+            (0, None),
+            |node| match node {
+                FlatESVONode::NonLeaf {
+                    node_data,
+                    attachment_lookup_node_data,
+                } => {
+                    let n = VoxelModelESVO::decode_node(node_data);
+                    let updated_child_ptr = if height > 1 {
+                        esvo_nodes.len() - n.0 as usize - n.2.count_ones() as usize + 1
+                    } else {
+                        n.0 as usize
+                    };
+
+                    (
+                        VoxelModelESVO::encode_node(updated_child_ptr as u32, n.1, n.2, n.3),
+                        None,
+                    )
+                }
+                FlatESVONode::Leaf { attachment_data } => {
+                    panic!("Should have leaf node as the root.")
+                }
+            },
+        ));
 
         // Reverse so the root node is first, child_ptrs can stay the same.
         esvo_nodes.reverse();
-        // for (i, node) in esvo_nodes.iter().enumerate() {
-        //     let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node);
-        //     let value_mask_str = (0..8).fold(String::new(), |mut str, octant| {
-        //         str.push_str(if (value_mask & (1 << octant)) > 0 {
-        //             "1"
-        //         } else {
-        //             "0"
-        //         });
 
-        //         str
-        //     });
-        //     let leaf_mask_str = (0..8).fold(String::new(), |mut str, octant| {
-        //         str.push_str(if (leaf_mask & (1 << octant)) > 0 {
-        //             "1"
-        //         } else {
-        //             "0"
-        //         });
-
-        //         str
-        //     });
-        //     debug!(
-        //         "[{}] Child ptr: {}, Far: {}, Value Mask: {}, Leaf Mask: {}",
-        //         i, child_ptr, far, value_mask_str, leaf_mask_str
-        //     );
-        // }
-
-        VoxelModelESVO::with_nodes(esvo_nodes, length, false)
+        VoxelModelESVO::with_nodes(esvo_nodes, esvo_attachment_raw, length, false)
     }
 }

@@ -49,10 +49,11 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    pub const ALBEDO_RENDER_INDEX: u8 = 0u8;
     pub const ALBEDO: Attachment = Attachment {
         name: "albedo",
         size: 1,
-        renderable_index: 0,
+        renderable_index: Self::ALBEDO_RENDER_INDEX,
     };
     pub const COMPRESSED: Attachment = Attachment {
         name: "compressed",
@@ -60,12 +61,37 @@ impl Attachment {
         renderable_index: 1,
     };
 
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
     pub fn size(&self) -> u32 {
         self.size
     }
 
     pub fn renderable_index(&self) -> u8 {
         self.renderable_index
+    }
+
+    pub fn encode_albedo(r: f32, g: f32, b: f32, a: f32) -> u32 {
+        assert!(r >= 0.0 && r <= 1.0);
+        assert!(g >= 0.0 && g <= 1.0);
+        assert!(b >= 0.0 && b <= 1.0);
+        assert!(a >= 0.0 && a <= 1.0);
+
+        (((r * 255.0).floor() as u32) << 24)
+            | (((g * 255.0).floor() as u32) << 16)
+            | (((b * 255.0).floor() as u32) << 8)
+            | (a * 255.0).floor() as u32
+    }
+
+    pub fn decode_albedo(albedo: u32) -> (f32, f32, f32, f32) {
+        let r = (albedo >> 24) as f32 / 255.0;
+        let g = ((albedo >> 16) & 0xFF) as f32 / 255.0;
+        let b = ((albedo >> 8) & 0xFF) as f32 / 255.0;
+        let a = (albedo & 0xFF) as f32 / 255.0;
+
+        (r, g, b, a)
     }
 }
 
