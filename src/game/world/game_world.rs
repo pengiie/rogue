@@ -55,18 +55,23 @@ impl GameWorld {
         if !game_world.loaded_test_models {
             game_world.loaded_test_models = true;
 
-            let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 4));
+            let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 8));
             for (position, mut voxel) in flat_model.xyz_iter_mut() {
                 debug!("Position: {:?}", position);
                 if position.y == 0 {
                     voxel.set_attachment(
                         Attachment::ALBEDO,
                         Attachment::encode_albedo(
-                            position.x as f32 / 3.0,
-                            position.y as f32 / 3.0,
-                            position.z as f32 / 3.0,
+                            // pow to make the brightness more linearly interpolated.
+                            (position.x as f32 / 3.0).powf(2.2),
+                            (position.y as f32 / 3.0).powf(2.2),
+                            (position.z as f32 / 7.0).powf(2.2),
                             1.0,
                         ),
+                    );
+                    voxel.set_attachment(
+                        Attachment::NORMAL,
+                        Attachment::encode_normal(Vector3::y()),
                     );
                 }
             }

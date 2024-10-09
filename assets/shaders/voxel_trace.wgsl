@@ -115,8 +115,10 @@ fn ray_to_point(ray: Ray, point: vec3f) -> vec3f {
 }
 
 struct RayAABBInfo {
-  // The ray t-value the ray enters the aabb.
+  // The ray t-value the ray enters the aabb, where t >= 0.0.
   t_enter: f32,
+  // The ray t-value the ray enters the aabb.
+  t_enter_unbound: f32,
   // The ray t-value the ray exits the aabb.
   t_exit: f32,
   // The ray t-values the ray intersects the min point axes.
@@ -134,13 +136,14 @@ fn ray_to_aabb(ray: Ray, aabb: AABB) -> RayAABBInfo {
   let t_max = max(t0, t1);
 
   var temp = max(t_min.xx, t_min.yz);
-  let t_enter = max(max(temp.x, temp.y), 0.0);
+  let t_enter = max(temp.x, temp.y);
   temp = min(t_max.xx, t_max.yz);
   let t_exit = min(temp.x, temp.y);
 
-  let hit = t_exit > t_enter;
+  let bound_t_enter = max(t_enter, 0.0);
+  let hit = t_exit > bound_t_enter;
 
-  return RayAABBInfo(t_enter, t_exit, t_min, t_max, hit);
+  return RayAABBInfo(bound_t_enter, t_enter, t_exit, t_min, t_max, hit);
 }
 
 fn esvo_next_octant(ray: Ray, aabb: AABB, tEnter: f32) -> u32 {
@@ -212,13 +215,17 @@ fn esvo_ray_aabb_normal(ray_aabb_info: RayAABBInfo, ray: Ray) -> vec3f {
 }
 
 // Returns the raw attachment ptr into the raw buffer, or 0xFFFF_FFFF if it doesn't exist.
+const RENDER_INDICES_LENGTH: u32 = 3u;
 fn esvo_get_node_attachment_ptr(esvo_data_ptrs_ptr: u32,
                                 attachment_index: u32,
                                 node_index: u32,
                                 octant: u32) -> u32 {
   let node_data_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr];
   let attachment_lookup_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 1 + attachment_index];
-  let attachment_raw_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 2 + attachment_index];
+  let attachment_raw_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 1 + RENDER_INDICES_LENGTH + attachment_index];
+  if (attachment_lookup_ptr == 0xFFFFFFFFu || attachment_raw_ptr == 0xFFFFFFFFu) {
+    return 0xFFFFFFFFu;
+  }
 
   // Get the current bucket info index
   let page_header_index = node_index & ~(0x1FFFu);
@@ -281,7 +288,7 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
   var curr_height = 0u;
   var should_push = true;
 
-  for (var i = 0; i < 16; i++) {
+  for (var i = 0; i < 32; i++) {
     let curr_hit_info = ray_to_aabb(ray, curr_aabb);
     let value_mask = (curr_node_data >> 8) & 0xFF;
     let in_octant = (value_mask & (0x1u << curr_octant)) > 0;
@@ -304,7 +311,30 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
             f32((compresed_albedo >> 16u) & 0xFFu) / 255.0,
             f32((compresed_albedo >> 8u) & 0xFFu) / 255.0,
           );
-          return voxel_model_trace_hit(albedo);
+
+          let normal_ptr = esvo_get_node_attachment_ptr(
+            voxel_model.data_ptrs_ptr,
+            1u,
+            curr_node_index,
+            curr_octant
+          );
+
+          var radiance = albedo;
+          if (normal_ptr != 0xFFFFFFFFu) {
+            let compressed_normal = u_world_data.data[normal_ptr];
+            let voxel_normal = vec3f(
+              (f32((compressed_normal >> 16u) & 0xFFu) / 255.0) * 2.0 - 1.0,
+              (f32((compressed_normal >> 8u) & 0xFFu) / 255.0) * 2.0 - 1.0,
+              (f32(compressed_normal & 0xFFu) / 255.0) * 2.0 - 1.0,
+            );
+            let side_normal = esvo_ray_aabb_normal(curr_hit_info, ray);
+            let light_dir = vec3f(0.0, -1.0, 0.0);
+            let voxel_normal_l = dot(voxel_normal, -light_dir);
+            let side_normal_l = dot(side_normal, -light_dir);
+            radiance = (voxel_normal_l * 0.65 + side_normal * 0.35) * albedo;
+          }
+
+          return voxel_model_trace_hit(radiance);
         }
       }
       
@@ -382,16 +412,18 @@ struct VoxelModelHit {
   schema: u32,
   hit_info: RayAABBInfo,
   aabb: AABB,
+  i: u32
 }
 
-fn get_next_voxel_model(ray: Ray) -> VoxelModelHit {
+fn get_next_voxel_model(ray: Ray, t_enter_min: f32, last_model_i: u32) -> VoxelModelHit {
   var closest: VoxelModelHit = VoxelModelHit(0, 0, 
-                                             RayAABBInfo(0.0, 0.0, vec3f(0.0), vec3f(0.0), false), 
-                                             AABB(vec3f(0.0), vec3f(0.0)));
+                                             RayAABBInfo(0.0, 0.0, 0.0, vec3f(0.0), vec3f(0.0), false), 
+                                             AABB(vec3f(0.0), vec3f(0.0)), 0u);
   var min_t = 100000.0;
   var current_index = 0u;
-  for (var _i = 0u; _i < u_world_info.voxel_model_count; _i++) {
+  for (var i = 0u; i < u_world_info.voxel_model_count; i++) {
     let model_data_size = u_world_acceleration.data[current_index];
+    // Don't reintersect the same model we just intersected.
     let min = bitcast<vec3<f32>>(vec3<u32>(
       u_world_acceleration.data[current_index + 2],
       u_world_acceleration.data[current_index + 3],
@@ -405,12 +437,18 @@ fn get_next_voxel_model(ray: Ray) -> VoxelModelHit {
 
     let aabb = aabb_min_max(min, max);
     let hit_info = ray_to_aabb(ray, aabb);
-    if (hit_info.hit && hit_info.t_enter < min_t) {
-      min_t = hit_info.t_enter;
-      closest = VoxelModelHit(current_index + 8,
-                              u_world_acceleration.data[current_index + 1],
-                              hit_info,
-                              aabb);
+    if (hit_info.hit && hit_info.t_enter < min_t && hit_info.t_enter_unbound >= t_enter_min) {
+      // Ensure the t-value entering this model is greater than our current minimum t-value needed.
+      // If it is the same ensure this model comes after any previous model with the exact same t-value.
+      // Since we only update min_t if we have a new t-value greater than, we will always access models with the
+      // exact same t-value in acsending order of `i` index.
+      if (hit_info.t_enter_unbound > t_enter_min || (hit_info.t_enter_unbound == t_enter_min && i > last_model_i)) {
+        min_t = hit_info.t_enter;
+        closest = VoxelModelHit(current_index + 8,
+                                u_world_acceleration.data[current_index + 1],
+                                hit_info,
+                                aabb, i);
+      }
     }
 
     current_index = current_index + model_data_size;
@@ -470,8 +508,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Colors each axes on the unit circle interpolating linearly based on ray angle.
 
   var radiance: vec3f;
-  var curr_ray = ray;
-  var curr_voxel_model = get_next_voxel_model(curr_ray);
+  var curr_min_t = -1.0e10;
+  var curr_voxel_model = get_next_voxel_model(ray, curr_min_t, 100000u);
   for (var i = 0; i < 100; i++) {
     if (curr_voxel_model.schema == 0) {
       var background_color = vec3f(srgb_to_lrgb(vec3f(acos(-ray_dir) / 3.14)));
@@ -531,16 +569,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       break;
     }
 
-    let trace_result = trace_voxel_model(curr_voxel_model, curr_ray);
+    let trace_result = trace_voxel_model(curr_voxel_model, ray);
     if (trace_result.hit) {
       radiance = trace_result.radiance;
       break;
     }
 
-    // Reposition the ray right after the last voxel model including some epsilon.
-    let RAY_EXIT_EPSILON: f32 = 0.0001;
-    curr_ray = ray_advance(curr_ray, curr_voxel_model.hit_info.t_exit + RAY_EXIT_EPSILON);
-    curr_voxel_model = get_next_voxel_model(curr_ray);
+    // Ensure the ray starts from atleast the origin so we don't re-intersect the same model.
+    curr_min_t = curr_voxel_model.hit_info.t_enter_unbound;
+    curr_voxel_model = get_next_voxel_model(ray, curr_min_t, curr_voxel_model.i);
   }
 
   var radiance_prev = vec3f(0.0);

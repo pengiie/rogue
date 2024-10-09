@@ -284,21 +284,22 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
             //     }).collect::<HashMap<_, _>>()
             // } else {None};
             // Do a copy of the attachment data.
-            let attachment_data = attachment_data
-                .map(|attachment_data| {
-                    attachment_data
-                        .into_iter()
-                        .map(|(attachment, data_ref)| {
-                            (
-                                attachment,
-                                data_ref.into_iter().map(|x| *x).collect::<Vec<_>>(),
-                            )
-                        })
-                        .collect::<HashMap<_, _>>()
-                })
-                .expect("");
+            let attachment_data = attachment_data.map(|attachment_data| {
+                attachment_data
+                    .into_iter()
+                    .map(|(attachment, data_ref)| {
+                        (
+                            attachment,
+                            data_ref.into_iter().map(|x| *x).collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
             levels.last_mut().unwrap().push(if exists {
-                Some(FlatESVONode::Leaf { attachment_data })
+                Some(FlatESVONode::Leaf {
+                    attachment_data: attachment_data
+                        .expect("Expect some sort of attachment data if the voxel exists."),
+                })
             } else {
                 None
             });
@@ -314,6 +315,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                         let mut leaf_mask = 0u32;
                         let mut raw_attachment_indices = HashMap::new();
                         let mut to_add_esvo_nodes = Vec::new();
+                        let mut children_start = esvo_nodes.len();
                         for (octant, node) in nodes.drain(..).enumerate() {
                             if let Some(node) = node {
                                 let octant_bit = 1 << octant;
@@ -341,30 +343,8 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                                         node_data,
                                         attachment_lookup_node_data,
                                     } => {
-                                        let n = VoxelModelESVO::decode_node(node_data);
-                                        // The 3rd to last layer and above will have nodes that use
-                                        // a child pointer to reference children nodes. This is a
-                                        // relative pointer however so we must change that here,
-                                        // the leaf data nodes (2nd to last layer) have child
-                                        // pointers that don't point to anything.
-                                        // TODO: Implement far pointers for special cases.
-                                        let updated_child_ptr = if h < height - 2 {
-                                            esvo_nodes.len()
-                                                - n.0 as usize
-                                                - n.2.count_ones() as usize
-                                        } else {
-                                            n.0 as usize
-                                        };
-
-                                        to_add_esvo_nodes.push((
-                                            VoxelModelESVO::encode_node(
-                                                updated_child_ptr as u32,
-                                                n.1,
-                                                n.2,
-                                                n.3,
-                                            ),
-                                            attachment_lookup_node_data,
-                                        ));
+                                        to_add_esvo_nodes
+                                            .push((node_data, attachment_lookup_node_data));
                                     }
                                 }
                             }
@@ -374,12 +354,44 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                         // list at the end we need our child offsets to be relative with an offset
                         // of 0 closest to the parent.
                         to_add_esvo_nodes.reverse();
-                        esvo_nodes.append(&mut to_add_esvo_nodes);
+                        for (i, (node_data, attachment_lookup_node_data)) in
+                            to_add_esvo_nodes.into_iter().enumerate()
+                        {
+                            let n = VoxelModelESVO::decode_node(node_data);
+                            debug!("want to push node {}", n.0);
+                            // The 3rd to last layer and above will have nodes that use
+                            // a child pointer to reference children nodes. This is a
+                            // relative pointer however so we must change that here,
+                            // the leaf data nodes (2nd to last layer) have child
+                            // pointers that don't point to anything.
+                            // TODO: Implement far pointers for special cases.
+                            let updated_child_ptr = if h < height - 1 {
+                                children_start - n.0 as usize + 1 + i
+                            } else {
+                                n.0 as usize
+                            };
+
+                            esvo_nodes.push((
+                                VoxelModelESVO::encode_node(
+                                    updated_child_ptr as u32,
+                                    n.1,
+                                    n.2,
+                                    n.3,
+                                ),
+                                attachment_lookup_node_data,
+                            ));
+                        }
 
                         let leaf_mask = if h == height { child_mask } else { 0 };
                         let node = if child_mask > 0 {
-                            let node_data =
-                                VoxelModelESVO::encode_node(0u32, false, child_mask, leaf_mask);
+                            let child_ptr = if h == height {
+                                0u32
+                            } else {
+                                esvo_nodes.len() as u32
+                            };
+                            let node_data = VoxelModelESVO::encode_node(
+                                child_ptr, false, child_mask, leaf_mask,
+                            );
 
                             let attachment_lookup_node_data = if raw_attachment_indices.is_empty() {
                                 None
@@ -422,7 +434,8 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                 } => {
                     let n = VoxelModelESVO::decode_node(node_data);
                     let updated_child_ptr = if height > 1 {
-                        esvo_nodes.len() - n.0 as usize - n.2.count_ones() as usize + 1
+                        debug!("children start {}", esvo_nodes.len());
+                        esvo_nodes.len() - n.0 as usize + 1
                     } else {
                         n.0 as usize
                     };

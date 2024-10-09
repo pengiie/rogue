@@ -699,7 +699,7 @@ impl Renderer {
                 break 'voxel_trace;
             };
 
-            let camera_transform = camera_transform.to_matrix().transpose();
+            let camera_transform = camera_transform.to_view_matrix().transpose();
             let camera_transform_arr: [f32; 16] = camera_transform.as_slice().try_into().unwrap();
 
             // Update frame count if the camera transform changed.

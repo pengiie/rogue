@@ -7,7 +7,7 @@ use std::{
 
 use downcast::Downcast;
 use egui::debug_text::print;
-use log::debug;
+use log::{debug, warn};
 use nalgebra::Vector3;
 use wgpu::core::device;
 
@@ -367,8 +367,15 @@ impl std::fmt::Debug for VoxelModelESVO {
                         f.write_str(&format!("[{}] {} {} {}, ", i, r, g, b));
                     }
                 }
+                Attachment::NORMAL_RENDER_INDEX => {
+                    for (i, normal) in data.iter().enumerate() {
+                        let normal = Attachment::decode_normal(*normal);
+                        f.write_str(&format!("[{}] {} {} {}, ", i, normal.x, normal.y, normal.z));
+                    }
+                }
                 default => {}
             }
+            f.write_str("\n");
         }
 
         f.write_str("")
@@ -389,30 +396,44 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             return None;
         };
 
-        let albedo_lookup_attachment_ptr = if let Some(lookup_allocation) =
-            self.attachment_lookup_allocations.get(&Attachment::ALBEDO)
-        {
-            lookup_allocation.start_index() >> 2
-        } else {
-            u32::MAX
-        };
+        let mut attachment_lookup_indices =
+            vec![u32::MAX; Attachment::MAX_RENDER_INDEX as usize + 1];
+        for (attachment, lookup_allocation) in &self.attachment_lookup_allocations {
+            if attachment.renderable_index() > Attachment::MAX_RENDER_INDEX {
+                warn!(
+                    "Attachment {} has render index {} which is out of bounds of the max index {}.",
+                    attachment.name(),
+                    attachment.renderable_index(),
+                    Attachment::MAX_RENDER_INDEX
+                );
+                continue;
+            }
 
-        let albedo_raw_attachment_ptr = if let Some(raw_allocation) =
-            self.attachment_raw_allocations.get(&Attachment::ALBEDO)
-        {
-            raw_allocation.start_index() >> 2
-        } else {
-            u32::MAX
-        };
+            attachment_lookup_indices[attachment.renderable_index() as usize] =
+                lookup_allocation.start_index() >> 2
+        }
+        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_RENDER_INDEX as usize + 1];
+        for (attachment, raw_allocation) in &self.attachment_raw_allocations {
+            if attachment.renderable_index() > Attachment::MAX_RENDER_INDEX {
+                warn!(
+                    "Attachment {} has render index {} which is out of bounds of the max index {}.",
+                    attachment.name(),
+                    attachment.renderable_index(),
+                    Attachment::MAX_RENDER_INDEX
+                );
+                continue;
+            }
 
-        let info = vec![
+            attachment_raw_indices[attachment.renderable_index() as usize] =
+                raw_allocation.start_index() >> 2;
+        }
+
+        let mut info = vec![
             // World data ptr (divide by 4 since 4 bytes in a u32)
             data_allocation.start_index() >> 2,
-            // Albedo attachment lookup ptr
-            albedo_lookup_attachment_ptr,
-            // Albedo attachment raw ptr
-            albedo_raw_attachment_ptr,
         ];
+        info.append(&mut attachment_lookup_indices);
+        info.append(&mut attachment_raw_indices);
 
         Some(info)
     }

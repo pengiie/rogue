@@ -8,6 +8,7 @@ use winit::{
 
 use crate::{
     engine::{
+        asset::asset::Assets,
         ecs::ecs_world::ECSWorld,
         graphics::{device::DeviceResource, renderer::Renderer},
         input::Input,
@@ -89,12 +90,14 @@ impl App {
         let ecs = ECSWorld::new();
         let input = Input::new();
         let time = Time::new();
+        let assets = Assets::new();
 
         let rb = self.resource_bank_mut();
         rb.insert(settings);
         rb.insert(ecs);
         rb.insert(input);
         rb.insert(time);
+        rb.insert(assets);
     }
 
     fn init_post_graphics(&mut self) {

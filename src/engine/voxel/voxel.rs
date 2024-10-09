@@ -49,17 +49,20 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    pub const ALBEDO_RENDER_INDEX: u8 = 0u8;
+    pub const ALBEDO_RENDER_INDEX: u8 = 0;
     pub const ALBEDO: Attachment = Attachment {
         name: "albedo",
         size: 1,
         renderable_index: Self::ALBEDO_RENDER_INDEX,
     };
-    pub const COMPRESSED: Attachment = Attachment {
-        name: "compressed",
+    pub const NORMAL_RENDER_INDEX: u8 = 1;
+    pub const NORMAL: Attachment = Attachment {
+        name: "normal",
         size: 1,
-        renderable_index: 1,
+        renderable_index: Self::NORMAL_RENDER_INDEX,
     };
+
+    pub const MAX_RENDER_INDEX: u8 = 2;
 
     pub fn name(&self) -> &'static str {
         self.name
@@ -92,6 +95,27 @@ impl Attachment {
         let a = (albedo & 0xFF) as f32 / 255.0;
 
         (r, g, b, a)
+    }
+
+    pub fn encode_normal(normal: Vector3<f32>) -> u32 {
+        assert!(normal.norm() == 1.0);
+
+        let mut x = 0u32;
+        x |= (((normal.x * 0.5 + 0.5) * 255.0).ceil() as u32) << 16;
+        x |= (((normal.y * 0.5 + 0.5) * 255.0).ceil() as u32) << 8;
+        x |= ((normal.z * 0.5 + 0.5) * 255.0).ceil() as u32;
+
+        x
+    }
+
+    pub fn decode_normal(normal: u32) -> Vector3<f32> {
+        println!("decoding normal {}", normal);
+        let x = (((normal >> 16) & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
+        let y = (((normal >> 8) & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
+        let z = ((normal & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
+        println!("result {} {} {}", x, y, z);
+
+        Vector3::new(x, y, z)
     }
 }
 

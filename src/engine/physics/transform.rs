@@ -1,4 +1,7 @@
-use nalgebra::{Isometry, Isometry3, Matrix4, Rotation3, Translation3, Vector3};
+use log::debug;
+use nalgebra::{
+    Isometry, Isometry3, Matrix4, Quaternion, Rotation3, Translation3, UnitQuaternion, Vector3,
+};
 
 pub struct Transform {
     pub isometry: Isometry3<f32>,
@@ -17,7 +20,9 @@ impl Transform {
         }
     }
 
-    pub fn to_matrix(&self) -> Matrix4<f32> {
+    pub fn to_view_matrix(&self) -> Matrix4<f32> {
+        let rotation = self.isometry.rotation.euler_angles();
+
         self.isometry.to_homogeneous()
     }
 
