@@ -109,11 +109,9 @@ impl Attachment {
     }
 
     pub fn decode_normal(normal: u32) -> Vector3<f32> {
-        println!("decoding normal {}", normal);
         let x = (((normal >> 16) & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
         let y = (((normal >> 8) & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
         let z = ((normal & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
-        println!("result {} {} {}", x, y, z);
 
         Vector3::new(x, y, z)
     }

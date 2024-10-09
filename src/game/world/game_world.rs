@@ -57,7 +57,6 @@ impl GameWorld {
 
             let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 8));
             for (position, mut voxel) in flat_model.xyz_iter_mut() {
-                debug!("Position: {:?}", position);
                 if position.y == 0 {
                     voxel.set_attachment(
                         Attachment::ALBEDO,

@@ -1,7 +1,11 @@
+use std::collections::HashSet;
+
+use log::debug;
+
 pub trait AttributeSetImpl: Clone {
-    type E: Clone;
-    fn aggregate_updates(&self, last: &Self) -> Vec<Self::E>;
-    fn aggregate_all_fields(&self) -> Vec<Self::E>;
+    type E: Clone + std::hash::Hash;
+    fn aggregate_updates(&self, last: &Self) -> HashSet<Self::E>;
+    fn aggregate_all_fields(&self) -> HashSet<Self::E>;
 }
 
 pub struct AttributeSet<T>
@@ -9,8 +13,7 @@ where
     T: AttributeSetImpl,
 {
     data: Option<T>,
-    last_data: Option<T>,
-    updates: Vec<T::E>,
+    updates: HashSet<T::E>,
 }
 
 impl<T> AttributeSet<T>
@@ -20,23 +23,21 @@ where
     pub fn new() -> Self {
         Self {
             data: None,
-            last_data: None,
-            updates: Vec::new(),
+            updates: HashSet::new(),
         }
     }
 
     pub fn refresh_updates(&mut self, new_data: &T) {
-        self.updates = if let Some(last_data) = self.last_data.as_ref() {
+        self.updates = if let Some(last_data) = self.data.as_ref() {
             new_data.aggregate_updates(last_data)
         } else {
-            new_data.aggregate_all_fields()
+            HashSet::new()
         };
 
-        self.last_data = self.data.clone();
         self.data = Some(new_data.clone());
     }
 
-    pub fn updates(&self) -> &Vec<T::E> {
+    pub fn updates(&self) -> &HashSet<T::E> {
         &self.updates
     }
 }

@@ -48,7 +48,6 @@ impl VoxelAllocator {
             allocation.range.end - allocation.range.start
         );
         let offset = allocation.range.start;
-        debug!("offset: {}", offset);
         device
             .queue()
             .write_buffer(self.world_data_buffer(), allocation.range.start, data)

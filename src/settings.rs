@@ -1,6 +1,7 @@
-use std::f32::consts;
+use std::{collections::HashSet, f32::consts};
 
 use downcast::Any;
+use log::debug;
 use rogue_macros::Resource;
 
 use crate::{
@@ -12,13 +13,13 @@ pub type GraphicsSettingsSet = AttributeSet<GraphicsSettings>;
 
 // TODO: I can derive macro this enum generation and the `AttributeSetImpl` generation. This should
 // be done when this attribute set is more used for cases like UI and more fields are added.
-#[derive(Clone)]
+#[derive(Clone, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
 pub enum GraphicsSettingsAttributes {
     RenderSize((u32, u32)),
     Antialiasing(Antialiasing),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GraphicsSettings {
     pub render_size: (u32, u32),
     pub antialiasing: Antialiasing,
@@ -37,23 +38,25 @@ impl Default for GraphicsSettings {
 impl AttributeSetImpl for GraphicsSettings {
     type E = GraphicsSettingsAttributes;
 
-    fn aggregate_updates(&self, last: &Self) -> Vec<GraphicsSettingsAttributes> {
-        let mut updates = Vec::new();
+    fn aggregate_updates(&self, last: &Self) -> HashSet<GraphicsSettingsAttributes> {
+        let mut updates = HashSet::new();
         if self.render_size != last.render_size {
-            updates.push(GraphicsSettingsAttributes::RenderSize(self.render_size));
+            updates.insert(GraphicsSettingsAttributes::RenderSize(self.render_size));
         }
         if self.antialiasing != last.antialiasing {
-            updates.push(GraphicsSettingsAttributes::Antialiasing(self.antialiasing));
+            updates.insert(GraphicsSettingsAttributes::Antialiasing(self.antialiasing));
         }
 
         updates
     }
 
-    fn aggregate_all_fields(&self) -> Vec<GraphicsSettingsAttributes> {
+    fn aggregate_all_fields(&self) -> HashSet<GraphicsSettingsAttributes> {
         vec![
             GraphicsSettingsAttributes::RenderSize(self.render_size),
             GraphicsSettingsAttributes::Antialiasing(self.antialiasing),
         ]
+        .into_iter()
+        .collect::<HashSet<_>>()
     }
 }
 

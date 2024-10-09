@@ -1,6 +1,6 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use log::info;
+use log::{debug, info};
 use raw_window_handle::HasWindowHandle;
 use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
@@ -178,13 +178,6 @@ impl winit::application::ApplicationHandler for App {
                 }
 
                 if !self.initialized_graphics {
-                    println!(
-                        "{:?}",
-                        self.resource_bank()
-                            .get_resource::<Window>()
-                            .handle()
-                            .inner_size(),
-                    );
                     return;
                 }
 
@@ -229,6 +222,7 @@ impl winit::application::ApplicationHandler for App {
                         .get_resource_mut::<DeviceResource>()
                         .resize_surface(new_size);
 
+                    debug!("Resize");
                     // TODO: Option to change between depending on window resize mode.
                     self.resource_bank()
                         .get_resource_mut::<Settings>()

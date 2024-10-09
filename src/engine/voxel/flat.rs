@@ -358,7 +358,6 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                             to_add_esvo_nodes.into_iter().enumerate()
                         {
                             let n = VoxelModelESVO::decode_node(node_data);
-                            debug!("want to push node {}", n.0);
                             // The 3rd to last layer and above will have nodes that use
                             // a child pointer to reference children nodes. This is a
                             // relative pointer however so we must change that here,
@@ -400,7 +399,6 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                                     raw_attachment_indices
                                         .into_iter()
                                         .map(|(attachment, (index, mask))| {
-                                            debug!("mask {}", mask);
                                             (
                                                 attachment,
                                                 VoxelModelESVO::encode_attachment_lookup(
@@ -434,7 +432,6 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                 } => {
                     let n = VoxelModelESVO::decode_node(node_data);
                     let updated_child_ptr = if height > 1 {
-                        debug!("children start {}", esvo_nodes.len());
                         esvo_nodes.len() - n.0 as usize + 1
                     } else {
                         n.0 as usize

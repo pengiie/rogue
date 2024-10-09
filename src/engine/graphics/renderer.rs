@@ -27,12 +27,12 @@ use crate::{
         window::time::Time,
     },
     game::player::player::Player,
-    settings::{GraphicsSettingsAttributes, GraphicsSettingsSet, Settings},
+    settings::{GraphicsSettings, GraphicsSettingsAttributes, GraphicsSettingsSet, Settings},
 };
 
-use super::{camera::Camera, device::DeviceResource, shaders};
+use super::{camera::Camera, device::DeviceResource, shader};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
 pub enum Antialiasing {
     None,
     TAA,
@@ -108,7 +108,7 @@ impl Renderer {
     pub fn new(device: &DeviceResource) -> Self {
         let ray_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Ray shader module"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shaders::voxel_trace::SOURCE)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::voxel_trace::SOURCE)),
         });
         let ray_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -248,7 +248,7 @@ impl Renderer {
         });
         let blit_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blit_shader_module"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shaders::blit::SOURCE)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::blit::SOURCE)),
         });
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blit_pipeline_layout"),
@@ -343,7 +343,7 @@ impl Renderer {
         });
         let ui_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ui_shader_module"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shaders::ui::SOURCE)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::ui::SOURCE)),
         });
         let ui_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ui_pipeline_layout"),
@@ -458,7 +458,7 @@ impl Renderer {
         wgpu::TextureFormat::Rgba32Float
     }
 
-    fn update_backbuffer_textures(&mut self, device: &DeviceResource, width: u32, height: u32) {
+    fn set_backbuffer_textures(&mut self, device: &DeviceResource, width: u32, height: u32) {
         let backbuffer = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("backbuffer"),
             size: wgpu::Extent3d {
@@ -518,7 +518,7 @@ impl Renderer {
         self.radiance_total_prev = Some((radiance_total_prev, radiance_total_prev_view));
     }
 
-    fn update_ray_bind_group(&mut self, device: &DeviceResource, voxel_world_gpu: &VoxelWorldGpu) {
+    fn set_ray_bind_group(&mut self, device: &DeviceResource, voxel_world_gpu: &VoxelWorldGpu) {
         self.ray_bind_group = Some(
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ray bind group"),
@@ -620,7 +620,7 @@ impl Renderer {
         })
     }
 
-    fn update_blit_bind_group(&mut self, device: &DeviceResource) {
+    fn set_blit_bind_group(&mut self, device: &DeviceResource) {
         self.blit_bind_group = Some(
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("blit_bind_group"),
@@ -651,26 +651,35 @@ impl Renderer {
         device: Res<DeviceResource>,
         settings: Res<Settings>,
     ) {
-        let mut update_ray_bind_group = false;
-
         renderer
             .graphics_settings
             .refresh_updates(&settings.graphics);
 
-        let updates = renderer.graphics_settings.updates().clone();
+        let mut updates = renderer.graphics_settings.updates().clone();
+
+        // Ensure we initialize any non-initialized objects first.
+        if renderer.backbuffer.is_none() {
+            updates.insert(GraphicsSettingsAttributes::RenderSize(
+                settings.graphics.render_size,
+            ));
+        }
+        let mut update_ray_bind_group = renderer.ray_bind_group.is_none();
+        let mut update_blit_bind_group = renderer.blit_bind_group.is_none();
+
         for update in updates {
             match update {
                 GraphicsSettingsAttributes::RenderSize((width, height)) => {
                     // Resize backbuffers and recreate any bind groups that rely on them.
-                    println!("Resized backbuffers to {} x {}", width, height);
-                    renderer.update_backbuffer_textures(&device, width, height);
+                    debug!("Resized backbuffers to {} x {}", width, height);
+                    renderer.set_backbuffer_textures(&device, width, height);
                     update_ray_bind_group = true;
-                    renderer.update_blit_bind_group(&device);
+                    update_blit_bind_group = true;
 
                     // New total radiance texture so average must be reset.
                     renderer.frame_count = 0;
                 }
                 GraphicsSettingsAttributes::Antialiasing(antialiasing) => {
+                    debug!("Changing renderer for antialiasing {:?}", antialiasing);
                     // TODO: Update pipeline with constructed shader based on if we want
                     // antialiasing. Aggregate all the updates at the end though, or i guess we can
                     // just implement that later.
@@ -680,7 +689,12 @@ impl Renderer {
 
         if update_ray_bind_group || voxel_world_gpu.is_dirty() {
             debug!("Updating ray bind group.");
-            renderer.update_ray_bind_group(&device, &voxel_world_gpu);
+            renderer.set_ray_bind_group(&device, &voxel_world_gpu);
+        }
+
+        if update_blit_bind_group {
+            debug!("Updating blit bind group.");
+            renderer.set_blit_bind_group(&device);
         }
     }
 
@@ -1011,7 +1025,7 @@ impl Renderer {
             });
 
         {
-            use shaders::voxel_trace::WORKGROUP_SIZE;
+            use shader::voxel_trace::WORKGROUP_SIZE;
             let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                 label: Some("Ray March"),
                 timestamp_writes: None,

@@ -64,59 +64,6 @@ impl VoxelModelESVO {
         length: u32,
         track_updates: bool,
     ) -> Self {
-        for (i, (node_data, attachment_lookup_data)) in nodes.iter().enumerate() {
-            let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node_data);
-            let value_mask_str = (0..8).fold(String::new(), |mut str, octant| {
-                str.push_str(if (value_mask & (1 << octant)) > 0 {
-                    "1"
-                } else {
-                    "0"
-                });
-
-                str
-            });
-            let leaf_mask_str = (0..8).fold(String::new(), |mut str, octant| {
-                str.push_str(if (leaf_mask & (1 << octant)) > 0 {
-                    "1"
-                } else {
-                    "0"
-                });
-
-                str
-            });
-            debug!(
-                "[{}] Child ptr: {}, Far: {}, Value Mask: {}, Leaf Mask: {}, Has Attachment?: {}",
-                i,
-                child_ptr,
-                far,
-                value_mask_str,
-                leaf_mask_str,
-                attachment_lookup_data.is_some()
-            );
-            if let Some(attachment_lookup_data) = attachment_lookup_data {
-                for (attachment, attachment_lookup_data) in attachment_lookup_data {
-                    let (raw_data_ptr, attachment_mask) =
-                        VoxelModelESVO::decode_attachment_lookup(*attachment_lookup_data);
-                    let attachment_mask_str = (0..8).fold(String::new(), |mut str, octant| {
-                        str.push_str(if (attachment_mask & (1 << octant)) > 0 {
-                            "1"
-                        } else {
-                            "0"
-                        });
-
-                        str
-                    });
-                    debug!(
-                        "[{}] Attachment Lookup [{}] Data ptr: {}, Attachment Mask: {}\n",
-                        i,
-                        attachment.name(),
-                        raw_data_ptr,
-                        attachment_mask_str,
-                    );
-                }
-            }
-        }
-
         let mut esvo = Self::empty(length, track_updates);
 
         // The next index to be written.
