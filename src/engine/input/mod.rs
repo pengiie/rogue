@@ -1,3 +1,4 @@
+pub mod gamepad;
 pub mod input;
 pub mod mapper;
 pub use input::*;

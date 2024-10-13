@@ -10,7 +10,9 @@ use crate::{
     engine::{
         asset::asset::Assets,
         ecs::ecs_world::ECSWorld,
-        graphics::{device::DeviceResource, renderer::Renderer},
+        graphics::{
+            device::DeviceResource, pipeline_manager::RenderPipelineManager, renderer::Renderer,
+        },
         input::Input,
         resource::ResourceBank,
         system::System,
@@ -103,13 +105,18 @@ impl App {
     fn init_post_graphics(&mut self) {
         let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
         let ui_state = UIState::default();
-        let renderer = Renderer::new(&self.resource_bank().get_resource::<DeviceResource>());
+        let mut render_pipeline_manager = RenderPipelineManager::new();
+        let renderer = Renderer::new(
+            &self.resource_bank().get_resource::<DeviceResource>(),
+            &mut render_pipeline_manager,
+        );
         let voxel_world = VoxelWorld::new();
         let voxel_world_gpu = VoxelWorldGpu::new();
 
         let rb = self.resource_bank_mut();
         rb.insert(ui_state);
         rb.insert(egui);
+        rb.insert(render_pipeline_manager);
         rb.insert(renderer);
         rb.insert(voxel_world);
         rb.insert(voxel_world_gpu);

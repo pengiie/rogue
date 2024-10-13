@@ -1,8 +1,13 @@
 use crate::{
     app::App,
     engine::{
-        graphics::renderer::Renderer, input::Input, system::System, ui::UI,
-        voxel::voxel_world::VoxelWorldGpu, window::time::Time,
+        asset::asset::Assets,
+        graphics::{pipeline_manager::RenderPipelineManager, renderer::Renderer},
+        input::Input,
+        system::System,
+        ui::UI,
+        voxel::voxel_world::VoxelWorldGpu,
+        window::time::Time,
     },
     game::{player::player::Player, world::game_world::GameWorld},
 };
@@ -10,6 +15,11 @@ use crate::{
 pub fn game_loop(app: &App) {
     // ------- FRAME SETUP ---------
     app.run_system(Time::update);
+
+    // ------- ASSETS --------
+
+    // Run any queued up asset tasks and update finished tasks.
+    app.run_system(Assets::update_assets);
 
     // ------- WORLD ---------
     if app
@@ -35,6 +45,9 @@ pub fn game_loop(app: &App) {
     app.run_system(UI::draw);
 
     // ------- GPU RENDERING ---------
+
+    // Update render pipelines (loads shaders).
+    app.run_system(RenderPipelineManager::update_pipelines);
 
     // Update voxel world owned gpu objects such as world data buffers.
     app.run_system(VoxelWorldGpu::update_gpu_objects);

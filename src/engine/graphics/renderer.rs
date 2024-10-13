@@ -16,10 +16,12 @@ use wgpu::{
 
 use crate::{
     engine::{
+        asset::asset::AssetPath,
         ecs::{
             self,
             ecs_world::{self, ECSWorld},
         },
+        graphics::pipeline_manager::PipelineCreateInfo,
         physics::transform::Transform,
         resource::{Res, ResMut},
         ui::{gui::Egui, state::UIState},
@@ -30,7 +32,12 @@ use crate::{
     settings::{GraphicsSettings, GraphicsSettingsAttributes, GraphicsSettingsSet, Settings},
 };
 
-use super::{camera::Camera, device::DeviceResource, shader};
+use super::{
+    camera::Camera,
+    device::DeviceResource,
+    pipeline_manager::{PipelineId, RenderPipelineManager},
+    shader,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
 pub enum Antialiasing {
@@ -87,7 +94,7 @@ pub struct Renderer {
 
     ray_bind_group_layout: wgpu::BindGroupLayout,
     ray_bind_group: Option<wgpu::BindGroup>,
-    ray_pipeline: wgpu::ComputePipeline,
+    ray_pipeline_id: PipelineId,
 
     blit_bind_group_layout: wgpu::BindGroupLayout,
     blit_bind_group: Option<wgpu::BindGroup>,
@@ -105,7 +112,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(device: &DeviceResource) -> Self {
+    pub fn new(device: &DeviceResource, pipeline_manager: &mut RenderPipelineManager) -> Self {
         let ray_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Ray shader module"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::voxel_trace::SOURCE)),
@@ -176,6 +183,15 @@ impl Renderer {
                     },
                 ],
             });
+        let ray_pipeline_id = pipeline_manager.load_pipeline(
+            &device,
+            PipelineCreateInfo::Compute {
+                name: "ray_pipeline".to_owned(),
+                shader_path: AssetPath::new(shader::voxel_trace::PATH.to_string()),
+                shader_defines: HashMap::new(),
+            },
+            &[&ray_bind_group_layout],
+        );
         let ray_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Ray pipeline layout"),
             bind_group_layouts: &[&ray_bind_group_layout],
@@ -432,7 +448,7 @@ impl Renderer {
 
             ray_bind_group_layout,
             ray_bind_group: None,
-            ray_pipeline,
+            ray_pipeline_id,
 
             blit_bind_group_layout,
             blit_bind_group: None,
@@ -706,6 +722,7 @@ impl Renderer {
         voxel_world_gpu: Res<VoxelWorldGpu>,
         egui: Res<Egui>,
         ui_state: Res<UIState>,
+        pipeline_manager: Res<RenderPipelineManager>,
     ) {
         'voxel_trace: {
             let mut query = ecs_world.query::<&Transform>().with::<&Camera>();
@@ -716,8 +733,10 @@ impl Renderer {
             let camera_transform = camera_transform.to_view_matrix().transpose();
             let camera_transform_arr: [f32; 16] = camera_transform.as_slice().try_into().unwrap();
 
-            // Update frame count if the camera transform changed.
-            if renderer.last_camera_transform != camera_transform_arr {
+            // Update frame count if the camera transform changed or a pipeline was updated.
+            if renderer.last_camera_transform != camera_transform_arr
+                || pipeline_manager.should_reset_temporal_effects()
+            {
                 renderer.last_camera_transform = camera_transform_arr;
                 renderer.frame_count = 0;
             }
@@ -993,7 +1012,12 @@ impl Renderer {
         }
     }
 
-    pub fn render(renderer: ResMut<Renderer>, device: Res<DeviceResource>, egui: Res<Egui>) {
+    pub fn render(
+        renderer: ResMut<Renderer>,
+        device: Res<DeviceResource>,
+        egui: Res<Egui>,
+        pipeline_manager: Res<RenderPipelineManager>,
+    ) {
         let Some(backbuffer) = &renderer.backbuffer else {
             return;
         };
@@ -1009,6 +1033,21 @@ impl Renderer {
         let Some(ray_bind_group) = &renderer.ray_bind_group else {
             return;
         };
+        let Some(ray_pipeline) = pipeline_manager.get_compute_pipeline(renderer.ray_pipeline_id)
+        else {
+            return;
+        };
+        let blit_pipeline = &renderer.blit_pipeline;
+        let ui_pipeline = &renderer.ui_pipeline;
+        // let Some(blit_pipeline) = pipeline_manager.get_render_pipeline(renderer.blit_pipeline_id)
+        // else {
+        //     return;
+        // };
+        // let Some(ui_pipeline) = pipeline_manager.get_render_pipeline(renderer.ui_pipeline_id)
+        // else {
+        //     return;
+        // };
+
         let swapchain_texture = device
             .surface()
             .get_current_texture()
@@ -1031,7 +1070,7 @@ impl Renderer {
                 timestamp_writes: None,
             });
 
-            compute_pass.set_pipeline(&renderer.ray_pipeline);
+            compute_pass.set_pipeline(ray_pipeline);
             compute_pass.set_bind_group(0, ray_bind_group, &[]);
             compute_pass.dispatch_workgroups(
                 (backbuffer.0.width() as f32 / WORKGROUP_SIZE[0] as f32).ceil() as u32,
@@ -1080,7 +1119,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&renderer.blit_pipeline);
+            render_pass.set_pipeline(blit_pipeline);
             render_pass.set_bind_group(0, blit_bind_group, &[]);
 
             render_pass.draw(0..6, 0..1);
@@ -1102,7 +1141,7 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            render_pass.set_pipeline(&renderer.ui_pipeline);
+            render_pass.set_pipeline(ui_pipeline);
 
             let mut index_slices = renderer.ui_index_buffer_slices.iter();
             let mut vertex_slices = renderer.ui_vertex_buffer_slices.iter();

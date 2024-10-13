@@ -1,5 +1,6 @@
 [package]
 name = "rogue"
+build = "build.rs"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,6 +14,8 @@ egui-winit = { git = "https://github.com/emilk/egui.git" }
 epaint = { git = "https://github.com/emilk/egui.git", features = ["bytemuck"] }
 env_logger = "0.11.3"
 fixedbitset = "0.5.7"
+gilrs = "0.11.0"
+naga_oil = "0.15.0"
 nalgebra = "0.33.0"
 hecs = { version = "0.10.4", features = ["macros"] }
 include-wgsl-oil = "0.2.6"
