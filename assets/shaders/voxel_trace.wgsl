@@ -23,30 +23,74 @@ fn aabb_min_max(min: vec3f, max: vec3f) -> AABB {
   return AABB(center, side_length);
 }
 
-var<private> seed: u32 = 1;
+// RANDOM ----------------------------------
+
+// A slightly modified version of the "One-at-a-Time Hash" function by Bob Jenkins.
+// See https://www.burtleburtle.net/bob/hash/doobs.html
+fn jenkins_hash(i: u32) -> u32 {
+  var x = i;
+  x += x << 10u;
+  x ^= x >> 6u;
+  x += x << 3u;
+  x ^= x >> 11u;
+  x += x << 15u;
+  return x;
+}
+
+var<private> rng_state: u32 = 0u;
 fn init_seed(coord: vec2<u32>) {
-  var n = seed;
+  var n = 0x12341234u;
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589; // hash by Hugo Elias
   n += coord.y;
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
   n += coord.x;
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
-  seed = n;
+  n += jenkins_hash(u_world_info.total_frame_count);
+  n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
+
+  rng_state = jenkins_hash(n);
+}
+
+// The 32-bit "xor" function from Marsaglia G., "Xorshift RNGs", Section 3.
+fn xorshift32() -> u32 {
+  var x = rng_state;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  rng_state = x;
+  return x;
 }
 
 fn rand() -> u32 {
-  seed = seed * 0x343fd + 0x269ec3;
-  return (seed >> 16) & 32767;
+  rng_state = (rng_state ^ (rng_state << 16)) * 0x69420420 + 0x12341234;
+  return (rng_state >> 8) & 16777215;
 }
 
 fn frand() -> f32 {
-  return f32(rand()) / 32767.0;
+  return bitcast<f32>(0x3f800000u | (xorshift32() >> 9u)) - 1.0;
+}
+
+// Random 3d unit vector
+fn frand3() -> vec3f {
+  return normalize(vec3f(frand() * 2.0 - 1.0, frand() * 2.0 - 1.0, frand() * 2.0 - 1.0));
+}
+
+// normal should be normalized.
+fn rand_hemisphere(normal: vec3f) -> vec3f {
+  let v = frand3();
+  if (dot(normal, v) < 0.0) {
+    return -v;
+  }
+
+  return v;
 }
 
 fn dither(v: vec3f) -> vec3f {
   let n = frand()+frand() - 1.0;  // triangular noise
   return v + n * exp2(-8.0);
 }
+
+// COLOR SPACE ----------------------------------
 
 fn lrgb_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
     let cutoff = rgb < vec3<f32>(0.0031308);
@@ -92,6 +136,7 @@ struct WorldInfo {
   camera: Camera,
   voxel_model_count: u32,
   frame_count: u32,
+  total_frame_count: u32,
 };
 
 struct WorldAcceleration {
@@ -256,15 +301,20 @@ fn esvo_get_node_attachment_ptr(esvo_data_ptrs_ptr: u32,
 
 struct VoxelModelTrace {
   hit: bool,
-  radiance: vec3f,
+  radiance_outgoing: vec3f,
+  albedo: vec3f,
+  normal: vec3f,
+  sample_position: vec3f,
+  hit_position: vec3f,
 }
 
 fn voxel_model_trace_miss() -> VoxelModelTrace {
-  return VoxelModelTrace(false, vec3f(0.0));
+  return VoxelModelTrace(false, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
 }
 
-fn voxel_model_trace_hit(radiance: vec3f) -> VoxelModelTrace {
-  return VoxelModelTrace(true, radiance);
+fn voxel_model_trace_hit(radiance_outgoing: vec3f, albedo: vec3f,
+                         normal: vec3f, sample_position: vec3f, hit_position: vec3f) -> VoxelModelTrace {
+  return VoxelModelTrace(true, radiance_outgoing, albedo, normal, sample_position, hit_position);
 }
 
 struct ESVOStackItem {
@@ -288,7 +338,7 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
   var curr_height = 0u;
   var should_push = true;
 
-  for (var i = 0; i < 32; i++) {
+  for (var i = 0; i < 1024; i++) {
     let curr_hit_info = ray_to_aabb(ray, curr_aabb);
     let value_mask = (curr_node_data >> 8) & 0xFF;
     let in_octant = (value_mask & (0x1u << curr_octant)) > 0;
@@ -296,45 +346,62 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
     if (in_octant && should_push) {
       let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
       if (is_leaf) {
-        let albedo_ptr = esvo_get_node_attachment_ptr(
+        let material_ptr = esvo_get_node_attachment_ptr(
           voxel_model.data_ptrs_ptr,
           0u,
           curr_node_index,
           curr_octant
         );
 
-        // Check if this voxel has albedo, if it doesn't then skip it.
-        if (albedo_ptr != 0xFFFFFFFFu) {
-          let compresed_albedo = u_world_data.data[albedo_ptr];
-          let albedo = vec3f(
-            f32((compresed_albedo >> 24u) & 0xFFu) / 255.0,
-            f32((compresed_albedo >> 16u) & 0xFFu) / 255.0,
-            f32((compresed_albedo >> 8u) & 0xFFu) / 255.0,
-          );
-
+        // Check if this voxel has a material, if it doesn't then skip it.
+        if (material_ptr != 0xFFFFFFFFu) {
           let normal_ptr = esvo_get_node_attachment_ptr(
             voxel_model.data_ptrs_ptr,
             1u,
             curr_node_index,
             curr_octant
           );
-
-          var radiance = albedo;
+          // Check if this voxel has a normal, if it doesn't then skip it, we can't .
           if (normal_ptr != 0xFFFFFFFFu) {
+            // This is a valid path tracing voxel.
             let compressed_normal = u_world_data.data[normal_ptr];
-            let voxel_normal = vec3f(
+            let stored_normal = normalize(vec3f(
               (f32((compressed_normal >> 16u) & 0xFFu) / 255.0) * 2.0 - 1.0,
               (f32((compressed_normal >> 8u) & 0xFFu) / 255.0) * 2.0 - 1.0,
               (f32(compressed_normal & 0xFFu) / 255.0) * 2.0 - 1.0,
-            );
-            let side_normal = esvo_ray_aabb_normal(curr_hit_info, ray);
-            let light_dir = vec3f(0.0, -1.0, 0.0);
-            let voxel_normal_l = dot(voxel_normal, -light_dir);
-            let side_normal_l = dot(side_normal, -light_dir);
-            radiance = (voxel_normal_l * 0.65 + side_normal * 0.35) * albedo;
-          }
+            ));
 
-          return voxel_model_trace_hit(radiance);
+            let compresed_material = u_world_data.data[material_ptr];
+            let material_type = compresed_material >> 30;
+
+            // Process the diffuse material.
+            if (material_type == 0u) {
+              let albedo = vec3f(
+                f32((compresed_material >> 16u) & 0xFFu) / 255.0,
+                f32((compresed_material >> 8u) & 0xFFu) / 255.0,
+                f32(compresed_material & 0xFFu) / 255.0,
+              );
+
+              let emmisive_ptr = esvo_get_node_attachment_ptr(
+                voxel_model.data_ptrs_ptr,
+                2u,
+                curr_node_index,
+                curr_octant
+              );
+
+              var radiance_outgoing = vec3f(0.0);
+              // This voxel is emmisive so it generates it's own radiance.
+              if (emmisive_ptr != 0xFFFFFFFFu) {
+                let candela = f32(u_world_data.data[emmisive_ptr]);
+                radiance_outgoing = albedo * candela;
+              }
+
+              let hit_position = ray.origin + ray.dir * curr_hit_info.t_enter;
+              // Multiply the normal which has a length of one by some tiny epsilon.
+              let sample_position = curr_aabb.center + (stored_normal * 1.001);
+              return voxel_model_trace_hit(radiance_outgoing, albedo, stored_normal, sample_position, hit_position);
+            }
+          }
         }
       }
       
@@ -404,8 +471,6 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
   return voxel_model_trace_miss();
 }
 
-// WORLD SPACE RAY CONSTRUCTION AND TRAVERSAL
-
 struct VoxelModelHit {
   // The pointer to where this model's data ptrs are located in u_world_acceleration.
   data_ptrs_ptr: u32,
@@ -415,7 +480,7 @@ struct VoxelModelHit {
   i: u32
 }
 
-fn get_next_voxel_model(ray: Ray, t_enter_min: f32, last_model_i: u32) -> VoxelModelHit {
+fn get_next_voxel_model(ray: Ray, t_last_exit: f32) -> VoxelModelHit {
   var closest: VoxelModelHit = VoxelModelHit(0, 0, 
                                              RayAABBInfo(0.0, 0.0, 0.0, vec3f(0.0), vec3f(0.0), false), 
                                              AABB(vec3f(0.0), vec3f(0.0)), 0u);
@@ -437,18 +502,19 @@ fn get_next_voxel_model(ray: Ray, t_enter_min: f32, last_model_i: u32) -> VoxelM
 
     let aabb = aabb_min_max(min, max);
     let hit_info = ray_to_aabb(ray, aabb);
-    if (hit_info.hit && hit_info.t_enter < min_t && hit_info.t_enter_unbound >= t_enter_min) {
+    // We this model as closest if it is hit, 
+    if (hit_info.hit && hit_info.t_exit < min_t && hit_info.t_exit >= t_last_exit) {
       // Ensure the t-value entering this model is greater than our current minimum t-value needed.
       // If it is the same ensure this model comes after any previous model with the exact same t-value.
       // Since we only update min_t if we have a new t-value greater than, we will always access models with the
       // exact same t-value in acsending order of `i` index.
-      if (hit_info.t_enter_unbound > t_enter_min || (hit_info.t_enter_unbound == t_enter_min && i > last_model_i)) {
-        min_t = hit_info.t_enter;
+      //if (hit_info.t_enter_unbound > t_enter_min || (hit_info.t_enter_unbound == t_enter_min && i > last_model_i)) {
+        min_t = hit_info.t_exit;
         closest = VoxelModelHit(current_index + 8,
                                 u_world_acceleration.data[current_index + 1],
                                 hit_info,
                                 aabb, i);
-      }
+      //}
     }
 
     current_index = current_index + model_data_size;
@@ -467,7 +533,132 @@ fn trace_voxel_model(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
       return voxel_model_trace_miss();
     }
   }
+}
 
+fn sample_background_radiance(ray: Ray) -> vec3f {
+  // Linear scale to make the room a box skybox
+  //let linear_scale = 1.0 / max(max(abs(rayDir.x), abs(rayDir.y)), abs(rayDir.z));
+  //var background_color = vec3f(srgb_to_lrgb((rayDir * linear_scale + 1) * 0.5));
+
+  // Colors each axes face rgb (xyz) irrespective of sign. Sinusoidal-like interpolation
+  //var background_color = vec3f(srgb_to_lrgb(abs(rayDir)));
+
+  // Colors interpolating on the cosine angle of each axis in srgb.
+  // From 0.0 <= t <= 1.0, 0.0 <= theta <= PI.
+  var background_color = vec3f(srgb_to_lrgb(vec3f(acos(-ray.dir) / 3.14)));
+
+#ifdef GRID
+  // Draw the XZ plane grid.
+  let t_axes = ray_to_point(ray, vec3f(0.0));
+  if (t_axes.y > 0.0) {
+    let grid_xz = (ray.origin + ray.dir * t_axes.y).xz; 
+    let f = modf(abs(grid_xz));
+    let LINE_WIDTH: f32 = 0.02;
+    let HALF_LINE_WIDTH: f32 = LINE_WIDTH * 0.5;
+    let GRID_COLOR = srgb_to_lrgb(vec3f(0.75));
+    let GRID_X_COLOR = srgb_to_lrgb(vec3f(1.0, 0.0, 0.0));
+    let GRID_Z_COLOR = srgb_to_lrgb(vec3f(0.0, 0.0, 1.0));
+
+    var color = vec3f(0.0);
+    var influence = 0.0;
+    // We are on the X-axis.
+    if (f.fract.x < HALF_LINE_WIDTH) {
+      influence = distance(grid_xz, ray.origin.xz);
+      color = GRID_COLOR;
+      if (f.whole.x == 0.0) {
+        color = GRID_X_COLOR;
+      } else {
+        color = mix(mix(GRID_X_COLOR, GRID_COLOR, 0.3),
+                    GRID_COLOR,
+                    smoothstep(0.0, 1.0, abs(grid_xz.x - ray.origin.x)));
+      }
+    }
+    // We are on the Z-axis.
+    if (f.fract.y < HALF_LINE_WIDTH) {
+      influence = distance(grid_xz, ray.origin.xz);
+      color = GRID_COLOR;
+      if (f.whole.y == 0.0) {
+        // Fully color the XZ axes
+        color = GRID_Z_COLOR;
+      } else {
+        // Color the xz lines depending on how close the line is to the ray.
+        color = mix(mix(GRID_Z_COLOR, GRID_COLOR, 0.3),
+                    GRID_COLOR,
+                    smoothstep(0.0, 1.0, abs(grid_xz.y - ray.origin.z)));
+      }
+    }
+
+    let RADIUS_OF_GRID = 20.0;
+    let FADE_DISTANCE = 3.0;
+    if (influence != 0.0) {
+      // Fade out the grid over a distance of FADE_DISTANCE
+      influence = 1.0 - smoothstep(RADIUS_OF_GRID - FADE_DISTANCE,
+                                   RADIUS_OF_GRID + FADE_DISTANCE,
+                                   influence);
+    }
+    return mix(background_color, color, influence);
+  }
+#endif
+
+  return background_color;
+}
+
+fn calculate_ray_incoming_radiance(ray: Ray) -> vec3f {
+  var ray_curr = ray;
+  var attenuation = vec3(1.0);
+  var radiance_accumulated = vec3(0.0);
+
+  for(var i = 0; i < 3; i++) {
+    let next_model = get_next_voxel_model(ray_curr, 0.0);
+
+    if (!next_model.hit_info.hit) {
+      // Only sample background for bounced light.
+      if (i != 0) {
+        //radiance_accumulated *= sample_background_radiance(ray_curr) * attenuation;
+      }
+      break;
+    }
+
+    let trace = trace_voxel_model(next_model, ray_curr);
+    // For now end ray traversal if we didn't hit anything, we only trace the first model we hit.
+    if (!trace.hit) {
+      // Only sample background for bounced light.
+      if (i != 0) {
+        //radiance_accumulated += sample_background_radiance(ray_curr) * attenuation;
+      }
+      break;
+    }
+
+    let random_sample_dir = normalize(trace.normal + frand3());
+    //let random_sample_dir = rand_hemisphere(trace.normal);
+    let l = dot(trace.normal, random_sample_dir);
+    let d = distance(trace.hit_position, ray_curr.origin);
+    radiance_accumulated += attenuation * trace.radiance_outgoing;
+    if (length(trace.radiance_outgoing) > 0.0) {
+      break;
+    }
+
+    attenuation *= trace.albedo;
+    ray_curr = Ray(trace.sample_position, random_sample_dir, 1.0 / random_sample_dir);
+  }
+
+  return radiance_accumulated;
+}
+
+// Pixel sample is the discrete screen pixel with some random sub-pixel offset applied.
+// The pixel sample has an origin at the top-left of the screen.
+fn construct_camera_ray(pixel_sample: vec2f, render_size: vec2f) -> Ray {
+  let ndc = pixel_sample / render_size;
+  let uv = vec2f(ndc.x * 2.0 - 1.0, 1.0 - ndc.y * 2.0);
+
+  let aspect_ratio = f32(render_size.x) / f32(render_size.y);
+  var scaled_uv = vec2f(uv.x * aspect_ratio, uv.y) * tan(u_world_info.camera.half_fov);
+
+  let ct = u_world_info.camera.transform;
+  let ray_origin = vec3f(ct[0][3], ct[1][3], ct[2][3]);
+  let ray_dir = normalize(vec3f(scaled_uv, 1.0) * u_world_info.camera.rotation);
+
+  return Ray(ray_origin, ray_dir, 1.0 / ray_dir);
 }
 
 @compute @workgroup_size(8, 8)
@@ -477,125 +668,37 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (coords.x >= dimensions.x || coords.y >= dimensions.y) {
     return;
   }
+
+  // Initialize prng with a seed, this should be new every frame.
   init_seed(coords);
 
   // Generate ray depending on camera and a random offset within the pixel.
+  // Assumed to be a uniformly distributed random variable.
   let offset = vec2f(
-    f32(u_world_info.frame_count % 4) * 0.25 - 0.5,
-    f32((u_world_info.frame_count % 16) / 4) * 0.25 - 0.5
+    frand() - 0.5,
+    frand() - 0.5
   );
   
-  // Comment or uncomment offset depending if TAA is enabled.
-  let ndc = (vec2f(coords) + offset) / vec2f(dimensions);
-  let uv = vec2f(ndc.x * 2.0 - 1.0, 1.0 - ndc.y * 2.0);
+  let ray = construct_camera_ray(vec2f(coords) + offset, vec2f(dimensions));
+  let sampled_pixel_radiance = calculate_ray_incoming_radiance(ray);
 
-  let aspect_ratio = f32(dimensions.x) / f32(dimensions.y);
-  var scaled_uv = vec2f(uv.x * aspect_ratio, uv.y) * tan(u_world_info.camera.half_fov);
-
-  let ct = u_world_info.camera.transform;
-  let ray_origin = vec3f(ct[0][3], ct[1][3], ct[2][3]);
-  let ray_dir = normalize(vec3f(scaled_uv, 1.0) * u_world_info.camera.rotation);
-  let inv_ray_dir = 1.0 / ray_dir;
-  let ray = Ray(ray_origin, ray_dir, inv_ray_dir);
-
-  // Linear scale to make the room a box skybox
-  //let linear_scale = 1.0 / max(max(abs(rayDir.x), abs(rayDir.y)), abs(rayDir.z));
-  //var radiance = vec3f(srgb_to_lrgb((rayDir * linear_scale + 1) * 0.5));
-
-  // Colors each axes face rgb (xyz) irrespective of sign. Sinusoidal-like interpolation
-  //var radiance = vec3f(srgb_to_lrgb(abs(rayDir)));
-
-  // Colors each axes on the unit circle interpolating linearly based on ray angle.
-
-  var radiance: vec3f;
-  var curr_min_t = -1.0e10;
-  var curr_voxel_model = get_next_voxel_model(ray, curr_min_t, 100000u);
-  for (var i = 0; i < 100; i++) {
-    if (curr_voxel_model.schema == 0) {
-      var background_color = vec3f(srgb_to_lrgb(vec3f(acos(-ray_dir) / 3.14)));
-
-      // Draw the XZ plane grid.
-      let t_axes = ray_to_point(ray, vec3f(0.0));
-      if (t_axes.y > 0.0) {
-        let grid_xz = (ray.origin + ray.dir * t_axes.y).xz; 
-        let f = modf(abs(grid_xz));
-        let LINE_WIDTH: f32 = 0.02;
-        let HALF_LINE_WIDTH: f32 = LINE_WIDTH * 0.5;
-        let GRID_COLOR = srgb_to_lrgb(vec3f(0.75));
-        let GRID_X_COLOR = srgb_to_lrgb(vec3f(1.0, 0.0, 0.0));
-        let GRID_Z_COLOR = srgb_to_lrgb(vec3f(0.0, 0.0, 1.0));
-
-        var color = vec3f(0.0);
-        var influence = 0.0;
-        // We are on the X-axis.
-        if (f.fract.x < HALF_LINE_WIDTH) {
-          influence = distance(grid_xz, ray.origin.xz);
-          color = GRID_COLOR;
-          if (f.whole.x == 0.0) {
-            color = GRID_X_COLOR;
-          } else {
-            color = mix(mix(GRID_X_COLOR, GRID_COLOR, 0.3),
-                        GRID_COLOR,
-                        smoothstep(0.0, 1.0, abs(grid_xz.x - ray.origin.x)));
-          }
-        }
-        // We are on the Z-axis.
-        if (f.fract.y < HALF_LINE_WIDTH) {
-          influence = distance(grid_xz, ray.origin.xz);
-          color = GRID_COLOR;
-          if (f.whole.y == 0.0) {
-            // Fully color the XZ axes
-            color = GRID_Z_COLOR;
-          } else {
-            // Color the xz lines depending on how close the line is to the ray.
-            color = mix(mix(GRID_Z_COLOR, GRID_COLOR, 0.3),
-                        GRID_COLOR,
-                        smoothstep(0.0, 1.0, abs(grid_xz.y - ray.origin.z)));
-          }
-        }
-
-        let RADIUS_OF_GRID = 20.0;
-        let FADE_DISTANCE = 3.0;
-        if (influence != 0.0) {
-          // Fade out the grid over a distance of FADE_DISTANCE
-          influence = 1.0 - smoothstep(RADIUS_OF_GRID - FADE_DISTANCE,
-                                       RADIUS_OF_GRID + FADE_DISTANCE,
-                                       influence);
-        }
-        background_color = mix(background_color, color, influence);
-      }
-
-      radiance = background_color;
-      break;
-    }
-
-    let trace_result = trace_voxel_model(curr_voxel_model, ray);
-    if (trace_result.hit) {
-      radiance = trace_result.radiance;
-      break;
-    }
-
-    // Ensure the ray starts from atleast the origin so we don't re-intersect the same model.
-    curr_min_t = curr_voxel_model.hit_info.t_enter_unbound;
-    curr_voxel_model = get_next_voxel_model(ray, curr_min_t, curr_voxel_model.i);
-  }
-
-  var radiance_prev = vec3f(0.0);
+  // Apply monte carlo estimator using stored accumulated pixel radiance samples.
+  var pixel_radiance_prev = vec3f(0.0);
   if (u_world_info.frame_count > 1) {
-    radiance_prev = textureLoad(u_radiance_total_prev, coords, 0).xyz;
+    pixel_radiance_prev = textureLoad(u_radiance_total_prev, coords, 0).xyz;
   }
 
-  // Store the total radiance so we can average it allowing for temporal effects.
-  let total_radiance = radiance_prev + radiance;
-  textureStore(u_radiance_total, coords, vec4f(total_radiance, 0.0));
+  // Store our new total accumulated radiance over `n` samples.
+  let total_pixel_radiance = pixel_radiance_prev + sampled_pixel_radiance;
+  textureStore(u_radiance_total, coords, vec4f(total_pixel_radiance, 0.0));
 
-  var avg_radiance = total_radiance / f32(u_world_info.frame_count);
-  // Uncomment to not apply any temporal effects.
-  // avg_radiance = radiance;
+  // This is our monte carlo estimation over `n` samples where `n = frame_count` for the expected
+  // radiance is given a uniform pdf over the pixels area.
+  var estimated_expected_radiance = total_pixel_radiance / f32(u_world_info.frame_count);
 
-  // Convert to sRGB then dither to avoid any banding.
-  let gamma_corrected_color = lrgb_to_srgb(avg_radiance);
+  // Since the backbuffer is a 32-bit color, convert the expected radiance to srgb
+  // then dither to avoid any color banding.
+  let gamma_corrected_color = lrgb_to_srgb(estimated_expected_radiance);
   let backbuffer_color = vec4f(dither(gamma_corrected_color), 1.0);
-
   textureStore(u_backbuffer, coords, backbuffer_color);  
 }

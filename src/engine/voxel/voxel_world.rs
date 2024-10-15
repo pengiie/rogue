@@ -15,6 +15,7 @@ use crate::{
         graphics::device::DeviceResource,
         physics::transform::Transform,
         resource::{Res, ResMut},
+        voxel::vox_consts,
     },
 };
 
@@ -34,26 +35,6 @@ impl VoxelWorld {
     pub fn new() -> Self {
         Self {}
     }
-
-    // pub fn get_acceleration_data(&self) -> Box<[u32]> {
-    //     let mut data = Vec::with_capacity(self.voxel_models.len() * 8); // ptr + type + vec3 + vec3
-    //     for model in &self.voxel_models {
-    //         let aabb = model.aabb();
-    //         let min_bits = aabb.min.map(|x| x.to_bits()).data.0[0];
-    //         let max_bits = aabb.max.map(|x| x.to_bits()).data.0[0];
-
-    //         data.push(0);
-    //         data.push(model.schema() as u32);
-    //         data.push(min_bits[0]);
-    //         data.push(min_bits[1]);
-    //         data.push(min_bits[2]);
-    //         data.push(max_bits[0]);
-    //         data.push(max_bits[1]);
-    //         data.push(max_bits[2]);
-    //     }
-
-    //     data.into_boxed_slice()
-    // }
 }
 
 #[derive(Resource)]
@@ -105,7 +86,7 @@ impl VoxelWorldGpu {
         }
 
         if voxel_world_gpu.allocator.is_none() {
-            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 16));
+            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 30));
             voxel_world_gpu.is_dirty = true;
         }
         let allocator = voxel_world_gpu.allocator.as_mut().unwrap();
@@ -191,10 +172,12 @@ impl VoxelWorldGpu {
                 };
                 assert!(!model_info.is_empty());
 
-                let aabb = AABB::new(
-                    transform.isometry.translation.vector,
-                    transform.isometry.translation.vector + voxel_model.length().map(|x| x as f32),
-                );
+                let world_min = transform.isometry.translation.vector;
+                let world_max = world_min
+                    + voxel_model
+                        .length()
+                        .map(|x| x as f32 * vox_consts::VOXEL_WORLD_UNIT_LENGTH);
+                let aabb = AABB::new(world_min, world_max);
                 let min_bits = aabb.min.map(|x| x.to_bits()).data.0[0];
                 let max_bits = aabb.max.map(|x| x.to_bits()).data.0[0];
 

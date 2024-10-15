@@ -3,7 +3,11 @@ use std::{
     fs::File,
 };
 
+use anyhow::anyhow;
+use log::{debug, info};
 use naga_oil::compose::ShaderDefValue;
+use pollster::FutureExt;
+use wgpu::ErrorFilter;
 
 use crate::engine::asset::asset::{AssetFile, AssetLoader};
 
@@ -51,31 +55,40 @@ pub struct Shader {
 }
 
 impl Shader {
-    pub fn process_raw(raw_shader: &RawShader, defines: HashMap<String, bool>) -> Self {
+    pub fn process_raw(
+        raw_shader: &RawShader,
+        defines: HashMap<String, bool>,
+    ) -> anyhow::Result<Self> {
         let preprocessor = naga_oil::compose::preprocess::Preprocessor::default();
-        let out = preprocessor
-            .preprocess(
-                &raw_shader.source,
-                &defines
-                    .into_iter()
-                    .map(|(def, val)| (def, ShaderDefValue::Bool(val)))
-                    .collect::<HashMap<_, _>>(),
-            )
-            .expect("Failed to process shader");
+        let out = preprocessor.preprocess(
+            &raw_shader.source,
+            &defines
+                .into_iter()
+                .map(|(def, val)| (def, ShaderDefValue::Bool(val)))
+                .collect::<HashMap<_, _>>(),
+        )?;
 
-        Self {
+        Ok(Self {
             source: out.preprocessed_source,
-        }
+        })
     }
 
     pub fn source(&self) -> &str {
         &self.source
     }
 
-    pub fn create_module(&self, device: &DeviceResource) -> wgpu::ShaderModule {
-        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    pub fn create_module(&self, device: &DeviceResource) -> anyhow::Result<wgpu::ShaderModule> {
+        device.push_error_scope(ErrorFilter::Validation);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(&self.source)),
-        })
+        });
+
+        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+            let shader_info = pollster::block_on(module.get_compilation_info());
+            return Err(anyhow::format_err!(error));
+        }
+
+        Ok(module)
     }
 }

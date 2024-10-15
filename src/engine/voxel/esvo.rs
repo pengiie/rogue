@@ -14,9 +14,10 @@ use wgpu::core::device;
 use crate::{common::morton::morton_decode, engine::graphics::device::DeviceResource};
 
 use super::{
+    attachment::Attachment,
     voxel::{
-        Attachment, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema, VoxelRange,
+        VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete,
+        VoxelModelSchema, VoxelRange,
     },
     voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
 };
@@ -68,7 +69,9 @@ impl VoxelModelESVO {
 
         // The next index to be written.
         let mut next_index = 1;
-        // TODO: This struct padding doesnt actually work because we want the opposite, there may
+        // TODO: This struct padding doesnt actually work because we also need to update the child
+        // ptr based off of how many nodes are between this node and the pointed to children nodes,
+        // we must also ensure that children groups are not separated with a page header, there may
         // be page headers between this node and where the child_ptr is pointing to which would
         // offset the child pointer but we aren't accounting for that yet so what we need to do is
         // either make a function to calculate the amount of page headers because which is more
@@ -147,7 +150,7 @@ impl VoxelModelESVO {
         let bucket_info = BucketLookupInfo::empty(
             self.bucket_lookup.len() as u32,
             self.node_data.len() as u32,
-            32,
+            1 << 20,
         );
         self.node_data.resize(
             self.node_data.len() + bucket_info.bucket_total_size as usize,
@@ -308,10 +311,10 @@ impl std::fmt::Debug for VoxelModelESVO {
         for (attachment, data) in &self.attachment_raw_data {
             f.write_str(&format!("Attachment Raw Data [{}]:\n\t", attachment.name()));
             match attachment.renderable_index() {
-                Attachment::ALBEDO_RENDER_INDEX => {
-                    for (i, albedo) in data.iter().enumerate() {
-                        let (r, g, b, a) = Attachment::decode_albedo(*albedo);
-                        f.write_str(&format!("[{}] {} {} {}, ", i, r, g, b));
+                Attachment::PTMATERIAL_RENDER_INDEX => {
+                    for (i, material) in data.iter().enumerate() {
+                        let material = Attachment::decode_ptmaterial(material);
+                        f.write_str(&format!("[{}] {:?}, ", i, material));
                     }
                 }
                 Attachment::NORMAL_RENDER_INDEX => {
@@ -433,9 +436,9 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
         if !self.initialized_data && self.data_allocation.is_some() {
-            debug!("Writing initial data");
+            debug!("Writing voxel model initial data");
 
-            debug!("Writing node data {:?}", model.node_data.as_slice());
+            // debug!("Writing node data {:?}", model.node_data.as_slice());
             allocator.write_world_data(
                 device,
                 self.data_allocation.as_ref().unwrap(),
@@ -443,11 +446,11 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             );
 
             for (attachment, lookup_data) in &model.attachment_lookup_data {
-                debug!(
-                    "Writing attachment lookup data [{}] {:?}",
-                    attachment.name(),
-                    lookup_data.as_slice()
-                );
+                // debug!(
+                //     "Writing attachment lookup data [{}] {:?}",
+                //     attachment.name(),
+                //     lookup_data.as_slice()
+                // );
                 let allocation = self
                     .attachment_lookup_allocations
                     .get(attachment)
@@ -462,9 +465,9 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
 
             for (attachment, raw_data) in &model.attachment_raw_data {
                 debug!(
-                    "Writing attachment raw data [{}] {:?}",
+                    "Writing attachment raw data [{}] Len: {:?}",
                     attachment.name(),
-                    raw_data.as_slice()
+                    raw_data.as_slice().len()
                 );
                 let allocation = self
                     .attachment_raw_allocations

@@ -43,10 +43,9 @@ impl VoxelAllocator {
         allocation: &VoxelDataAllocation,
         data: &[u8],
     ) {
-        assert_eq!(
-            data.len() as u64,
-            allocation.range.end - allocation.range.start
-        );
+        // Ensure we do not write out of bounds.
+        assert!(data.len() as u64 <= allocation.range.end - allocation.range.start);
+
         let offset = allocation.range.start;
         device
             .queue()

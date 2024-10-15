@@ -1,5 +1,6 @@
 pub mod asset;
 pub mod ecs;
+pub mod event;
 pub mod graphics;
 pub mod input;
 pub mod physics;

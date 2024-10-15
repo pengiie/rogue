@@ -15,6 +15,7 @@ use wgpu::{
 };
 
 use crate::{
+    common::set::{AttributeSet, AttributeSetImpl},
     engine::{
         asset::asset::AssetPath,
         ecs::{
@@ -62,14 +63,20 @@ pub struct WorldBuffer {
     voxel_model_count: u32,
     // The frame count of the current transform of the camera.
     frame_count: u32,
+    // The frame count since the launch of the application.
+    total_frame_count: u32,
     // Padding for struct alignment of 16
-    padding: [f32; 14],
+    padding: [f32; 13],
 }
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable, Debug)]
 #[repr(C)]
 pub struct UIBuffer {
     screen_size: [f32; 2],
+}
+
+pub struct RenderState {
+    draw_grid: bool,
 }
 
 const MAX_ESVO_NODES: u32 = 10_000;
@@ -113,10 +120,6 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: &DeviceResource, pipeline_manager: &mut RenderPipelineManager) -> Self {
-        let ray_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Ray shader module"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::voxel_trace::SOURCE)),
-        });
         let ray_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Ray bind group eayout"),
@@ -188,22 +191,14 @@ impl Renderer {
             PipelineCreateInfo::Compute {
                 name: "ray_pipeline".to_owned(),
                 shader_path: AssetPath::new(shader::voxel_trace::PATH.to_string()),
-                shader_defines: HashMap::new(),
+                shader_defines: {
+                    let mut h = HashMap::new();
+                    h.insert("GRID".to_owned(), true);
+                    h
+                },
             },
             &[&ray_bind_group_layout],
         );
-        let ray_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Ray pipeline layout"),
-            bind_group_layouts: &[&ray_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let ray_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Ray pipeline"),
-            layout: Some(&ray_pipeline_layout),
-            module: &ray_shader_module,
-            entry_point: "main",
-            compilation_options: PipelineCompilationOptions::default(),
-        });
 
         let world_info_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world_info_buffer"),
@@ -275,6 +270,7 @@ impl Renderer {
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("blit_pipeline"),
             layout: Some(&blit_pipeline_layout),
+            cache: None,
             vertex: wgpu::VertexState {
                 module: &blit_shader_module,
                 entry_point: "vs_main",
@@ -391,6 +387,7 @@ impl Renderer {
         let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ui_pipeline"),
             layout: Some(&ui_pipeline_layout),
+            cache: None,
             vertex: wgpu::VertexState {
                 module: &ui_shader_module,
                 entry_point: "vs_main",
@@ -472,6 +469,10 @@ impl Renderer {
 
     fn radiance_format() -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba32Float
+    }
+
+    pub fn sample_count(&self) -> u32 {
+        self.frame_count
     }
 
     fn set_backbuffer_textures(&mut self, device: &DeviceResource, width: u32, height: u32) {
@@ -723,6 +724,7 @@ impl Renderer {
         egui: Res<Egui>,
         ui_state: Res<UIState>,
         pipeline_manager: Res<RenderPipelineManager>,
+        time: Res<Time>,
     ) {
         'voxel_trace: {
             let mut query = ecs_world.query::<&Transform>().with::<&Camera>();
@@ -758,7 +760,8 @@ impl Renderer {
                 },
                 voxel_model_count: voxel_world_gpu.renderable_voxel_model_count(),
                 frame_count: renderer.frame_count,
-                padding: [0.0; 14],
+                total_frame_count: time.frame_count(),
+                padding: [0.0; 13],
             };
 
             device.queue().write_buffer(

@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use log::debug;
+use log::{debug, info};
 use rogue_macros::Resource;
 use wgpu::{
     Backends, DeviceDescriptor, Features, InstanceDescriptor, Limits, SurfaceConfiguration,
@@ -70,6 +70,7 @@ impl DeviceResource {
                             max_storage_buffer_binding_size: 1 << 30,
                             ..Default::default()
                         },
+                        memory_hints: wgpu::MemoryHints::default(),
                     },
                     None,
                 )

@@ -9,15 +9,17 @@ use nalgebra::{Translation3, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
-    common::aabb::AABB,
+    common::{aabb::AABB, color::Color},
     engine::{
         ecs::ecs_world::ECSWorld,
         physics::transform::Transform,
         resource::{Res, ResMut},
         voxel::{
+            attachment::{Attachment, PTMaterial},
             esvo::VoxelModelESVO,
             flat::VoxelModelFlat,
-            voxel::{Attachment, RenderableVoxelModel, VoxelModel, VoxelModelSchema},
+            vox_consts,
+            voxel::{RenderableVoxelModel, VoxelModel, VoxelModelSchema},
         },
         window::time::Time,
     },
@@ -55,42 +57,93 @@ impl GameWorld {
         if !game_world.loaded_test_models {
             game_world.loaded_test_models = true;
 
-            let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(4, 4, 8));
+            let i = Instant::now();
+            let mut flat_model = VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
             for (position, mut voxel) in flat_model.xyz_iter_mut() {
-                if position.y == 0 {
+                let is_floor = position.y == 0;
+                let is_right_wall = position.x == 31;
+                let is_left_wall = position.x == 0;
+                let is_back_wall = position.z == 31;
+                let is_ceiling = position.y == 31;
+                let is_light =
+                    position.x >= 10 && position.x <= 19 && position.z >= 10 && position.z <= 19;
+
+                if is_floor || is_right_wall || is_left_wall || is_back_wall || is_ceiling {
+                    let color = if is_floor || is_back_wall || is_ceiling {
+                        if is_ceiling && is_light {
+                            Color::new_srgb(1.0, 1.0, 1.0)
+                        } else {
+                            Color::new_srgb(0.5, 0.5, 0.5)
+                        }
+                    } else if is_left_wall {
+                        Color::new_srgb(1.0, 0.0, 0.0)
+                    } else if is_right_wall {
+                        Color::new_srgb(0.0, 1.0, 0.0)
+                    } else {
+                        unreachable!()
+                    };
+
+                    let normal: Vector3<f32> = if is_floor {
+                        Vector3::y()
+                    } else if is_ceiling {
+                        -Vector3::y()
+                    } else if is_left_wall {
+                        Vector3::x()
+                    } else if is_right_wall {
+                        -Vector3::x()
+                    } else if is_back_wall {
+                        -Vector3::z()
+                    } else {
+                        unreachable!()
+                    };
+
                     voxel.set_attachment(
-                        Attachment::ALBEDO,
-                        Attachment::encode_albedo(
-                            // pow to make the brightness more linearly interpolated.
-                            (position.x as f32 / 3.0).powf(2.2),
-                            (position.y as f32 / 3.0).powf(2.2),
-                            (position.z as f32 / 7.0).powf(2.2),
-                            1.0,
-                        ),
+                        Attachment::PTMATERIAL,
+                        Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
+                            color.into_color_space(),
+                        ))),
                     );
                     voxel.set_attachment(
                         Attachment::NORMAL,
-                        Attachment::encode_normal(Vector3::y()),
+                        Some(Attachment::encode_normal(normal)),
                     );
+
+                    if is_ceiling && is_light {
+                        voxel.set_attachment(
+                            Attachment::EMMISIVE,
+                            Some(Attachment::encode_emmisive(
+                                64.0 * (vox_consts::VOXEL_WORLD_UNIT_LENGTH).powi(2),
+                            )),
+                        );
+                    }
                 }
             }
+            debug!(
+                "Took {} seconds to generate flat model",
+                i.elapsed().as_secs_f32()
+            );
 
             // Green box 4x4
+            let i = Instant::now();
             let voxel_model = VoxelModel::<VoxelModelESVO>::new((&flat_model).into());
-            debug!("{:?}", voxel_model);
+            debug!(
+                "Took {} seconds to convert flat model to an esvo model",
+                i.elapsed().as_secs_f32()
+            );
+            // debug!("{:?}", voxel_model);
 
             ecs_world.spawn(RenderableVoxelModel::new(
-                Transform::with_translation(Translation3::new(1.0, 0.0, 1.0)),
+                Transform::with_translation(Translation3::new(0.0, 0.0, 1.0)),
                 voxel_model.clone(),
             ));
-            ecs_world.spawn(RenderableVoxelModel::new(
-                Transform::with_translation(Translation3::new(-5.0, 0.0, 2.0)),
-                voxel_model.clone(),
-            ));
-            ecs_world.spawn(RenderableVoxelModel::new(
-                Transform::with_translation(Translation3::new(4.5, 6.0, -5.0)),
-                voxel_model.clone(),
-            ));
+            // ecs_world.spawn(RenderableVoxelModel::new(
+            //     Transform::with_translation(Translation3::new(-5.0, 0.0, 2.0)),
+            //     voxel_model.clone(),
+            // ));
+            // ecs_world.spawn(RenderableVoxelModel::new(
+            //     Transform::with_translation(Translation3::new(4.5, 6.0, -5.0)),
+            //     voxel_model.clone(),
+            // ));
         }
     }
 

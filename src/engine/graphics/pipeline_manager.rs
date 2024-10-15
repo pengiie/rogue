@@ -1,5 +1,6 @@
-use std::{borrow::BorrowMut, collections::HashMap};
+use std::{borrow::BorrowMut, collections::HashMap, time::Duration};
 
+use log::{debug, info};
 use rogue_macros::Resource;
 
 use crate::engine::{
@@ -69,20 +70,42 @@ impl RenderPipelineManager {
                     name,
                     shader_path,
                     shader_defines,
-                } => {
+                } => 'compute_pipeline_creation: {
                     let shader_id = shaders.first().unwrap();
                     if (assets.is_asset_touched::<AssetFile>(shader_id)) {
                         assets.update_asset::<RawShader, AssetFile>(shader_id);
                         let raw_shader = assets.get_asset(shader_id).unwrap();
-                        let shader = Shader::process_raw(raw_shader, shader_defines.clone());
+                        let shader = match Shader::process_raw(raw_shader, shader_defines.clone()) {
+                            Ok(shader) => shader,
+                            Err(err) => {
+                                log::error!(
+                                    "Failed to preprocess pipeline pipeline_{}: {}",
+                                    name,
+                                    err
+                                );
+                                break 'compute_pipeline_creation None;
+                            }
+                        };
+                        let shader_module = match shader.create_module(&device) {
+                            Ok(shader_module) => shader_module,
+                            Err(err) => {
+                                log::error!(
+                                    "Failed to compile pipeline shaders for pipeline_{}: {}",
+                                    name,
+                                    err
+                                );
+                                break 'compute_pipeline_creation None;
+                            }
+                        };
 
                         let compute_pipeline =
                             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                                 label: Some(&format!("pipeline_{}", name)),
                                 layout: Some(pipeline_layout),
-                                module: &shader.create_module(&device),
+                                module: &shader_module,
                                 entry_point: "main",
                                 compilation_options: wgpu::PipelineCompilationOptions::default(),
+                                cache: None,
                             });
 
                         Some(Pipeline::Compute(compute_pipeline))
@@ -93,17 +116,24 @@ impl RenderPipelineManager {
             };
 
             if let Some(pipeline) = pipeline {
+                debug!(
+                    "Updating pipeline pipeline_{}",
+                    pipeline_data.create_info.name()
+                );
                 pipeline_manager
                     .pipelines
                     .get_mut(&pipeline_id)
                     .unwrap()
                     .pipeline = pipeline;
+
                 // Pipeline compilation may have affected any temporal effects so those should be
                 // reset.
                 pipeline_manager.reset_temporal_effects = true;
             }
         }
 
+        // Process any queued pipelines, enqueus shader asset loading and constructs pipeline
+        // layouts.
         for (pipeline_id, create_info) in pipeline_manager
             .queued_pipelines
             .drain(..)
@@ -132,15 +162,20 @@ impl RenderPipelineManager {
                         assets.load_asset::<RawShader, AssetFile>(shader_path.clone());
                     shaders.push(shader_handle.clone());
                     let raw_shader = assets.get_asset(&shader_handle).unwrap();
-                    let shader = Shader::process_raw(raw_shader, shader_defines.clone());
+                    let shader = Shader::process_raw(raw_shader, shader_defines.clone())
+                        .expect("First time creation of shader couldn't preprocess.");
+                    let shader_module = shader
+                        .create_module(&device)
+                        .expect("First tiem creation of shader could'nt compile.");
 
                     let compute_pipeline =
                         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                             label: Some(&format!("pipeline_{}", name)),
                             layout: Some(pipeline_layout),
-                            module: &shader.create_module(&device),
+                            module: &shader_module,
                             entry_point: "main",
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            cache: None,
                         });
 
                     Pipeline::Compute(compute_pipeline)

@@ -12,13 +12,15 @@ use nalgebra::Vector3;
 use crate::common::{bitset::Bitset, morton::morton_decode};
 
 use super::{
+    attachment::Attachment,
     esvo::VoxelModelESVO,
-    voxel::{Attachment, VoxelModelGpuNone, VoxelModelImpl},
+    voxel::{VoxelModelGpuNone, VoxelModelImpl},
 };
 
 /// A float 1D array representing a 3D voxel region.
 pub struct VoxelModelFlat {
     pub attachment_data: HashMap<Attachment, Vec<u32>>,
+    pub attachment_presence_data: HashMap<Attachment, Bitset>,
     pub presence_data: Bitset,
     length: Vector3<u32>,
     volume: usize,
@@ -42,6 +44,7 @@ impl VoxelModelFlat {
     pub fn new(
         presence_data: Bitset,
         attachment_data: HashMap<Attachment, Vec<u32>>,
+        attachment_presence_data: HashMap<Attachment, Bitset>,
         length: Vector3<u32>,
     ) -> Self {
         let volume = length.product() as usize;
@@ -51,9 +54,13 @@ impl VoxelModelFlat {
         for (attachment, data) in &attachment_data {
             assert_eq!(attachment.size() as usize * volume as usize, data.len());
         }
+        for (attachment, data) in &attachment_presence_data {
+            assert_eq!(data.bits(), volume as usize);
+        }
         Self {
             presence_data,
             attachment_data,
+            attachment_presence_data,
             length,
             volume,
         }
@@ -61,7 +68,12 @@ impl VoxelModelFlat {
 
     pub fn new_empty(length: Vector3<u32>) -> Self {
         let volume = length.x * length.y * length.z;
-        Self::new(Bitset::new(volume as usize), HashMap::new(), length)
+        Self::new(
+            Bitset::new(volume as usize),
+            HashMap::new(),
+            HashMap::new(),
+            length,
+        )
     }
 
     pub fn get_voxel_index(&self, position: Vector3<u32>) -> usize {
@@ -200,10 +212,22 @@ impl<'a> VoxelModelFlatVoxelAccess<'a> {
         self.flat_model
             .attachment_data
             .iter()
-            .map(|(attachment, data)| {
+            .filter_map(|(attachment, data)| {
+                let exists = self
+                    .flat_model
+                    .attachment_presence_data
+                    .get(attachment)
+                    .expect(
+                        "If raw attachment data exists then it's presence data should also exist.",
+                    )
+                    .get_bit(self.index);
+                if !exists {
+                    return None;
+                }
+
                 let i = attachment.size() as usize * self.index;
                 let data = &data[i..(i + attachment.size() as usize)];
-                (attachment.clone(), data)
+                Some((attachment.clone(), data))
             })
             .collect::<HashMap<_, _>>()
     }
@@ -215,27 +239,71 @@ pub struct VoxelModelFlatVoxelAccessMut<'a> {
 }
 
 impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
-    pub fn set_attachment<T: Pod>(&mut self, attachment: Attachment, value: T) {
-        self.flat_model.presence_data.set_bit(self.index, true);
-        if !self.flat_model.attachment_data.contains_key(&attachment) {
-            self.flat_model.attachment_data.insert(
-                attachment.clone(),
-                vec![0u32; attachment.size() as usize * self.flat_model.volume()],
-            );
-        }
+    pub fn set_attachment<T: Pod>(&mut self, attachment: Attachment, value: Option<T>) {
+        self.flat_model
+            .presence_data
+            .set_bit(self.index, value.is_some());
 
-        assert_eq!(std::mem::size_of::<T>(), attachment.size() as usize * 4);
-        let mut attachment_data = self
-            .flat_model
-            .attachment_data
-            .get_mut(&attachment)
-            .unwrap()
-            .as_mut_slice();
+        if let Some(value) = value {
+            // If the attachment presence data doesn't exist, that means the raw array also doesn't
+            // exist so initialize both.
+            if !self
+                .flat_model
+                .attachment_presence_data
+                .contains_key(&attachment)
+            {
+                self.flat_model
+                    .attachment_presence_data
+                    .insert(attachment.clone(), Bitset::new(self.flat_model.volume));
+                self.flat_model.attachment_data.insert(
+                    attachment.clone(),
+                    vec![0u32; attachment.size() as usize * self.flat_model.volume()],
+                );
+            }
 
-        let value = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&value));
-        let initial_offset = self.index * attachment.size() as usize;
-        for i in 0..attachment.size() as usize {
-            attachment_data[initial_offset + i] = value[i];
+            // Mark attachment presence.
+            self.flat_model
+                .attachment_presence_data
+                .get_mut(&attachment)
+                .unwrap()
+                .set_bit(self.index, true);
+
+            assert_eq!(std::mem::size_of::<T>(), attachment.size() as usize * 4);
+            let mut attachment_data = self
+                .flat_model
+                .attachment_data
+                .get_mut(&attachment)
+                .unwrap()
+                .as_mut_slice();
+
+            let value = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&value));
+            let initial_offset = self.index * attachment.size() as usize;
+            for i in 0..attachment.size() as usize {
+                attachment_data[initial_offset + i] = value[i];
+            }
+        } else {
+            if let Some(attachment_presence_data) = self
+                .flat_model
+                .attachment_presence_data
+                .get_mut(&attachment)
+            {
+                // Unmark attachment presence if it exists.
+                attachment_presence_data.set_bit(self.index, false);
+
+                // If there are no attachments related to this voxel, then clear its general
+                // presence since it holds no data.
+                let mut should_clear = true;
+                for (attachment_presence) in self.flat_model.attachment_presence_data.values() {
+                    if attachment_presence.get_bit(self.index) {
+                        should_clear = false;
+                        break;
+                    }
+                }
+
+                if should_clear {
+                    self.flat_model.presence_data.set_bit(self.index, false);
+                }
+            }
         }
     }
 }

@@ -72,11 +72,10 @@ impl Player {
 
         let mut translation = Vector3::new(0.0, 0.0, 0.0);
         if input_axes.x != 0.0 || input_axes.y != 0.0 {
-            let rotated_xz = transform.isometry.rotation.transform_vector(&Vector3::new(
-                input_axes.x,
-                0.0,
-                input_axes.y,
-            ));
+            let yaw_quaternion = UnitQuaternion::from_euler_angles(0.0, player.euler.y, 0.0);
+            let rotated_xz = yaw_quaternion
+                .transform_vector(&Vector3::new(input_axes.x, 0.0, input_axes.y))
+                .normalize();
             translation.x = rotated_xz.x;
             translation.z = rotated_xz.z;
         }

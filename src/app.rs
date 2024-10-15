@@ -8,6 +8,7 @@ use winit::{
 
 use crate::{
     engine::{
+        self,
         asset::asset::Assets,
         ecs::ecs_world::ECSWorld,
         graphics::{
@@ -110,17 +111,14 @@ impl App {
             &self.resource_bank().get_resource::<DeviceResource>(),
             &mut render_pipeline_manager,
         );
-        let voxel_world = VoxelWorld::new();
-        let voxel_world_gpu = VoxelWorldGpu::new();
 
         let rb = self.resource_bank_mut();
         rb.insert(ui_state);
         rb.insert(egui);
         rb.insert(render_pipeline_manager);
         rb.insert(renderer);
-        rb.insert(voxel_world);
-        rb.insert(voxel_world_gpu);
 
+        engine::voxel::initialize_voxel_world_resources(rb);
         // Game Stuff
 
         let game_world = GameWorld::new();
@@ -229,7 +227,7 @@ impl winit::application::ApplicationHandler for App {
                         .get_resource_mut::<DeviceResource>()
                         .resize_surface(new_size);
 
-                    debug!("Resize");
+                    debug!("Resized window to {}x{}", new_size.width, new_size.height);
                     // TODO: Option to change between depending on window resize mode.
                     self.resource_bank()
                         .get_resource_mut::<Settings>()
