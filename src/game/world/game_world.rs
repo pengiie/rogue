@@ -1,8 +1,5 @@
 use core::f32;
-use std::{
-    borrow::Borrow,
-    time::{Duration, Instant},
-};
+use std::borrow::Borrow;
 
 use log::debug;
 use nalgebra::{Translation3, Vector3};
@@ -21,7 +18,7 @@ use crate::{
             vox_consts,
             voxel::{RenderableVoxelModel, VoxelModel, VoxelModelSchema},
         },
-        window::time::Time,
+        window::time::{Instant, Time},
     },
     game,
 };

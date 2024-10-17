@@ -74,7 +74,8 @@ impl App {
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
         cfg_if::cfg_if! {
             if #[cfg(target_arch = "wasm32")] {
-                winit::platform::web::{ActiveEventLoopExtWebSys, EventLoopExtWebSys},
+                use winit::platform::web::{ActiveEventLoopExtWebSys, EventLoopExtWebSys};
+
                 event_loop.spawn_app(self);
             } else {
                 let _ = event_loop.run_app(&mut self);
@@ -186,7 +187,9 @@ impl winit::application::ApplicationHandler for App {
                     return;
                 }
 
+                debug!("Game loop");
                 game_loop::game_loop(self);
+                debug!("Game loop end");
 
                 self.resource_bank
                     .get_resource_mut::<Window>()
@@ -196,7 +199,8 @@ impl winit::application::ApplicationHandler for App {
                     .finish_frame();
             }
             WinitWindowEvent::Resized(new_size) => {
-                if !self.did_first_resize {
+                debug!("Window resized {:?}", new_size);
+                if !self.did_first_resize && new_size.width > 0 && new_size.height > 0 {
                     self.did_first_resize = true;
 
                     self.init_pre_graphics();

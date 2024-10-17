@@ -9,7 +9,6 @@ use downcast::Downcast;
 use egui::debug_text::print;
 use log::{debug, warn};
 use nalgebra::Vector3;
-use wgpu::core::device;
 
 use crate::{common::morton::morton_decode, engine::graphics::device::DeviceResource};
 
@@ -150,7 +149,7 @@ impl VoxelModelESVO {
         let bucket_info = BucketLookupInfo::empty(
             self.bucket_lookup.len() as u32,
             self.node_data.len() as u32,
-            1 << 20,
+            1 << 15,
         );
         self.node_data.resize(
             self.node_data.len() + bucket_info.bucket_total_size as usize,

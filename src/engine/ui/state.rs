@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
-
 use rogue_macros::Resource;
+
+use crate::engine::window::time::{Instant, Time};
 
 #[derive(Resource)]
 pub struct UIState {

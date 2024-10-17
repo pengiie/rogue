@@ -77,6 +77,9 @@ impl DeviceResource {
                 .await
                 .expect("Couldn't get graphics device");
 
+            let limits = device.limits();
+            debug!("Device limits are: {:?}", limits);
+
             let surface_caps = surface.get_capabilities(&adapter);
             let surface_format = *surface_caps
                 .formats

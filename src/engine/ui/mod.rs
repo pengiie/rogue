@@ -1,12 +1,13 @@
-use std::time::Instant;
-
 use gui::Egui;
 use state::UIState;
 
 use super::{
     graphics::renderer::Renderer,
     resource::{Res, ResMut},
-    window::{time::Time, window::Window},
+    window::{
+        time::{Instant, Time},
+        window::Window,
+    },
 };
 
 pub mod gui;

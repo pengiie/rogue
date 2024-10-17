@@ -1,3 +1,5 @@
+use log::debug;
+
 use crate::{
     app::App,
     engine::{
@@ -63,6 +65,7 @@ pub fn game_loop(app: &App) {
     // Render the frame to the swapchain.
     app.run_system(Renderer::render);
 
+    debug!("stuck");
     // ------- FRAME CLEANUP ---------
 
     // Discard any inputs cached for this frame.

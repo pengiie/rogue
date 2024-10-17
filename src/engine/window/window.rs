@@ -1,3 +1,4 @@
+use log::{debug, info, warn};
 use rogue_macros::Resource;
 use winit::{
     self,
@@ -33,7 +34,7 @@ pub type WindowHandle = std::sync::Arc<WinitWindow>;
 #[derive(Resource)]
 pub struct Window {
     winit_window: WindowHandle,
-    is_first_frame: bool
+    is_first_frame: bool,
 }
 
 impl raw_window_handle::HasDisplayHandle for Window {
@@ -60,7 +61,7 @@ impl Window {
         cfg_if::cfg_if! {
             if #[cfg(target_arch = "wasm32")] {
                 use wasm_bindgen::JsCast;
-                use winit::platform::web::WindowAttributesExtWebSys,
+                use winit::platform::web::WindowAttributesExtWebSys;
 
                 window_attrs = web_sys::window()
                     .and_then(|window| window.document())
@@ -97,7 +98,9 @@ impl Window {
         } else {
             winit::window::CursorGrabMode::None
         };
-        self.winit_window.set_cursor_grab(grab_mode).unwrap();
+        if let Err(_) = self.winit_window.set_cursor_grab(grab_mode) {
+            warn!("This platform does not support cursor grabbing.");
+        }
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {

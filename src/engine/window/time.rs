@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{ops::Sub, time::Duration};
 
 use rogue_macros::Resource;
 
@@ -45,5 +45,38 @@ impl Time {
 
     pub fn frame_count(&self) -> u32 {
         self.frame_count
+    }
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct Instant(std::time::Duration);
+
+impl Instant {
+    pub fn now() -> Self {
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "wasm32")] {
+                Instant(
+                    std::time::Duration::from_secs_f64(
+                        web_sys::window()
+                            .unwrap()
+                            .performance()
+                            .expect("Can't get Performance api to calculate frame times.")
+                            .now() / 1000.0))
+            } else {
+                Instant(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap())
+            }
+        }
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        Self::now() - *self
+    }
+}
+
+impl Sub<Instant> for Instant {
+    type Output = Duration;
+
+    fn sub(self, rhs: Instant) -> Self::Output {
+        self.0 - rhs.0
     }
 }

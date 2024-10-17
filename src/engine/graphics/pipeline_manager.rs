@@ -6,6 +6,7 @@ use rogue_macros::Resource;
 use crate::engine::{
     asset::asset::{AssetFile, AssetHandle, AssetId, AssetLoader, AssetPath, Assets},
     resource::{Res, ResMut},
+    window::time::Instant,
 };
 
 use super::{
@@ -18,6 +19,7 @@ pub struct RenderPipelineManager {
     pipelines: HashMap<PipelineId, PipelineData>,
     pipeline_layouts: HashMap<PipelineId, wgpu::PipelineLayout>,
     queued_pipelines: Vec<(PipelineId, PipelineCreateInfo)>,
+    processing_pipelines: HashMap<PipelineId, ProcessingPipeline>,
     reset_temporal_effects: bool,
     id_counter: u64,
 }
@@ -28,6 +30,7 @@ impl RenderPipelineManager {
             pipelines: HashMap::new(),
             pipeline_layouts: HashMap::new(),
             queued_pipelines: Vec::new(),
+            processing_pipelines: HashMap::new(),
             reset_temporal_effects: false,
             id_counter: 0,
         }
@@ -41,110 +44,108 @@ impl RenderPipelineManager {
         // Every frame this is the default.
         pipeline_manager.reset_temporal_effects = false;
 
+        pipeline_manager.process_pipelines(&mut assets, &device);
+
         // Update pipeline for any updated shaders.
-        for pipeline_id in pipeline_manager
-            .pipelines
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>()
-        {
-            let pipeline_layout = pipeline_manager.pipeline_layouts.get(&pipeline_id).unwrap();
-            let mut is_dirty = false;
-            let pipeline_data = pipeline_manager.pipelines.get(&pipeline_id).unwrap();
-            let shaders = pipeline_manager
-                .pipelines
-                .get(&pipeline_id)
-                .unwrap()
-                .shaders
-                .clone();
+        // for pipeline_id in pipeline_manager
+        //     .pipelines
+        //     .iter()
+        //     .map(|(id, _)| *id)
+        //     .collect::<Vec<_>>()
+        // {
+        //     let pipeline_layout = pipeline_manager.pipeline_layouts.get(&pipeline_id).unwrap();
+        //     let mut is_dirty = false;
+        //     let pipeline_data = pipeline_manager.pipelines.get(&pipeline_id).unwrap();
+        //     let shaders = pipeline_manager
+        //         .pipelines
+        //         .get(&pipeline_id)
+        //         .unwrap()
+        //         .shaders
+        //         .clone();
 
-            let pipeline = match &pipeline_data.create_info {
-                PipelineCreateInfo::Render {
-                    name,
-                    vertex_path,
-                    vertex_defines,
-                    fragment_path,
-                    fragment_defines,
-                } => todo!(),
-                PipelineCreateInfo::Compute {
-                    name,
-                    shader_path,
-                    shader_defines,
-                } => 'compute_pipeline_creation: {
-                    let shader_id = shaders.first().unwrap();
-                    if (assets.is_asset_touched::<AssetFile>(shader_id)) {
-                        assets.update_asset::<RawShader, AssetFile>(shader_id);
-                        let raw_shader = assets.get_asset(shader_id).unwrap();
-                        let shader = match Shader::process_raw(raw_shader, shader_defines.clone()) {
-                            Ok(shader) => shader,
-                            Err(err) => {
-                                log::error!(
-                                    "Failed to preprocess pipeline pipeline_{}: {}",
-                                    name,
-                                    err
-                                );
-                                break 'compute_pipeline_creation None;
-                            }
-                        };
-                        let shader_module = match shader.create_module(&device) {
-                            Ok(shader_module) => shader_module,
-                            Err(err) => {
-                                log::error!(
-                                    "Failed to compile pipeline shaders for pipeline_{}: {}",
-                                    name,
-                                    err
-                                );
-                                break 'compute_pipeline_creation None;
-                            }
-                        };
+        //     let pipeline = match &pipeline_data.create_info {
+        //         PipelineCreateInfo::Render {
+        //             name,
+        //             vertex_path,
+        //             vertex_defines,
+        //             fragment_path,
+        //             fragment_defines,
+        //         } => todo!(),
+        //         PipelineCreateInfo::Compute {
+        //             name,
+        //             shader_path,
+        //             shader_defines,
+        //         } => 'compute_pipeline_creation: {
+        //             let shader_id = shaders.first().unwrap();
+        //             if (assets.is_asset_touched::<AssetFile>(shader_id)) {
+        //                 assets.update_asset::<RawShader, AssetFile, AssetFile>(shader_id);
+        //                 let raw_shader = assets.get_asset(shader_id).unwrap();
+        //                 let shader = match Shader::process_raw(raw_shader, shader_defines.clone()) {
+        //                     Ok(shader) => shader,
+        //                     Err(err) => {
+        //                         log::error!(
+        //                             "Failed to preprocess pipeline pipeline_{}: {}",
+        //                             name,
+        //                             err
+        //                         );
+        //                         break 'compute_pipeline_creation None;
+        //                     }
+        //                 };
+        //                 let shader_module = match shader.create_module(&device) {
+        //                     Ok(shader_module) => shader_module,
+        //                     Err(err) => {
+        //                         log::error!(
+        //                             "Failed to compile pipeline shaders for pipeline_{}: {}",
+        //                             name,
+        //                             err
+        //                         );
+        //                         break 'compute_pipeline_creation None;
+        //                     }
+        //                 };
 
-                        let compute_pipeline =
-                            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                                label: Some(&format!("pipeline_{}", name)),
-                                layout: Some(pipeline_layout),
-                                module: &shader_module,
-                                entry_point: "main",
-                                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                                cache: None,
-                            });
+        //                 let compute_pipeline =
+        //                     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        //                         label: Some(&format!("pipeline_{}", name)),
+        //                         layout: Some(pipeline_layout),
+        //                         module: &shader_module,
+        //                         entry_point: "main",
+        //                         compilation_options: wgpu::PipelineCompilationOptions::default(),
+        //                         cache: None,
+        //                     });
 
-                        Some(Pipeline::Compute(compute_pipeline))
-                    } else {
-                        None
-                    }
-                }
-            };
+        //                 Some(Pipeline::Compute(compute_pipeline))
+        //             } else {
+        //                 None
+        //             }
+        //         }
+        //     };
 
-            if let Some(pipeline) = pipeline {
-                debug!(
-                    "Updating pipeline pipeline_{}",
-                    pipeline_data.create_info.name()
-                );
-                pipeline_manager
-                    .pipelines
-                    .get_mut(&pipeline_id)
-                    .unwrap()
-                    .pipeline = pipeline;
+        //     if let Some(pipeline) = pipeline {
+        //         debug!(
+        //             "Updating pipeline pipeline_{}",
+        //             pipeline_data.create_info.name()
+        //         );
+        //         pipeline_manager
+        //             .pipelines
+        //             .get_mut(&pipeline_id)
+        //             .unwrap()
+        //             .pipeline = pipeline;
 
-                // Pipeline compilation may have affected any temporal effects so those should be
-                // reset.
-                pipeline_manager.reset_temporal_effects = true;
-            }
-        }
+        //         // Pipeline compilation may have affected any temporal effects so those should be
+        //         // reset.
+        //         pipeline_manager.reset_temporal_effects = true;
+        //     }
+        // }
+    }
 
-        // Process any queued pipelines, enqueus shader asset loading and constructs pipeline
-        // layouts.
-        for (pipeline_id, create_info) in pipeline_manager
-            .queued_pipelines
-            .drain(..)
-            .collect::<Vec<_>>()
-        {
-            let pipeline_layout = pipeline_manager
+    fn process_pipelines(&mut self, assets: &mut Assets, device: &DeviceResource) {
+        // Process any queued pipelines, enqueues shader asset loading.
+        for (pipeline_id, create_info) in self.queued_pipelines.drain(..).collect::<Vec<_>>() {
+            let pipeline_layout = self
                 .pipeline_layouts
                 .get(&pipeline_id)
                 .expect("Pipeline layout should have been made when the pipeline was requested.");
-            let mut shaders = Vec::new();
-            let pipeline = match &create_info {
+            let shaders = match &create_info {
                 PipelineCreateInfo::Render {
                     name,
                     vertex_path,
@@ -157,40 +158,101 @@ impl RenderPipelineManager {
                     shader_path,
                     shader_defines,
                 } => {
-                    // TODO: Change logic that handles this when asset loading becomes async.
+                    let profile = Instant::now();
                     let shader_handle =
-                        assets.load_asset::<RawShader, AssetFile>(shader_path.clone());
-                    shaders.push(shader_handle.clone());
-                    let raw_shader = assets.get_asset(&shader_handle).unwrap();
-                    let shader = Shader::process_raw(raw_shader, shader_defines.clone())
-                        .expect("First time creation of shader couldn't preprocess.");
-                    let shader_module = shader
-                        .create_module(&device)
-                        .expect("First tiem creation of shader could'nt compile.");
+                        assets.load_asset::<RawShader, AssetFile, AssetFile>(shader_path.clone());
+                    debug!(
+                        "Shader loaded in {}ms",
+                        profile.elapsed().as_secs_f32() * 1000.0
+                    );
 
-                    let compute_pipeline =
-                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: Some(&format!("pipeline_{}", name)),
-                            layout: Some(pipeline_layout),
-                            module: &shader_module,
-                            entry_point: "main",
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            cache: None,
-                        });
-
-                    Pipeline::Compute(compute_pipeline)
+                    vec![shader_handle]
+                    //                     let raw_shader = assets.get_asset(&shader_handle).unwrap();
+                    //                     let shader = Shader::process_raw(raw_shader, shader_defines.clone())
+                    //                         .expect("First time creation of shader couldn't preprocess.");
+                    //                     let shader_module = shader
+                    //                         .create_module(&device)
+                    //                         .expect("First tiem creation of shader could'nt compile.");
+                    //
+                    //                     let compute_pipeline =
+                    //                         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    //                             label: Some(&format!("pipeline_{}", name)),
+                    //                             layout: Some(pipeline_layout),
+                    //                             module: &shader_module,
+                    //                             entry_point: "main",
+                    //                             compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    //                             cache: None,
+                    //                         });
+                    //
+                    //                     Pipeline::Compute(compute_pipeline)
                 }
             };
 
-            let pipeline_data = PipelineData {
-                pipeline,
-                create_info,
-                shaders,
-            };
+            self.processing_pipelines.insert(
+                pipeline_id,
+                ProcessingPipeline {
+                    create_info,
+                    shader_handles: shaders,
+                },
+            );
+        }
 
-            pipeline_manager
-                .pipelines
-                .insert(pipeline_id, pipeline_data);
+        // Check all currently processing pipelines and see if the shader assets are ready to build
+        // the pipeline.
+        let mut to_remove_ids = Vec::new();
+        for (id, processing_pipeline) in &self.processing_pipelines {
+            if processing_pipeline.is_ready(assets) {
+                to_remove_ids.push(*id);
+
+                let pipeline = match &processing_pipeline.create_info {
+                    PipelineCreateInfo::Render {
+                        name,
+                        vertex_path,
+                        vertex_defines,
+                        fragment_path,
+                        fragment_defines,
+                    } => todo!(),
+                    PipelineCreateInfo::Compute {
+                        name,
+                        shader_path,
+                        shader_defines,
+                    } => {
+                        let shader_handle = &processing_pipeline.shader_handles[0];
+                        let raw_shader = assets.get_asset(shader_handle).unwrap();
+                        let shader = Shader::process_raw(raw_shader, shader_defines.clone())
+                            .expect("First time creation of shader couldn't preprocess.");
+                        let shader_module = shader
+                            .create_module(&device)
+                            .expect("First tiem creation of shader couldn't compile.");
+                        debug!("Finished making it");
+
+                        let pipeline_layout = self.pipeline_layouts.get(id).unwrap();
+                        let compute_pipeline =
+                            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                                label: Some(&format!("pipeline_{}", name)),
+                                layout: Some(pipeline_layout),
+                                module: &shader_module,
+                                entry_point: "main",
+                                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                                cache: None,
+                            });
+
+                        Pipeline::Compute(compute_pipeline)
+                    }
+                };
+
+                self.pipelines.insert(
+                    *id,
+                    PipelineData {
+                        pipeline,
+                        create_info: processing_pipeline.create_info.clone(),
+                        shaders: processing_pipeline.shader_handles.clone(),
+                    },
+                );
+            }
+        }
+        for id in to_remove_ids {
+            self.processing_pipelines.remove(&id);
         }
     }
 
@@ -206,6 +268,7 @@ impl RenderPipelineManager {
             bind_group_layouts,
             push_constant_ranges: &[],
         });
+
         self.pipeline_layouts.insert(id, pipeline_layout);
         self.queued_pipelines.push((id, create_pipeline_info));
 
@@ -278,6 +341,7 @@ enum Pipeline {
     Compute(wgpu::ComputePipeline),
 }
 
+#[derive(Clone)]
 pub enum PipelineCreateInfo {
     Render {
         name: String,
@@ -299,5 +363,23 @@ impl PipelineCreateInfo {
             PipelineCreateInfo::Render { name, .. } => name,
             PipelineCreateInfo::Compute { name, .. } => name,
         }
+    }
+}
+
+pub struct ProcessingPipeline {
+    create_info: PipelineCreateInfo,
+    shader_handles: Vec<AssetHandle>,
+}
+
+impl ProcessingPipeline {
+    /// Returns true if all the shader assets have been loaded.
+    fn is_ready(&self, assets: &Assets) -> bool {
+        for handle in &self.shader_handles {
+            if assets.get_asset::<RawShader>(handle).is_none() {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

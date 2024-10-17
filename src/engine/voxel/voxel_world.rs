@@ -86,7 +86,7 @@ impl VoxelWorldGpu {
         }
 
         if voxel_world_gpu.allocator.is_none() {
-            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 30));
+            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 24));
             voxel_world_gpu.is_dirty = true;
         }
         let allocator = voxel_world_gpu.allocator.as_mut().unwrap();
