@@ -109,7 +109,7 @@ impl GameWorld {
                         voxel.set_attachment(
                             Attachment::EMMISIVE,
                             Some(Attachment::encode_emmisive(
-                                64.0 * (vox_consts::VOXEL_WORLD_UNIT_LENGTH).powi(2),
+                                100.0 * (vox_consts::VOXEL_WORLD_UNIT_LENGTH).powi(2),
                             )),
                         );
                     }

@@ -187,9 +187,7 @@ impl winit::application::ApplicationHandler for App {
                     return;
                 }
 
-                debug!("Game loop");
                 game_loop::game_loop(self);
-                debug!("Game loop end");
 
                 self.resource_bank
                     .get_resource_mut::<Window>()

@@ -12,7 +12,7 @@ use naga_oil::compose::ShaderDefValue;
 use pollster::FutureExt;
 use wgpu::ErrorFilter;
 
-use crate::engine::asset::asset::{AssetFile, AssetFuture, AssetLoader};
+use crate::engine::asset::asset::{AssetFile, AssetLoadFuture, AssetLoader};
 
 use super::device::DeviceResource;
 
@@ -46,7 +46,7 @@ pub struct RawShader {
 }
 
 impl AssetLoader<AssetFile> for RawShader {
-    fn load(data: &AssetFile) -> impl AssetFuture<Self> {
+    fn load(data: &AssetFile) -> impl AssetLoadFuture<Self> {
         async move {
             Ok(RawShader {
                 source: data.read_contents().await,
@@ -83,38 +83,19 @@ impl Shader {
     }
 
     pub fn create_module(&self, device: &DeviceResource) -> anyhow::Result<wgpu::ShaderModule> {
-        //device.push_error_scope(ErrorFilter::Validation);
+        #[cfg(not(target_arch = "wasm32"))]
+        device.push_error_scope(ErrorFilter::Validation);
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(&self.source)),
         });
-        debug!("Making shader module!!!!");
 
-        // let mut error: Option<wgpu::Error> = None;
-        // cfg_if::cfg_if! {
-        //     if #[cfg(target_arch = "wasm32")] {
-        //         let (send, recv) = channel::<Option<wgpu::Error>>();
-        //         let error_fut = device.pop_error_scope();
-        //         let fut = async move {
-        //             let error = error_fut.await;
-        //             let _ = send.send(error);
-        //         };
-        //         wasm_bindgen_futures::spawn_local(fut);
-        //         if let Ok(recv_error) = recv.recv_timeout(Duration::from_secs(10)) {
-        //             error = recv_error;
-        //         } else {
-        //             anyhow::bail!("Couldn't pop wgpu error scope, sender timed out.");
-        //         }
-        //     } else {
-        //         error = pollster::block_on(device.pop_error_scope());
-        //     }
-        // }
-
-        // if let Some(error) = error {
-        //     let shader_info = pollster::block_on(module.get_compilation_info());
-        //     return Err(anyhow!(error.to_string()));
-        // }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+            let shader_info = pollster::block_on(module.get_compilation_info());
+            return Err(anyhow!(error.to_string()));
+        }
 
         Ok(module)
     }

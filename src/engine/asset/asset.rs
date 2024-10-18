@@ -2,7 +2,7 @@ use core::panic;
 use std::{
     any::Any,
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::{Future, IntoFuture},
     hash::{DefaultHasher, Hash, Hasher},
     io::Read,
@@ -18,7 +18,6 @@ use std::{
 use log::debug;
 use regex::Regex;
 use rogue_macros::Resource;
-use wasm_bindgen::JsCast;
 
 use crate::engine::resource::ResMut;
 
@@ -29,6 +28,7 @@ pub struct Assets {
     assets: HashMap<AssetId, AssetData>,
     queued_assets: VecDeque<QueuedAsset>,
     processing_assets: Vec<ProcessingAsset>,
+    currently_loading_assets: HashSet<AssetId>,
     id_counter: AtomicU64,
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -41,6 +41,7 @@ impl Assets {
             assets: HashMap::new(),
             queued_assets: VecDeque::new(),
             processing_assets: Vec::new(),
+            currently_loading_assets: HashSet::new(),
             id_counter: AtomicU64::new(0),
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -74,14 +75,16 @@ impl Assets {
         for (processing_asset, result) in processed_assets {
             let result = result.unwrap();
             match result {
-                Ok(asset) => {
+                Ok(ProcessedAsset {path, data, hash}) => {
                     let id = processing_asset.id;
+                    assets.currently_loading_assets.remove(&id);
                     assets.assets.insert(
                         id,
                         AssetData {
-                            data: asset,
+                            data,
+                            path, 
                             is_touched: false,
-                            last_hash: None,
+                            last_hash: Some(hash),
                         },
                     );
                 }
@@ -99,12 +102,10 @@ impl Assets {
 
             let (send, recv) = channel::<ProcessingAssetResult>();
 
-            debug!("Enqueueing load asset!");
             let load_fut = async move {
                 let asset_data = enqueued_asset.load_fut.await;
 
                 send.send(asset_data);
-                debug!("Loading asset!");
             };
 
             cfg_if::cfg_if! {
@@ -124,14 +125,6 @@ impl Assets {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn process_assets(&mut self) {}
-
-    /// Single threaded environment since we are on wasm so we don't have access to an own thread
-    /// pool. Instead we can check the status of promises from our web asset http requests.
-    #[cfg(target_arch = "wasm32")]
-    fn process_assets(&mut self) {}
-
     /// Enqueues the asset to the loading queue. Status on the asset can be queried using the
     /// returned `AssetHandle`.
     pub fn load_asset<T, N, C>(&mut self, path: AssetPath) -> AssetHandle
@@ -149,54 +142,51 @@ impl Assets {
 
         let load_fut = async move {
             let storage = C::from_path(&path);
+            let hash = storage.calculate_hash();
             let contents = T::load(&storage).await;
 
-            contents.map(|c| Box::new(c) as Box<dyn Any + Send>)
+            contents.map(|c| ProcessedAsset { data: Box::new(c) as Box<dyn Any + Send>, hash, path})
         };
 
+        let pin_box = Box::pin(load_fut);
+
+        self.currently_loading_assets.insert(handle.id);
         self.queued_assets.push_back(QueuedAsset {
             id: handle.id,
-            load_fut: Box::pin(load_fut),
+            load_fut: pin_box,
         });
-
-        // TODO: Turn into async.
-        //let asset_hash = storage.calculate_hash();
-        //let asset_data = Box::new(T::load(storage));
-        // let asset_info = AssetData {
-        //     data: asset_data,
-        //     is_touched: false,
-        //     last_hash: None,
-        // };
-        // self.assets.insert(handle.id, asset_info);
 
         handle
     }
 
     pub fn update_asset<T, N, C>(&mut self, handle: &AssetHandle)
     where
-        T: AssetLoader<N> + 'static,
-        N: AssetStorage + 'static,
+        T: AssetLoader<N> + Send + 'static,
+        N: AssetStorage + Send + 'static,
         C: AssetStorageCtor<N> + 'static,
     {
-        // assert_eq!(
-        //     handle.storage_type,
-        //     std::any::TypeId::of::<AssetFile>(),
-        //     "Can only update assets loaded from files."
-        // );
-        // assert_eq!(handle.storage_type, std::any::TypeId::of::<N>());
-        // assert_eq!(handle.asset_type, std::any::TypeId::of::<T>());
+        cfg_if::cfg_if! {
+            if #[cfg(not(target_arch = "wasm32"))] {
+                let curr_data = self.assets.get(&handle.id).expect("update_asset was calling with an invalid AssetHandle");
 
-        // let Some(asset_data) = self.assets.get_mut(&handle.id) else {
-        //     panic!("This handle is invalid for some reason");
-        // };
+                let path_clone = curr_data.path.clone();
+                let load_fut = async move {
+                    let storage = C::from_path(&path_clone);
+                    let hash = storage.calculate_hash();
+                    let contents = T::load(&storage).await;
 
-        // let storage = C::from_path(&handle.path);
+                    contents.map(|c| ProcessedAsset { data: Box::new(c) as Box<dyn Any + Send>, hash, path: path_clone})
+                };
 
-        // let new_asset_hash = storage.calculate_hash();
-        // let new_asset_data = Box::new(T::load(&storage));
-
-        // asset_data.last_hash = new_asset_hash;
-        // asset_data.data = new_asset_data;
+                self.currently_loading_assets.insert(handle.id);
+                self.queued_assets.push_back(QueuedAsset {
+                    id: handle.id,
+                    load_fut: Box::pin(load_fut),
+                });
+            } else {
+                debug!("Ignoring asset update request, not support on web.");
+            }
+        }
     }
 
     pub fn get_asset<T: 'static>(&self, handle: &AssetHandle) -> Option<&T> {
@@ -210,18 +200,36 @@ impl Assets {
         })
     }
 
-    /// Only works for assets loaded through files.
-    pub fn is_asset_touched<T>(&mut self, handle: &AssetHandle) -> bool {
-        unimplemented!()
-        // assert_eq!(handle.storage_type, std::any::TypeId::of::<AssetFile>());
+    pub fn is_asset_loading(&self, handle: &AssetHandle) -> bool {
+        self.currently_loading_assets.contains(&handle.id)
+    }
 
-        // let Some(asset_data) = self.assets.get(&handle.id) else {
-        //     panic!("This handle is invalid for some reason");
-        // };
+    /// Only works for assets loaded through files currently, returns true if the asset was updated.
+    pub fn is_asset_touched<N, C>(&mut self, handle: &AssetHandle) -> bool
+    where
+        N: AssetStorage + Send + 'static,
+        C: AssetStorageCtor<N> + 'static,
+    {
+        assert_eq!(handle.storage_type, std::any::TypeId::of::<N>(), 
+            "Expected asset handle to have the same storage type N is_asset_touched was called with.");
 
-        // let storage = AssetFile::from_path(&handle.path);
+        let Some(asset_data) = self.assets.get_mut(&handle.id) else {
+            panic!("This handle is invalid for some reason");
+        };
 
-        // return storage.calculate_hash() != asset_data.last_hash;
+        if asset_data.is_touched {
+            return true;
+        } 
+
+        let storage = C::from_path(&handle.path);
+        let current_hash = storage.calculate_hash();
+        if asset_data.last_hash.is_some() && current_hash != asset_data.last_hash.unwrap() {
+            asset_data.last_hash = Some(current_hash);
+            asset_data.is_touched = true;
+            return true;
+        }
+
+        return false;
     }
 
     pub fn next_id(&mut self) -> AssetId {
@@ -235,13 +243,41 @@ struct QueuedAsset {
     load_fut: Pin<Box<dyn ProcessingAssetFuture>>,
 }
 
-trait ProcessingAssetFuture: Future<Output = anyhow::Result<Box<dyn std::any::Any + Send>>> {}
-impl<T> ProcessingAssetFuture for T where
-    T: Future<Output = anyhow::Result<Box<dyn std::any::Any + Send>>>
-{
+type AssetHash = u64;
+
+
+cfg_if::cfg_if! {
+    if #[cfg(not(target_arch = "wasm32"))] {
+        trait ProcessingAssetFuture:
+            Future<Output = ProcessingAssetResult> + Send
+        {
+        }
+        impl<T> ProcessingAssetFuture for T where
+            T: Future<Output = ProcessingAssetResult> + Send
+        {
+        }
+    } else {
+        trait ProcessingAssetFuture:
+            Future<Output = ProcessingAssetResult>
+        {
+        }
+        impl<T> ProcessingAssetFuture for T where
+            T: Future<Output = ProcessingAssetResult>
+        {
+        }
+    }
 }
 
-type ProcessingAssetResult = anyhow::Result<Box<dyn std::any::Any + Send>>;
+struct ProcessedAsset {
+    #[cfg(not(target_arch = "wasm32"))]
+    data: Box<dyn std::any::Any + Send>,
+    #[cfg(target_arch = "wasm32")]
+    data: Box<dyn std::any::Any>,
+    path: AssetPath,
+    hash: AssetHash
+}
+
+type ProcessingAssetResult = anyhow::Result<ProcessedAsset>;
 struct ProcessingAsset {
     id: AssetId,
     asset_recv: Receiver<ProcessingAssetResult>,
@@ -251,6 +287,7 @@ pub type AssetId = u64;
 
 pub struct AssetData {
     data: Box<dyn std::any::Any>,
+    path: AssetPath,
     // If the asset file has been touched in any way since the
     is_touched: bool,
     // Used to check if the asset has been modified since loading.
@@ -265,36 +302,39 @@ pub trait AssetStorage {
     fn calculate_hash(&self) -> u64;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub trait AssetFuture<T>: Future<Output = anyhow::Result<T>> + Send
-where
-    T: Sized + std::any::Any,
-{
-}
-#[cfg(not(target_arch = "wasm32"))]
-impl<T, B> AssetFuture<T> for B
-where
-    T: Sized + std::any::Any,
-    B: Future<Output = anyhow::Result<T>> + Send,
-{
+cfg_if::cfg_if! {
+    if #[cfg(not(target_arch = "wasm32"))] {
+        pub trait AssetLoadFuture<T>: Future<Output = anyhow::Result<T>> + Send
+        where
+            T: Sized + std::any::Any,
+        {
+        }
+
+        impl<T, B> AssetLoadFuture<T> for B
+        where
+            T: Sized + std::any::Any,
+            B: Future<Output = anyhow::Result<T>> + Send,
+        {
+        }
+    } else {
+        pub trait AssetLoadFuture<T>: Future<Output = anyhow::Result<T>>
+        where
+            T: Sized + std::any::Any,
+        {
+        }
+
+        impl<T, B> AssetLoadFuture<T> for B
+        where
+            T: Sized + std::any::Any,
+            B: Future<Output = anyhow::Result<T>>,
+        {
+        }
+    }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub trait AssetFuture<T>: Future<Output = anyhow::Result<T>>
-where
-    T: Sized + std::any::Any,
-{
-}
-#[cfg(target_arch = "wasm32")]
-impl<T, B> AssetFuture<T> for B
-where
-    T: Sized + std::any::Any,
-    B: Future<Output = anyhow::Result<T>>,
-{
-}
 
 pub trait AssetLoader<T: AssetStorage> {
-    fn load(data: &T) -> impl AssetFuture<Self>
+    fn load(data: &T) -> impl AssetLoadFuture<Self>
     where
         Self: Sized + std::any::Any;
 }
@@ -346,6 +386,8 @@ impl AssetPath {
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "wasm32")] {
+        use wasm_bindgen::JsCast;
+
         /// File handles on web are just urls to where the asset data can be loaded from.
         pub struct FileHandle(String);
 
@@ -388,6 +430,8 @@ cfg_if::cfg_if! {
             }
 
             pub fn calculate_hash(&self) -> u64 {
+                // While running in the web, assets can't hashed and will not be supported as this
+                // is just a dev feature for checking for file updates.
                 0
             }
         }

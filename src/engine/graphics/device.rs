@@ -76,6 +76,7 @@ impl DeviceResource {
                 )
                 .await
                 .expect("Couldn't get graphics device");
+            device.on_uncaptured_error(Box::new(|err| log::error!("Wgpu Error: {:?}", err)));
 
             let limits = device.limits();
             debug!("Device limits are: {:?}", limits);

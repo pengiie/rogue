@@ -1,5 +1,5 @@
 [build]
-target = "wasm32-unknown-unknown"
+#target = "wasm32-unknown-unknown"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=--ld-path=/nix/store/dy9c5jy40bx02a4rkbhw6d0q1d3izg4z-mold-2.33.0/bin/mold"]

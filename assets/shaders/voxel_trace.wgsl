@@ -38,6 +38,8 @@ fn jenkins_hash(i: u32) -> u32 {
 }
 
 var<private> rng_state: u32 = 0u;
+const TAU: f32 = 6.28318530717958647692528676655900577;
+const PI: f32 = 3.14159265358979323846264338327950288;
 fn init_seed(coord: vec2<u32>) {
   var n = 0x12341234u;
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589; // hash by Hugo Elias
@@ -61,23 +63,30 @@ fn xorshift32() -> u32 {
   return x;
 }
 
-fn rand() -> u32 {
-  rng_state = (rng_state ^ (rng_state << 16)) * 0x69420420 + 0x12341234;
-  return (rng_state >> 8) & 16777215;
+fn rand_u32() -> u32 {
+  let x = xorshift32();
+  return x;
 }
 
-fn frand() -> f32 {
-  return bitcast<f32>(0x3f800000u | (xorshift32() >> 9u)) - 1.0;
+fn rand_f32() -> f32 {
+  return bitcast<f32>(0x3f800000u | (rand_u32() >> 9u)) - 1.0;
 }
 
-// Random 3d unit vector
-fn frand3() -> vec3f {
-  return normalize(vec3f(frand() * 2.0 - 1.0, frand() * 2.0 - 1.0, frand() * 2.0 - 1.0));
+fn rand_unit_vec3f() -> vec3f {
+  let phi = rand_f32() * TAU;
+  let cos_theta = 1.0 - rand_f32() * 2;
+  let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+
+  return vec3f(
+    cos(phi) * sin_theta,
+    sin(phi) * sin_theta,
+    cos_theta
+  );
 }
 
 // normal should be normalized.
 fn rand_hemisphere(normal: vec3f) -> vec3f {
-  let v = frand3();
+  let v = rand_unit_vec3f();
   if (dot(normal, v) < 0.0) {
     return -v;
   }
@@ -86,7 +95,7 @@ fn rand_hemisphere(normal: vec3f) -> vec3f {
 }
 
 fn dither(v: vec3f) -> vec3f {
-  let n = frand()+frand() - 1.0;  // triangular noise
+  let n = rand_f32() + rand_f32() - 1.0;  // triangular noise
   return v + n * exp2(-8.0);
 }
 
@@ -398,7 +407,7 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
 
               let hit_position = ray.origin + ray.dir * curr_hit_info.t_enter;
               // Multiply the normal which has a length of one by some tiny epsilon.
-              let sample_position = curr_aabb.center + (stored_normal * 1.001);
+              let sample_position = curr_aabb.center + (stored_normal * 1.5);
               return voxel_model_trace_hit(radiance_outgoing, albedo, stored_normal, sample_position, hit_position);
             }
           }
@@ -608,13 +617,13 @@ fn calculate_ray_incoming_radiance(ray: Ray) -> vec3f {
   var attenuation = vec3(1.0);
   var radiance_accumulated = vec3(0.0);
 
-  for(var i = 0; i < 3; i++) {
+  for(var i = 0; i < 6; i++) {
     let next_model = get_next_voxel_model(ray_curr, 0.0);
 
     if (!next_model.hit_info.hit) {
       // Only sample background for bounced light.
       if (i != 0) {
-        //radiance_accumulated *= sample_background_radiance(ray_curr) * attenuation;
+         //radiance_accumulated *= sample_background_radiance(ray_curr) * attenuation;
       }
       break;
     }
@@ -629,16 +638,18 @@ fn calculate_ray_incoming_radiance(ray: Ray) -> vec3f {
       break;
     }
 
-    let random_sample_dir = normalize(trace.normal + frand3());
+    let random_sample_dir = normalize(trace.normal + rand_unit_vec3f());
     //let random_sample_dir = rand_hemisphere(trace.normal);
-    let l = dot(trace.normal, random_sample_dir);
+    let l = max(dot(trace.normal, random_sample_dir), 0.0);
     let d = distance(trace.hit_position, ray_curr.origin);
+
     radiance_accumulated += attenuation * trace.radiance_outgoing;
+
     if (length(trace.radiance_outgoing) > 0.0) {
       break;
     }
 
-    attenuation *= trace.albedo;
+    attenuation *= trace.albedo * l;
     ray_curr = Ray(trace.sample_position, random_sample_dir, 1.0 / random_sample_dir);
   }
 
@@ -675,8 +686,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Generate ray depending on camera and a random offset within the pixel.
   // Assumed to be a uniformly distributed random variable.
   let offset = vec2f(
-    frand() - 0.5,
-    frand() - 0.5
+    rand_f32() - 0.5,
+    rand_f32() - 0.5
   );
   
   let ray = construct_camera_ray(vec2f(coords) + offset, vec2f(dimensions));
