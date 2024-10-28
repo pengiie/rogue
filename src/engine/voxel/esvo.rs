@@ -1,22 +1,27 @@
 use std::{
+    borrow::BorrowMut,
     collections::{btree_map::IterMut, HashMap},
-    fmt::Write,
-    ops::Range,
+    fmt::{Display, Pointer, Write},
+    ops::{DerefMut, Range, Rem},
     u32,
 };
 
+use bytemuck::{Pod, Zeroable};
 use downcast::Downcast;
 use egui::debug_text::print;
-use log::{debug, warn};
-use nalgebra::Vector3;
+use log::{debug, error, warn};
+use nalgebra::{ComplexField, Vector3};
 
-use crate::{common::morton::morton_decode, engine::graphics::device::DeviceResource};
+use crate::{
+    common::morton::{morton_decode, morton_encode},
+    engine::graphics::device::DeviceResource,
+};
 
 use super::{
-    attachment::Attachment,
+    attachment::{Attachment, AttachmentId, AttachmentMap},
     voxel::{
-        VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete,
-        VoxelModelSchema, VoxelRange,
+        VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelImplConcrete, VoxelModelSchema, VoxelRange, VoxelRangeData,
     },
     voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
 };
@@ -24,176 +29,313 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct VoxelModelESVO {
     pub length: u32,
+    pub root_node_index: u32,
 
-    pub node_data: Vec<u32>,
-    pub attachment_lookup_data: HashMap<Attachment, Vec<u32>>,
-    pub attachment_raw_data: HashMap<Attachment, Vec<u32>>,
-    pub bucket_lookup: Vec<BucketLookupInfo>,
+    pub node_data: Vec<VoxelModelESVONode>,
+    // Maps index identically to node_data, including page headers and block infos.
+    pub node_metadata_data: Vec<ESVONodeMetadata>,
+
+    pub attachment_lookup_data: HashMap<AttachmentId, Vec<VoxelModelESVOAttachmentLookupNode>>,
+    pub attachment_raw_data: HashMap<AttachmentId, Vec<u32>>,
+    pub attachment_map: AttachmentMap,
+    pub bucket_metadata: Vec<BucketMetadata>,
 
     pub updates: Option<Vec<VoxelModelESVOUpdate>>,
 }
 
 impl VoxelModelESVO {
+    const PAGE_SIZE: u32 = 8192;
+    const DEFAULT_BUCKET_SIZE: u32 = Self::PAGE_SIZE << 1;
+    const DEFAULT_CHILD_CAPACITY: u32 = 4;
+
     pub fn empty(length: u32, track_updates: bool) -> Self {
         assert!(length.is_power_of_two());
-        VoxelModelESVO {
+        let mut s = VoxelModelESVO {
             length,
+            root_node_index: 0,
 
             node_data: Vec::new(),
+            node_metadata_data: Vec::new(),
             attachment_lookup_data: HashMap::new(),
             attachment_raw_data: HashMap::new(),
-            bucket_lookup: Vec::new(),
-            updates: if track_updates {
-                Some(Vec::new())
+            attachment_map: AttachmentMap::new(),
+            bucket_metadata: Vec::new(),
+            updates: track_updates.then_some(Vec::new()),
+        };
+
+        s.root_node_index = s.allocate_node_data(1);
+        s.node_metadata_data[s.root_node_index as usize] =
+            ESVONodeMetadata::Some(ESVONodeMetadataData {
+                parent_index: 0,
+                children_capacity: 0,
+            });
+
+        s
+    }
+
+    // Allocates a child node which itself has a child capacity initially of 0, with the parent
+    // node at `parent_index`.
+    fn allocate_node_child(&mut self, parent_index: u32, default_child_capacity: u32) -> u32 {
+        let parent_node = &self.node_data[parent_index as usize];
+        if parent_node.is_far() {
+            todo!("Deal with far pointer case.");
+        }
+
+        let current_child_capacity = self.node_metadata_data[parent_index as usize]
+            .unwrap()
+            .children_capacity;
+
+        let parent_relative_child_ptr = parent_node.relative_ptr();
+        let parent_children_index = parent_index + parent_relative_child_ptr;
+        let mut child_slot_index: Option<u32> = None;
+        for i in parent_children_index..(parent_children_index + current_child_capacity) {
+            if self.node_metadata_data[i as usize].is_free() {
+                // We found an open child slot for the parents child capactity.
+                child_slot_index = Some(i);
+                break;
+            }
+        }
+
+        let child_slot_index = child_slot_index.unwrap_or_else(|| {
+            // Re-allocate child capacity for the parent node so we can allocate this node as
+            // the parent's child.
+            let new_child_capacity = if current_child_capacity == 0 {
+                default_child_capacity
             } else {
-                None
-            },
-        }
-    }
+                (current_child_capacity * 2).min(8)
+            };
 
-    pub fn new(length: u32, track_updates: bool) -> Self {
-        let mut esvo = Self::empty(length, track_updates);
-        esvo.append_node(Self::encode_node(0, false, 0, 0), None);
-
-        esvo
-    }
-
-    pub fn with_nodes(
-        nodes: Vec<(u32, Option<HashMap<Attachment, u32>>)>,
-        attachment_raw: HashMap<Attachment, Vec<u32>>,
-        length: u32,
-        track_updates: bool,
-    ) -> Self {
-        let mut esvo = Self::empty(length, track_updates);
-
-        // The next index to be written.
-        let mut next_index = 1;
-        // TODO: This struct padding doesnt actually work because we also need to update the child
-        // ptr based off of how many nodes are between this node and the pointed to children nodes,
-        // we must also ensure that children groups are not separated with a page header, there may
-        // be page headers between this node and where the child_ptr is pointing to which would
-        // offset the child pointer but we aren't accounting for that yet so what we need to do is
-        // either make a function to calculate the amount of page headers because which is more
-        // complicated because we can have bucket infos between or and keep track of the nodes and
-        // how many page headers to a node so we know how much to offset references after this, we
-        // can compare the perf of both at some point and choose.
-        //
-        // For now we can just make the bucket size big so we dont have to worry about it.
-        let mut added_struct_padding = 0;
-        for (node_data, attachment_lookup_data) in nodes {
-            assert_eq!(added_struct_padding, 0);
-            // We add the offset the node is now at due to padding .
-            let updated_child_ptr_node = node_data;
-            // We don't have to modify the lookup data raw attachment pointer since the raw
-            // attachment will have the same position since we are making a brand new esvo.
-            esvo.append_node(updated_child_ptr_node, attachment_lookup_data);
-
-            let next_free_bucket = esvo.get_free_bucket() as usize;
-            let next_free = esvo.bucket_lookup[next_free_bucket].bucket_free_start;
-
-            if next_free - next_index > 1 {
-                added_struct_padding += next_free - next_index - 1;
+            let new_children_ptr = self.allocate_node_data(new_child_capacity);
+            if current_child_capacity != 0 {
+                todo!("copy old child values and update their relative pointers accordingly");
             }
 
-            next_index = next_free;
-        }
-        esvo.attachment_raw_data = attachment_raw;
+            let relative_child_ptr = new_children_ptr - parent_index;
+            self.node_data[parent_index as usize].set_relative_ptr(relative_child_ptr);
+            self.node_metadata_data[parent_index as usize]
+                .unwrap_mut()
+                .children_capacity = new_child_capacity;
 
-        esvo
+            new_children_ptr
+        });
+
+        self.node_metadata_data[child_slot_index as usize] =
+            ESVONodeMetadata::Some(ESVONodeMetadataData {
+                parent_index,
+                children_capacity: 0,
+            });
+
+        child_slot_index
     }
 
-    /// Appends the node to self.node_data and the corresponding mapped one-to-one self.attachment_lookup_data
-    pub fn append_node(&mut self, node: u32, leaf_attachments: Option<HashMap<Attachment, u32>>) {
-        let bucket_index = self.get_free_bucket();
-        let bucket = &mut self.bucket_lookup[bucket_index as usize];
+    // Returns the u32 index where the allocation starts.
+    fn allocate_node_data(&mut self, size: u32) -> u32 {
+        assert!(size > 0 && size <= 8);
 
-        self.node_data[bucket.bucket_free_start as usize] = node;
-        let attachment_lookup_index = bucket.bucket_free_start as usize;
-        bucket.node_size += 1;
-        bucket.bucket_free_start += 1;
-        if (bucket.bucket_free_start % 8192) == 0 {
-            bucket.bucket_free_start += 1;
-        }
-        if let Some(leaf_attachments) = leaf_attachments {
-            for (attachment, attachment_lookup_data) in leaf_attachments {
-                self.get_attachment_lookup_data(attachment)[attachment_lookup_index] =
-                    attachment_lookup_data;
-            }
-        }
-    }
-
-    pub fn get_attachment_lookup_data(&mut self, attachment: Attachment) -> &mut Vec<u32> {
-        self.attachment_lookup_data
-            .entry(attachment)
-            .or_insert_with(|| vec![0; self.node_data.len()])
-    }
-
-    pub fn get_free_bucket(&mut self) -> u32 {
-        self.bucket_lookup
+        let free_bucket_index = self
+            .bucket_metadata
             .iter()
             .find_map(|info| {
-                if info.node_size < info.node_capacity {
-                    Some(info.index)
+                if info.node_size + size <= info.node_capacity {
+                    Some(info.metadata_index)
                 } else {
                     None
                 }
             })
             .unwrap_or_else(|| {
-                self.push_empty_bucket();
+                let new_bucket_size = Self::DEFAULT_BUCKET_SIZE;
+                let maximum_possible_page_header_count = 1 + new_bucket_size / Self::PAGE_SIZE;
+                assert!(
+                    new_bucket_size
+                        >= size + self.bucket_info_size() + maximum_possible_page_header_count,
+                    "Newly created bucket isn't big enough to allocate {} contiguous nodes.",
+                    size
+                );
+                assert!(
+                    new_bucket_size >= Self::PAGE_SIZE,
+                    "Bucket must be large than page sizes so a page header can exist for a bucket."
+                );
+                self.push_empty_bucket(new_bucket_size);
 
-                self.bucket_lookup.len() as u32 - 1
-            })
+                self.bucket_metadata.len() as u32 - 1
+            });
+        let free_bucket = self
+            .bucket_metadata
+            .get_mut(free_bucket_index as usize)
+            .unwrap();
+
+        // We can always assume that `bucket_free_start` is never a multiple of `Self::PAGE_SIZE`
+        // since we mantain that on `BucketMetadata` creation and maintain that here.
+        let mut start_index = free_bucket.bucket_free_start;
+        let end_index = start_index + size - 1;
+        let end_page_pre_padding = end_index % Self::PAGE_SIZE;
+        // If the remainder of the start index is larger then the end, then that means the
+        if (start_index % Self::PAGE_SIZE > end_page_pre_padding) {
+            assert!(Self::PAGE_SIZE > size, "The page size must be larger than the max allocation 
+                size of 8 since we must be able to guarantee contiguous data without a page header in the way.");
+
+            // This will position the start index right after the page header was encounted.
+            // The one in the following 2 lines is the account for the page header.
+            let new_start_index = end_index - end_page_pre_padding + 1;
+            free_bucket.node_capacity -= new_start_index - start_index - 1;
+            start_index = new_start_index;
+        }
+
+        free_bucket.bucket_free_start = start_index + size;
+        free_bucket.node_capacity -= size;
+
+        start_index
     }
 
-    pub fn push_empty_bucket(&mut self) {
-        let bucket_info = BucketLookupInfo::empty(
-            self.bucket_lookup.len() as u32,
-            self.node_data.len() as u32,
-            1 << 15,
-        );
-        self.node_data.resize(
-            self.node_data.len() + bucket_info.bucket_total_size as usize,
-            0,
-        );
-        self.bucket_lookup.push(bucket_info);
-        self.node_data[bucket_info.bucket_info_start as usize] = bucket_info.bucket_absolute_start;
-        // TODO: Write attachment indices
-        self.node_data[bucket_info.bucket_info_start as usize + 1] = 0;
+    fn get_attachment_lookup_node_mut(
+        &mut self,
+        attachment_id: AttachmentId,
+        index: u32,
+    ) -> &mut VoxelModelESVOAttachmentLookupNode {
+        let lookup_data = self.get_attachment_lookup_data_mut(attachment_id);
 
-        // Write page headers to point to block info
-        let mut i = bucket_info.bucket_absolute_start;
-        while i < bucket_info.bucket_info_start {
-            if (i % 8192) == 0 {
-                self.node_data[i as usize] = bucket_info.bucket_info_start;
+        &mut lookup_data[index as usize]
+    }
+
+    // Returns the u32 index where the allocation starts.
+    fn allocate_raw_attachment_data(&mut self, attachment_id: AttachmentId, size: u32) -> u32 {
+        assert!(size > 0 && size <= 8);
+
+        let raw_attachment_data = self
+            .attachment_raw_data
+            .entry(attachment_id)
+            .or_insert(Vec::new());
+
+        let mut start_index = raw_attachment_data.len() as u32;
+        raw_attachment_data.resize(raw_attachment_data.len() + size as usize, 0);
+
+        start_index
+    }
+
+    /// Will get or create the child node for this parent index, if the child doesn't exist and
+    /// this node doesn't have any children allocated, it will use allocate `default_child_capacity` children for the parent index.
+    /// This will return None if the child of this node at the specified octant exists as a leaf
+    /// already.
+    pub fn get_or_create_child_node_index(
+        &mut self,
+        parent_index: u32,
+        octant: u32,
+        default_child_capacity: u32,
+    ) -> Option<u32> {
+        let (relative_ptr, is_far, valid_mask, leaf_mask) =
+            self.node_data[parent_index as usize].decode();
+
+        let has_child = (valid_mask & (1 << octant)) > 0;
+        let is_leaf = (leaf_mask & (1 << octant)) > 0;
+
+        if is_leaf {
+            return None;
+        }
+
+        let mut allocated_child_ptr = if !has_child {
+            let mut child_index = self.allocate_node_child(parent_index, default_child_capacity);
+
+            // Clears the bits at the octants bit and to the right so that only octants that should
+            // come after this octant should be present if they exist.
+            let mut must_swap = valid_mask & !((1 << (octant + 1)) - 1) > 0;
+            if must_swap {
+                todo!("swap ordering since octants of a higher norm must be after this one due to implicit child ordering");
             }
 
-            i = (i + 1).next_multiple_of(8192);
+            self.node_data[parent_index as usize].set_valid_mask(valid_mask | (1 << octant));
+
+            child_index
+        } else {
+            let child_offset = (valid_mask & ((1 << octant) - 1)).count_ones();
+            parent_index + relative_ptr + child_offset
+        };
+
+        Some(allocated_child_ptr)
+    }
+
+    pub fn in_bounds(&self, position: Vector3<u32>) -> bool {
+        !(position.x >= self.length || position.y >= self.length || position.z >= self.length)
+    }
+
+    pub fn height(&self) -> u32 {
+        self.length.trailing_zeros()
+    }
+
+    pub fn get_voxel_mut(&mut self, position: Vector3<u32>) -> VoxelModelESVOVoxelAccessMut<'_> {
+        assert!(self.in_bounds(position));
+
+        VoxelModelESVOVoxelAccessMut {
+            esvo_model: self,
+            position,
         }
     }
 
-    pub const fn encode_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> u32 {
-        // Make sure child pointer is only 15 bits.
-        assert!(pointer < (1 << 15), "Pointer is too big.");
-        assert!(valid_mask < (1 << 8), "valid mask is too big.");
-        assert!(leaf_mask < (1 << 8), "leaf mask is too big.");
-        let mut x = 0;
-        x |= pointer << 17;
-        if far {
-            x |= 0x0001_0000;
-        }
-        x |= valid_mask << 8;
-        x |= leaf_mask;
-
-        x
+    pub fn get_attachment_lookup_data_mut(
+        &mut self,
+        attachment_id: AttachmentId,
+    ) -> &mut Vec<VoxelModelESVOAttachmentLookupNode> {
+        self.attachment_lookup_data
+            .entry(attachment_id)
+            .or_insert_with(|| vec![VoxelModelESVOAttachmentLookupNode(0); self.node_data.len()])
     }
 
-    pub const fn decode_node(node: u32) -> (u32, bool, u32, u32) {
-        let child_ptr = node >> 17;
-        let far = if ((node >> 16) & 1) == 1 { true } else { false };
-        let value_mask = (node >> 8) & 0xFF;
-        let leaf_mask = node & 0xFF;
+    pub fn get_attachment_raw_data_mut(&mut self, attachment_id: AttachmentId) -> &mut Vec<u32> {
+        self.attachment_raw_data
+            .entry(attachment_id)
+            .or_insert(Vec::new())
+    }
 
-        (child_ptr, far, value_mask, leaf_mask)
+    // Bucket size must be a power of 2 so that it can be optimally allocated in the world data
+    // buffer.
+    pub fn push_empty_bucket(&mut self, bucket_size: u32) {
+        assert!(bucket_size.is_power_of_two());
+
+        let start_offset = self.node_data.len() as u32;
+        assert!(
+            (start_offset + 1).is_power_of_two(),
+            "Somehow the start offset isn't a power of 2, start offset: {}",
+            start_offset
+        );
+
+        let bucket_metadata = BucketMetadata::empty(
+            self.bucket_metadata.len() as u32,
+            start_offset,
+            bucket_size,
+            self.bucket_info_size(),
+        );
+
+        // Resize node data and node metadata data.
+        // TODO: Resize attachment lookup buffers.
+        self.node_data.resize(
+            self.node_data.len() + bucket_metadata.bucket_total_size as usize,
+            VoxelModelESVONode::encode_node(0, false, 0, 0),
+        );
+        self.node_metadata_data.resize(
+            self.node_metadata_data.len() + bucket_metadata.bucket_total_size as usize,
+            ESVONodeMetadata::Free,
+        );
+        assert_eq!(self.node_data.len(), self.node_metadata_data.len());
+
+        self.bucket_metadata.push(bucket_metadata);
+        // Writing index 0 of bucket info.
+        self.node_data[bucket_metadata.bucket_info_start as usize] =
+            VoxelModelESVONode::encode_data(bucket_metadata.bucket_absolute_start);
+        assert_eq!(
+            bucket_metadata.bucket_total_size - bucket_metadata.bucket_info_start,
+            self.bucket_info_size()
+        );
+
+        // Write page headers to point to block info
+        for i in (bucket_metadata.bucket_absolute_start..bucket_metadata.bucket_info_start)
+            .step_by(Self::PAGE_SIZE as usize)
+        {
+            self.node_data[i as usize] =
+                VoxelModelESVONode::encode_data(bucket_metadata.bucket_info_start);
+        }
+    }
+
+    fn bucket_info_size(&self) -> u32 {
+        1
     }
 
     pub const fn encode_attachment_lookup(
@@ -221,16 +363,340 @@ impl VoxelModelESVO {
     }
 }
 
+pub struct VoxelModelESVOVoxelAccessMut<'a> {
+    pub esvo_model: &'a mut VoxelModelESVO,
+    pub position: Vector3<u32>,
+}
+
+impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
+    /// Returns (parent_node_index, leaf_octant).
+    /// Done lazily so we don't create nodes if we don't have to.
+    pub fn get_or_create_leaf_node(&mut self) -> (u32, u32) {
+        let morton = morton_encode(self.position);
+        let traversal = (0..self.esvo_model.height())
+            .map(|i| ((morton >> (i * 3)) & 7) as u32)
+            .rev();
+
+        let mut parent_node_index = self.esvo_model.root_node_index;
+        let mut octant = 0;
+        'traversal_loop: for (i, traversal) in traversal.enumerate() {
+            debug!("enumeration {} {}", i, traversal);
+            if i as u32 == self.esvo_model.height() - 1 {
+                // parent_node_index is equal to the leaf nodes parent.
+                let parent_node_data = &mut self.esvo_model.node_data[parent_node_index as usize];
+                parent_node_data.set_leaf_mask(parent_node_data.leaf_mask() | (1 << octant));
+
+                octant = traversal;
+            } else {
+                match self.esvo_model.get_or_create_child_node_index(
+                    parent_node_index,
+                    traversal,
+                    VoxelModelESVO::DEFAULT_CHILD_CAPACITY,
+                ) {
+                    Some(child_ptr) => {
+                        debug!(
+                            "setting parent to child {} {}",
+                            parent_node_index, child_ptr
+                        );
+                        parent_node_index = child_ptr;
+                    }
+                    None => {
+                        panic!("Node in here already exists as a leaf node with data on the non-leaf layer, figure out behavior here. index {}", i);
+                    }
+                }
+            }
+        }
+
+        (parent_node_index, octant)
+    }
+
+    pub fn set_data(&mut self, voxel_data: &VoxelData) {
+        let (parent_node_index, leaf_octant) = self.get_or_create_leaf_node();
+
+        for (attachment, data) in voxel_data
+            .iter()
+            .map(|(attachment_id, data)| {
+                (
+                    self.esvo_model
+                        .attachment_map
+                        .get_attachment(*attachment_id)
+                        .clone(),
+                    data,
+                )
+            })
+            .collect::<Vec<_>>()
+        {
+            let old_attachment_mask = self
+                .parent_node_lookup_mut(attachment.id(), parent_node_index)
+                .attachment_mask();
+
+            let new_attachment_mask = old_attachment_mask | (1 << leaf_octant);
+            self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                .set_attachment_mask(new_attachment_mask);
+            debug!(
+                "set attachment mask {}",
+                self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                    .attachment_mask()
+            );
+
+            let raw_attachment_index = if old_attachment_mask != new_attachment_mask {
+                // Entry for this octant for the corresponding attachment type doesn't exist yet.
+                //todo!("Add attachment lookup metadata so we can properly grow raw attachment child data and track how many children for raw attachment data are allocated for a node");
+                let has_raw_data = old_attachment_mask > 0;
+                if !has_raw_data {
+                    // No entries for any children in the parent node exist so we must allocate
+                    // some data in the attachment's raw data buffer. We only do this now since we
+                    // want to be lazily allocated for voxel attachment data.
+
+                    // TODO: Make a function that determines this per attachment so that stuff
+                    // like PT material allocates a higher default size than emmisiveness.
+                    const DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE: u32 = 4;
+                    let allocated_raw_ptr = self.esvo_model.allocate_raw_attachment_data(
+                        attachment.id(),
+                        DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE,
+                    );
+
+                    self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                        .set_raw_index(allocated_raw_ptr);
+                }
+
+                let leaf_attachment_index = self
+                    .parent_node_lookup_mut(attachment.id(), parent_node_index)
+                    .raw_index()
+                    + old_attachment_mask.count_ones();
+
+                let mut must_swap = false;
+                for j in (leaf_octant + 1)..8 {
+                    if (old_attachment_mask & (1 << j)) > 0 {
+                        must_swap = true;
+                        break;
+                    }
+                }
+                if must_swap {
+                    todo!("swap ordering since octants of a higher norm must be after this one due to implicit child ordering in the attachment raw data");
+                }
+
+                leaf_attachment_index
+            } else {
+                panic!(
+                    "attachment already exists at this node and octant {} {}",
+                    old_attachment_mask, new_attachment_mask
+                );
+                let child_offset = (old_attachment_mask & ((1 << leaf_octant) - 1)).count_ones();
+                self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                    .raw_index()
+                    + child_offset
+            };
+            let raw_attachment_index = (raw_attachment_index * attachment.size()) as usize;
+            let raw_attachment_data = self.esvo_model.get_attachment_raw_data_mut(attachment.id());
+            raw_attachment_data
+                [raw_attachment_index..(raw_attachment_index + attachment.size() as usize)]
+                .copy_from_slice(data);
+        }
+    }
+
+    fn parent_node_lookup_mut(
+        &mut self,
+        attachment_id: AttachmentId,
+        index: u32,
+    ) -> &mut VoxelModelESVOAttachmentLookupNode {
+        self.esvo_model
+            .get_attachment_lookup_node_mut(attachment_id, index)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct VoxelModelESVOAttachmentLookupNode(pub u32);
+
+impl VoxelModelESVOAttachmentLookupNode {
+    pub const fn encode_lookup(raw_index: u32, attachment_mask: u32) -> Self {
+        assert!(raw_index < (1 << 15), "raw index is too big.");
+        assert!(attachment_mask < (1 << 8), "attachment mask is too big.");
+
+        Self((raw_index << 8) | attachment_mask)
+    }
+
+    pub const fn raw_index(&self) -> u32 {
+        self.0 >> 8
+    }
+
+    pub fn set_raw_index(&mut self, raw_index: u32) {
+        assert!(raw_index < (1 << 15), "raw index is too big.");
+
+        self.0 = (self.0 & 0x0000_00FF) | (raw_index << 8);
+    }
+
+    pub const fn attachment_mask(&self) -> u32 {
+        self.0 & 0xFF
+    }
+
+    pub fn set_attachment_mask(&mut self, attachment_mask: u32) {
+        assert!(attachment_mask < (1 << 8), "attachment mask is too big.");
+
+        self.0 = (self.0 & 0xFFFF_FF00) | attachment_mask;
+    }
+
+    pub const fn decode(&self) -> (u32, u32) {
+        (self.0 >> 8, self.attachment_mask())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct VoxelModelESVONode(pub u32);
+
+impl Display for VoxelModelESVONode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.to_string())
+    }
+}
+
+impl VoxelModelESVONode {
+    pub const fn encode_data(data: u32) -> Self {
+        Self(data)
+    }
+
+    pub const fn encode_node(pointer: u32, far: bool, valid_mask: u32, leaf_mask: u32) -> Self {
+        // Make sure child pointer is only 15 bits.
+        assert!(pointer < (1 << 15), "Pointer is too big.");
+        assert!(valid_mask < (1 << 8), "valid mask is too big.");
+        assert!(leaf_mask < (1 << 8), "leaf mask is too big.");
+        let mut x = 0;
+        x |= pointer << 17;
+        if far {
+            x |= 0x0001_0000;
+        }
+        x |= valid_mask << 8;
+        x |= leaf_mask;
+
+        Self(x)
+    }
+
+    pub fn is_far(&self) -> bool {
+        ((self.0 >> 16) & 1) > 0
+    }
+
+    pub fn relative_ptr(&self) -> u32 {
+        self.0 >> 17
+    }
+
+    pub fn set_relative_ptr(&mut self, ptr: u32) {
+        self.0 &= 0x0001_FFFF;
+        self.0 |= ptr << 17;
+    }
+
+    pub fn set_leaf_mask(&mut self, leaf_mask: u32) {
+        self.0 &= 0xFFFF_FF00;
+        self.0 |= leaf_mask;
+    }
+
+    pub fn leaf_mask(&self) -> u32 {
+        self.0 & 0xFF
+    }
+
+    pub fn set_valid_mask(&mut self, valid_mask: u32) {
+        self.0 &= 0xFFFF_00FF;
+        self.0 |= valid_mask << 8;
+    }
+
+    pub fn valid_mask(&self) -> u32 {
+        (self.0 >> 8) & 0xFF
+    }
+
+    /// (relative child pointer OR relative far pointer pointer,
+    ///  bool if the first argument is a far pointer poiner,
+    ///  value_mask,
+    ///  leaf_mask)
+    pub const fn decode(&self) -> (u32, bool, u32, u32) {
+        let child_ptr = self.0 >> 17;
+        let far = if ((self.0 >> 16) & 1) == 1 {
+            true
+        } else {
+            false
+        };
+        let value_mask = (self.0 >> 8) & 0xFF;
+        let leaf_mask = self.0 & 0xFF;
+
+        (child_ptr, far, value_mask, leaf_mask)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ESVONodeMetadataData {
+    pub parent_index: u32,
+    pub children_capacity: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ESVONodeMetadata {
+    /// Is allocated and has some node living here.
+    Some(ESVONodeMetadataData),
+    /// Is allocated and assigned to some parent node but is empty.
+    Allocated,
+    Free,
+}
+
+impl ESVONodeMetadata {
+    pub fn expect(&self, message: &str) -> &ESVONodeMetadataData {
+        match self {
+            ESVONodeMetadata::Some(v) => v,
+            _ => panic!("{}", message),
+        }
+    }
+
+    pub fn unwrap(&self) -> &ESVONodeMetadataData {
+        match self {
+            ESVONodeMetadata::Some(v) => v,
+            _ => panic!("Couldn't unwrap"),
+        }
+    }
+
+    pub fn unwrap_mut(&mut self) -> &mut ESVONodeMetadataData {
+        match self {
+            ESVONodeMetadata::Some(v) => v,
+            _ => panic!("Couldn't unwrap"),
+        }
+    }
+
+    pub fn is_some(&self) -> bool {
+        match self {
+            ESVONodeMetadata::Some(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_free(&self) -> bool {
+        match self {
+            ESVONodeMetadata::Free => true,
+            _ => false,
+        }
+    }
+}
+
 impl VoxelModelImplConcrete for VoxelModelESVO {
     type Gpu = VoxelModelESVOGpu;
 }
 
 impl VoxelModelImpl for VoxelModelESVO {
     /// Sets a voxel range relative to the current models origin.
-    fn set_voxel_range(&mut self, range: VoxelRange) {}
+    fn set_voxel_range_impl(&mut self, range: VoxelRange) {
+        let position = range.position();
+        match range.data() {
+            VoxelRangeData::Unit(unit) => {
+                self.attachment_map.inherit_other(unit.attachment_map());
+
+                let mut voxel = self.get_voxel_mut(position);
+                if let Some(data) = unit.data() {
+                    voxel.set_data(data);
+                }
+            }
+            VoxelRangeData::Flat(_) => todo!(),
+        }
+        debug!("ESVO: {:?}", self);
+    }
 
     fn schema(&self) -> VoxelModelSchema {
-        VoxelModelSchema::ESVO
+        0
     }
 
     fn length(&self) -> Vector3<u32> {
@@ -253,12 +719,17 @@ impl VoxelModelImpl for VoxelModelESVO {
 
 impl std::fmt::Debug for VoxelModelESVO {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const ARRAY_LINE_LIMIT: usize = 50;
         f.write_str(&format!("ESVO height={}\n", self.length.trailing_zeros()));
         for (i, node) in self.node_data.iter().enumerate() {
+            if i > ARRAY_LINE_LIMIT {
+                break;
+            }
+
             if (i % 8192) == 0 {
                 f.write_str(&format!("[{}] Page Header, Block info: {}\n", i, node))?
             } else {
-                let (child_ptr, far, value_mask, leaf_mask) = VoxelModelESVO::decode_node(*node);
+                let (child_ptr, far, value_mask, leaf_mask) = node.decode();
                 let value_mask_str = (0..8).rev().fold(String::new(), |mut str, octant| {
                     str.push_str(if (value_mask & (1 << octant)) > 0 {
                         "1"
@@ -286,8 +757,10 @@ impl std::fmt::Debug for VoxelModelESVO {
 
         for (attachment, attachment_lookup_data) in &self.attachment_lookup_data {
             for (i, lookup) in attachment_lookup_data.iter().enumerate() {
-                let (raw_data_ptr, attachment_mask) =
-                    VoxelModelESVO::decode_attachment_lookup(*lookup);
+                if i > ARRAY_LINE_LIMIT {
+                    break;
+                }
+                let (raw_data_ptr, attachment_mask) = lookup.decode();
                 let attachment_mask_str = (0..8).rev().fold(String::new(), |mut str, octant| {
                     str.push_str(if (attachment_mask & (1 << octant)) > 0 {
                         "1"
@@ -299,27 +772,42 @@ impl std::fmt::Debug for VoxelModelESVO {
                 });
                 f.write_str(&format!(
                     "Attachment Lookup [{}][{}] Data ptr: {}, Attachment Mask: {}\n",
-                    attachment.name(),
-                    i,
-                    raw_data_ptr,
-                    attachment_mask_str,
+                    attachment, i, raw_data_ptr, attachment_mask_str,
                 ));
             }
         }
 
         for (attachment, data) in &self.attachment_raw_data {
-            f.write_str(&format!("Attachment Raw Data [{}]:\n\t", attachment.name()));
-            match attachment.renderable_index() {
-                Attachment::PTMATERIAL_RENDER_INDEX => {
+            f.write_str(&format!(
+                "Attachment Raw Data [{}]:\n\t",
+                self.attachment_map.name(*attachment)
+            ));
+            match *attachment {
+                Attachment::PTMATERIAL_ID => {
                     for (i, material) in data.iter().enumerate() {
+                        if i > ARRAY_LINE_LIMIT {
+                            break;
+                        }
                         let material = Attachment::decode_ptmaterial(material);
                         f.write_str(&format!("[{}] {:?}, ", i, material));
                     }
                 }
-                Attachment::NORMAL_RENDER_INDEX => {
+                Attachment::NORMAL_ID => {
                     for (i, normal) in data.iter().enumerate() {
+                        if i > ARRAY_LINE_LIMIT {
+                            break;
+                        }
                         let normal = Attachment::decode_normal(*normal);
                         f.write_str(&format!("[{}] {} {} {}, ", i, normal.x, normal.y, normal.z));
+                    }
+                }
+                Attachment::EMMISIVE_ID => {
+                    for (i, emmisive) in data.iter().enumerate() {
+                        if i > ARRAY_LINE_LIMIT {
+                            break;
+                        }
+                        let emmissiveness = Attachment::decode_emissive(*emmisive);
+                        f.write_str(&format!("[{}] {}", i, emmissiveness));
                     }
                 }
                 default => {}
@@ -333,8 +821,8 @@ impl std::fmt::Debug for VoxelModelESVO {
 
 pub struct VoxelModelESVOGpu {
     data_allocation: Option<VoxelDataAllocation>,
-    attachment_lookup_allocations: HashMap<Attachment, VoxelDataAllocation>,
-    attachment_raw_allocations: HashMap<Attachment, VoxelDataAllocation>,
+    attachment_lookup_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
+    attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
 
     initialized_data: bool,
 }
@@ -346,40 +834,27 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         };
 
         let mut attachment_lookup_indices =
-            vec![u32::MAX; Attachment::MAX_RENDER_INDEX as usize + 1];
+            vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
         for (attachment, lookup_allocation) in &self.attachment_lookup_allocations {
-            if attachment.renderable_index() > Attachment::MAX_RENDER_INDEX {
-                warn!(
-                    "Attachment {} has render index {} which is out of bounds of the max index {}.",
-                    attachment.name(),
-                    attachment.renderable_index(),
-                    Attachment::MAX_RENDER_INDEX
-                );
+            if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;
             }
 
-            attachment_lookup_indices[attachment.renderable_index() as usize] =
-                lookup_allocation.start_index() >> 2
+            attachment_lookup_indices[*attachment as usize] =
+                lookup_allocation.start_index_stride_u32()
         }
-        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_RENDER_INDEX as usize + 1];
+        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
         for (attachment, raw_allocation) in &self.attachment_raw_allocations {
-            if attachment.renderable_index() > Attachment::MAX_RENDER_INDEX {
-                warn!(
-                    "Attachment {} has render index {} which is out of bounds of the max index {}.",
-                    attachment.name(),
-                    attachment.renderable_index(),
-                    Attachment::MAX_RENDER_INDEX
-                );
+            if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;
             }
 
-            attachment_raw_indices[attachment.renderable_index() as usize] =
-                raw_allocation.start_index() >> 2;
+            attachment_raw_indices[*attachment as usize] = raw_allocation.start_index_stride_u32();
         }
 
         let mut info = vec![
             // World data ptr (divide by 4 since 4 bytes in a u32)
-            data_allocation.start_index() >> 2,
+            data_allocation.start_index_stride_u32(),
         ];
         info.append(&mut attachment_lookup_indices);
         info.append(&mut attachment_raw_indices);
@@ -441,7 +916,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             allocator.write_world_data(
                 device,
                 self.data_allocation.as_ref().unwrap(),
-                bytemuck::cast_slice::<u32, u8>(model.node_data.as_slice()),
+                bytemuck::cast_slice::<VoxelModelESVONode, u8>(model.node_data.as_slice()),
             );
 
             for (attachment, lookup_data) in &model.attachment_lookup_data {
@@ -458,14 +933,16 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                 allocator.write_world_data(
                     device,
                     allocation,
-                    bytemuck::cast_slice::<u32, u8>(lookup_data.as_slice()),
+                    bytemuck::cast_slice::<VoxelModelESVOAttachmentLookupNode, u8>(
+                        lookup_data.as_slice(),
+                    ),
                 );
             }
 
             for (attachment, raw_data) in &model.attachment_raw_data {
                 debug!(
                     "Writing attachment raw data [{}] Len: {:?}",
-                    attachment.name(),
+                    attachment,
                     raw_data.as_slice().len()
                 );
                 let allocation = self
@@ -512,11 +989,12 @@ pub enum VoxelModelESVOUpdate {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BucketLookupInfo {
-    index: u32,
+pub struct BucketMetadata {
+    metadata_index: u32,
     node_capacity: u32,
     node_size: u32,
-    // Pointers relative to start of esvo data
+
+    // Pointers relative to start of esvo data, aka. 0 == node_data[0].
     bucket_absolute_start: u32,
     bucket_node_start: u32,
     bucket_free_start: u32,
@@ -524,47 +1002,35 @@ pub struct BucketLookupInfo {
     bucket_total_size: u32,
 }
 
-impl BucketLookupInfo {
-    pub fn empty(index: u32, mut start_offset: u32, desired_bucket_size: u32) -> Self {
+impl BucketMetadata {
+    pub fn empty(
+        metadata_index: u32,
+        mut start_offset: u32,
+        desired_bucket_size: u32,
+        bucket_info_size: u32,
+    ) -> Self {
         assert!(desired_bucket_size.is_power_of_two());
+        assert!(
+            (start_offset % VoxelModelESVO::PAGE_SIZE) == 0,
+            "Bucket should always start with a page header."
+        );
 
-        let node_capacity = desired_bucket_size - Self::bucket_info_size();
-
-        let mut page_header_count = 0;
-        let mut left = start_offset;
-        let bucket_info_start = start_offset + node_capacity;
-        while left < bucket_info_start {
-            page_header_count += 1;
-
-            left = (left + 1).next_multiple_of(8192);
-        }
-
-        let bucket_absolute_start = start_offset;
-        if (start_offset % 8192) == 0 {
-            start_offset += 1;
-        }
+        let bucket_info_start = start_offset + desired_bucket_size - bucket_info_size;
+        let mut page_header_count = (start_offset..bucket_info_start)
+            .step_by(VoxelModelESVO::PAGE_SIZE as usize)
+            .count() as u32;
+        let node_capacity = desired_bucket_size - bucket_info_size - page_header_count;
 
         Self {
-            index,
-            node_capacity: node_capacity - page_header_count,
+            metadata_index,
+            node_capacity,
             node_size: 0,
-            bucket_absolute_start,
-            bucket_node_start: start_offset,
-            bucket_free_start: start_offset,
+            bucket_absolute_start: start_offset,
+            bucket_node_start: start_offset + 1,
+            bucket_free_start: start_offset + 1,
             bucket_info_start,
             bucket_total_size: desired_bucket_size,
         }
-    }
-
-    const fn bucket_info_size() -> u32 {
-        let mut x = 0;
-
-        // Bucket start index
-        x += 1;
-        // Albedo attachment index (Absolute in data buffer)
-        x += 1;
-
-        x
     }
 }
 

@@ -11,10 +11,12 @@ use crate::{
         self,
         asset::asset::Assets,
         ecs::ecs_world::ECSWorld,
+        event::Events,
         graphics::{
             device::DeviceResource, pipeline_manager::RenderPipelineManager, renderer::Renderer,
         },
         input::Input,
+        physics::physics_world::PhysicsWorld,
         resource::ResourceBank,
         system::System,
         ui::{gui::Egui, state::UIState},
@@ -90,18 +92,22 @@ impl App {
     // Initialized after the window resize event, aka. after the window has been created and we
     // know it's actual size, the graphics context has yet to be created here.
     fn init_pre_graphics(&mut self) {
+        let events = Events::new();
         let settings = Settings::default();
         let ecs = ECSWorld::new();
         let input = Input::new();
         let time = Time::new();
         let assets = Assets::new();
+        let physics = PhysicsWorld::new();
 
         let rb = self.resource_bank_mut();
+        rb.insert(events);
         rb.insert(settings);
         rb.insert(ecs);
         rb.insert(input);
         rb.insert(time);
         rb.insert(assets);
+        rb.insert(physics);
     }
 
     fn init_post_graphics(&mut self) {

@@ -60,7 +60,7 @@ pub struct CameraBuffer {
 #[repr(C)]
 pub struct WorldBuffer {
     camera: CameraBuffer,
-    voxel_model_count: u32,
+    voxel_model_entity_count: u32,
     // The frame count of the current transform of the camera.
     frame_count: u32,
     // The frame count since the launch of the application.
@@ -176,6 +176,16 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -596,6 +606,14 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: voxel_world_gpu.world_voxel_model_info_buffer(),
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: voxel_world_gpu.world_data_buffer().expect("Shouldn't update ray bind group if world data buffer doesn't exist."),
                             offset: 0,
                             size: None,
@@ -758,7 +776,7 @@ impl Renderer {
                     half_fov,
                     padding: [0.0; 3],
                 },
-                voxel_model_count: voxel_world_gpu.renderable_voxel_model_count(),
+                voxel_model_entity_count: voxel_world_gpu.rendered_voxel_model_entity_count(),
                 frame_count: renderer.frame_count,
                 total_frame_count: time.frame_count(),
                 padding: [0.0; 13],

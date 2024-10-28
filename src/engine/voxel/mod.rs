@@ -9,9 +9,11 @@ pub mod vox_consts {
 pub mod attachment;
 pub mod esvo;
 pub mod flat;
+pub mod unit;
 pub mod voxel;
 pub mod voxel_allocator;
 pub mod voxel_terrain;
+pub mod voxel_transform;
 pub mod voxel_world;
 
 pub fn initialize_voxel_world_resources(rb: &mut ResourceBank) {

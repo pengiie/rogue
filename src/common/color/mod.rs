@@ -1,6 +1,6 @@
 use nalgebra::{ComplexField, Matrix3, Vector3};
 
-#[derive(Copy)]
+#[derive(Copy, PartialEq)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
     xyz: Vector3<f32>,
     _marker: std::marker::PhantomData<S>,
@@ -16,10 +16,10 @@ impl<S: ColorSpace> Color<S> {
 
     pub fn into_color_space<N: ColorSpace>(&self) -> Color<N>
     where
-        N: ColorSpaceTransitionFrom<S>,
+        S: ColorSpaceTransitionInto<N>,
     {
         Color {
-            xyz: N::transition(self.xyz),
+            xyz: S::transition(self.xyz),
             _marker: std::marker::PhantomData,
         }
     }
@@ -66,6 +66,18 @@ pub trait ColorSpace {}
 pub trait ColorSpaceTransitionFrom<From: ColorSpace> {
     fn transition(xyz: Vector3<f32>) -> Vector3<f32>;
 }
+pub trait ColorSpaceTransitionInto<Into: ColorSpace> {
+    fn transition(xyz: Vector3<f32>) -> Vector3<f32>;
+}
+impl<C, T> ColorSpaceTransitionInto<T> for C
+where
+    T: ColorSpace + ColorSpaceTransitionFrom<C>,
+    C: ColorSpace,
+{
+    fn transition(xyz: Vector3<f32>) -> Vector3<f32> {
+        T::transition(xyz)
+    }
+}
 
 /// The CIE 1931 XYZ color space with a D65 standard illuminant.
 pub struct ColorSpaceXYZ;
@@ -108,6 +120,13 @@ impl ColorSpaceTransitionFrom<ColorSpaceXYZ> for ColorSpaceSrgb {
         )
     }
 }
+impl ColorSpaceTransitionFrom<ColorSpaceSrgb> for ColorSpaceXYZ {
+    fn transition(xyz: Vector3<f32>) -> Vector3<f32> {
+        <ColorSpaceXYZ as ColorSpaceTransitionFrom<ColorSpaceSrgbLinear>>::transition(
+            <ColorSpaceSrgbLinear as ColorSpaceTransitionFrom<ColorSpaceSrgb>>::transition(xyz),
+        )
+    }
+}
 
 pub struct ColorSpaceSrgbLinear;
 impl ColorSpace for ColorSpaceSrgbLinear {}
@@ -123,5 +142,40 @@ impl ColorSpaceTransitionFrom<ColorSpaceXYZ> for ColorSpaceSrgbLinear {
         );
 
         m * xyz
+    }
+}
+impl ColorSpaceTransitionFrom<ColorSpaceSrgbLinear> for ColorSpaceXYZ {
+    #[rustfmt::skip]
+    fn transition(xyz: Vector3<f32>) -> Vector3<f32>  {
+        // Linear transformation matrix from Linear Srgb to CIE 1931 XYZ.
+        // Source: https://en.wikipedia.org/wiki/SRGB#From_sRGB_to_CIE_XYZ
+        let m = Matrix3::new(
+            0.4124, 0.3576, 0.1805,
+            0.2126, 0.7152, 0.0722,
+            0.0193, 0.1192, 0.9505,
+        );
+
+        m * xyz
+    }
+}
+
+mod tests {
+    use nalgebra::Vector3;
+
+    use crate::common::color::{ColorSpaceSrgb, ColorSpaceXYZ};
+
+    use super::Color;
+
+    #[test]
+    fn colorspace_to_and_from() {
+        let color = Color::<ColorSpaceSrgb>::new(0.5, 0.5, 0.5);
+        assert_eq!(
+            color
+                .into_color_space::<ColorSpaceXYZ>()
+                .into_color_space::<ColorSpaceSrgb>()
+                .xyz
+                .map(|x| x.to_bits()),
+            Vector3::new(0.5, 0.5, 0.5).map(|x: f32| x.to_bits())
+        );
     }
 }

@@ -47,6 +47,7 @@ fn init_seed(coord: vec2<u32>) {
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
   n += coord.x;
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
+  // Uncomment for temporal noise.
   n += jenkins_hash(u_world_info.total_frame_count);
   n = (n<<13)^n; n=n*(n*n*15731+789221)+1376312589;
 
@@ -143,10 +144,14 @@ struct Camera {
 
 struct WorldInfo {
   camera: Camera,
-  voxel_model_count: u32,
+  voxel_entity_count: u32,
   frame_count: u32,
   total_frame_count: u32,
 };
+
+struct WorldModelInfo {
+  data: array<u32>
+}
 
 struct WorldAcceleration {
   data: array<u32>
@@ -161,7 +166,8 @@ struct WorldData {
 @group(0) @binding(2) var u_radiance_total_prev: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> u_world_info: WorldInfo; 
 @group(0) @binding(4) var<storage, read> u_world_acceleration: WorldAcceleration; 
-@group(0) @binding(5) var<storage, read> u_world_data: WorldData; 
+@group(0) @binding(5) var<storage, read> u_world_model_info: WorldModelInfo; 
+@group(0) @binding(6) var<storage, read> u_world_data: WorldData; 
 
 // Finds the intersections of the axes planes with the origin of this point.
 fn ray_to_point(ray: Ray, point: vec3f) -> vec3f {
@@ -270,13 +276,13 @@ fn esvo_ray_aabb_normal(ray_aabb_info: RayAABBInfo, ray: Ray) -> vec3f {
 
 // Returns the raw attachment ptr into the raw buffer, or 0xFFFF_FFFF if it doesn't exist.
 const RENDER_INDICES_LENGTH: u32 = 3u;
-fn esvo_get_node_attachment_ptr(esvo_data_ptrs_ptr: u32,
+fn esvo_get_node_attachment_ptr(esvo_info_data_ptr: u32,
                                 attachment_index: u32,
                                 node_index: u32,
                                 octant: u32) -> u32 {
-  let node_data_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr];
-  let attachment_lookup_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 1 + attachment_index];
-  let attachment_raw_ptr = u_world_acceleration.data[esvo_data_ptrs_ptr + 1 + RENDER_INDICES_LENGTH + attachment_index];
+  let node_data_ptr = u_world_acceleration.data[esvo_info_data_ptr];
+  let attachment_lookup_ptr = u_world_acceleration.data[esvo_info_data_ptr + 1 + attachment_index];
+  let attachment_raw_ptr = u_world_acceleration.data[esvo_info_data_ptr + 1 + RENDER_INDICES_LENGTH + attachment_index];
   if (attachment_lookup_ptr == 0xFFFFFFFFu || attachment_raw_ptr == 0xFFFFFFFFu) {
     return 0xFFFFFFFFu;
   }
@@ -308,22 +314,31 @@ fn esvo_get_node_attachment_ptr(esvo_data_ptrs_ptr: u32,
   return raw_ptr;
 }
 
-struct VoxelModelTrace {
-  hit: bool,
-  radiance_outgoing: vec3f,
+struct RayVoxelHit {
   albedo: vec3f,
+  radiance_outgoing: vec3f,
+
   normal: vec3f,
   sample_position: vec3f,
   hit_position: vec3f,
+};
+
+fn ray_voxel_hit_empty() -> RayVoxelHit {
+  return RayVoxelHit(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
+}
+
+struct VoxelModelTrace {
+  hit: bool,
+  hit_data: RayVoxelHit,
 }
 
 fn voxel_model_trace_miss() -> VoxelModelTrace {
-  return VoxelModelTrace(false, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0));
+  return VoxelModelTrace(false, ray_voxel_hit_empty());
 }
 
 fn voxel_model_trace_hit(radiance_outgoing: vec3f, albedo: vec3f,
                          normal: vec3f, sample_position: vec3f, hit_position: vec3f) -> VoxelModelTrace {
-  return VoxelModelTrace(true, radiance_outgoing, albedo, normal, sample_position, hit_position);
+  return VoxelModelTrace(true, RayVoxelHit(albedo, radiance_outgoing, normal, sample_position, hit_position));
 }
 
 struct ESVOStackItem {
@@ -495,7 +510,7 @@ fn get_next_voxel_model(ray: Ray, t_last_exit: f32) -> VoxelModelHit {
                                              AABB(vec3f(0.0), vec3f(0.0)), 0u);
   var min_t = 100000.0;
   var current_index = 0u;
-  for (var i = 0u; i < u_world_info.voxel_model_count; i++) {
+  for (var i = 0u; i < u_world_info.voxel_entity_count; i++) {
     let model_data_size = u_world_acceleration.data[current_index];
     // Don't reintersect the same model we just intersected.
     let min = bitcast<vec3<f32>>(vec3<u32>(
@@ -554,7 +569,8 @@ fn sample_background_radiance(ray: Ray) -> vec3f {
 
   // Colors interpolating on the cosine angle of each axis in srgb.
   // From 0.0 <= t <= 1.0, 0.0 <= theta <= PI.
-  var background_color = vec3f(srgb_to_lrgb(vec3f(acos(-ray.dir) / 3.14)));
+  let background_intensity = 0.3;
+  var background_color = srgb_to_lrgb(vec3f(acos(-ray.dir) / 3.14) * background_intensity);
 
 #ifdef GRID
   // Draw the XZ plane grid.
@@ -597,63 +613,78 @@ fn sample_background_radiance(ray: Ray) -> vec3f {
       }
     }
 
-    let RADIUS_OF_GRID = 20.0;
-    let FADE_DISTANCE = 3.0;
+    let RADIUS_OF_GRID = 40.0;
+    let FADE_DISTANCE = 5.0;
     if (influence != 0.0) {
       // Fade out the grid over a distance of FADE_DISTANCE
       influence = 1.0 - smoothstep(RADIUS_OF_GRID - FADE_DISTANCE,
                                    RADIUS_OF_GRID + FADE_DISTANCE,
                                    influence);
     }
-    return mix(background_color, color, influence);
+    return mix(background_color, color * background_intensity, influence);
   }
 #endif
 
   return background_color;
 }
 
-fn calculate_ray_incoming_radiance(ray: Ray) -> vec3f {
-  var ray_curr = ray;
-  var attenuation = vec3(1.0);
-  var radiance_accumulated = vec3(0.0);
+const BOUNCES: u32 = 3;
+fn next_ray_voxel_hit(ray: Ray) -> vec3f {
+  for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
 
-  for(var i = 0; i < 6; i++) {
-    let next_model = get_next_voxel_model(ray_curr, 0.0);
+    // Test intersection with OBB.
+    let i = entity_index * 16;
+    let aabb_bounds = aabb_min_max(
+      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i], u_world_acceleration.data[i + 1], u_world_acceleration.data[i + 2])),
+      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 3], u_world_acceleration.data[i + 4], u_world_acceleration.data[i + 5]))
+    );
+    let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 6], u_world_acceleration.data[i + 7], u_world_acceleration.data[i + 8]));
+    let obb_rotation = mat3x3f(
+      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 9], u_world_acceleration.data[i + 10], u_world_acceleration.data[i + 11])),
+      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 12], u_world_acceleration.data[i + 13], u_world_acceleration.data[i + 14])),
+      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 15], u_world_acceleration.data[i + 16], u_world_acceleration.data[i + 17])),
+    );
 
-    if (!next_model.hit_info.hit) {
-      // Only sample background for bounced light.
-      if (i != 0) {
-         //radiance_accumulated *= sample_background_radiance(ray_curr) * attenuation;
-      }
-      break;
+    let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
+    let ray_rot_dir = obb_rotation * ray.dir;
+    let ray_rot = Ray(ray_rot_origin, ray_rot_dir, 1.0 / ray_rot_dir);
+
+    let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
+    if (hit_info.hit) {
+      return vec3f(1.0,1.0,1.0);
     }
 
-    let trace = trace_voxel_model(next_model, ray_curr);
-    // For now end ray traversal if we didn't hit anything, we only trace the first model we hit.
-    if (!trace.hit) {
-      // Only sample background for bounced light.
-      if (i != 0) {
-        //radiance_accumulated += sample_background_radiance(ray_curr) * attenuation;
-      }
-      break;
-    }
 
-    let random_sample_dir = normalize(trace.normal + rand_unit_vec3f());
-    //let random_sample_dir = rand_hemisphere(trace.normal);
-    let l = max(dot(trace.normal, random_sample_dir), 0.0);
-    let d = distance(trace.hit_position, ray_curr.origin);
-
-    radiance_accumulated += attenuation * trace.radiance_outgoing;
-
-    if (length(trace.radiance_outgoing) > 0.0) {
-      break;
-    }
-
-    attenuation *= trace.albedo * l;
-    ray_curr = Ray(trace.sample_position, random_sample_dir, 1.0 / random_sample_dir);
   }
+//   if (!next_model.hit_info.hit) {
+//     radiance_accumulated = sample_background_radiance(ray_curr);
+//     break;
+//   }
+// 
+//   let trace = trace_voxel_model(next_model, ray_curr);
+//   // For now end ray traversal if we didn't hit anything, we only trace the first model we hit.
+//   if (!trace.hit) {
+//     radiance_accumulated = sample_background_radiance(ray_curr);
+//     break;
+//   }
+// 
+//   //let random_sample_dir = normalize(trace.normal + rand_unit_vec3f());
+//   ////let random_sample_dir = rand_hemisphere(trace.normal);
+//   //let l = max(dot(trace.normal, random_sample_dir), 0.0);
+//   //let d = distance(trace.hit_position, ray_curr.origin);
+// 
+//   //radiance_accumulated += attenuation * trace.radiance_outgoing;
+// 
+//   radiance_accumulated = trace.albedo;
+//   break;
+//   // if (length(trace.radiance_outgoing) > 0.0) {
+//   //   break;
+//   // }
+// 
+//   // attenuation *= trace.albedo * l;
+//   // ray_curr = Ray(trace.sample_position, random_sample_dir, 1.0 / random_sample_dir);
 
-  return radiance_accumulated;
+  return sample_background_radiance(ray);
 }
 
 // Pixel sample is the discrete screen pixel with some random sub-pixel offset applied.
@@ -691,7 +722,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   );
   
   let ray = construct_camera_ray(vec2f(coords) + offset, vec2f(dimensions));
-  let sampled_pixel_radiance = calculate_ray_incoming_radiance(ray);
+  let sampled_pixel_radiance = next_ray_voxel_hit(ray);
 
   // Apply monte carlo estimator using stored accumulated pixel radiance samples.
   var pixel_radiance_prev = vec3f(0.0);

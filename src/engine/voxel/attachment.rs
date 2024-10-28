@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nalgebra::Vector3;
 
 use crate::common::color::{Color, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceXYZ};
@@ -6,32 +8,25 @@ use crate::common::color::{Color, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpa
 pub struct Attachment {
     name: &'static str,
 
-    // Size in terms of u32s
+    // Size in terms of u32s, due to that being the buffer array stride.
     size: u32,
-    renderable_index: u8,
+    id: u8,
 }
 
 impl Attachment {
-    pub const PTMATERIAL_RENDER_INDEX: u8 = 0;
-    pub const PTMATERIAL: Attachment = Attachment {
-        name: "pathtracing_material",
-        size: 1,
-        renderable_index: Self::PTMATERIAL_RENDER_INDEX,
-    };
-    pub const NORMAL_RENDER_INDEX: u8 = 1;
-    pub const NORMAL: Attachment = Attachment {
-        name: "normal",
-        size: 1,
-        renderable_index: Self::NORMAL_RENDER_INDEX,
-    };
+    pub const PTMATERIAL_ID: AttachmentId = 0;
+    pub const NORMAL_ID: AttachmentId = 1;
+    pub const EMMISIVE_ID: AttachmentId = 2;
+    pub const MAX_ATTACHMENT_ID: AttachmentId = 31;
 
-    pub const EMMISIVE_RENDER_INDEX: u8 = 2;
-    pub const EMMISIVE: Attachment = Attachment {
-        name: "emmisive",
-        size: 1,
-        renderable_index: Self::EMMISIVE_RENDER_INDEX,
-    };
-    pub const MAX_RENDER_INDEX: u8 = 2;
+    pub const PTMATERIAL: Attachment =
+        Attachment::new(Attachment::PTMATERIAL_ID, "pathtracing_material", 1);
+    pub const NORMAL: Attachment = Attachment::new(Attachment::NORMAL_ID, "normal", 1);
+    pub const EMMISIVE: Attachment = Attachment::new(Attachment::EMMISIVE_ID, "emmisive", 1);
+
+    const fn new(id: AttachmentId, name: &'static str, size: u32) -> Self {
+        Attachment { name, size, id }
+    }
 
     pub fn name(&self) -> &'static str {
         self.name
@@ -41,8 +36,8 @@ impl Attachment {
         self.size
     }
 
-    pub fn renderable_index(&self) -> u8 {
-        self.renderable_index
+    pub fn id(&self) -> AttachmentId {
+        self.id
     }
 
     pub fn encode_ptmaterial(mat: &PTMaterial) -> u32 {
@@ -53,16 +48,16 @@ impl Attachment {
         PTMaterial::decode(*val)
     }
 
-    pub fn encode_emmisive(candela: f32) -> u32 {
-        candela.floor() as u32
+    pub fn encode_emmisive(candela: u32) -> u32 {
+        candela
     }
 
     /// Returns the candela of the emmisive material, the color is implied to be the diffuse color.
-    pub fn decode_emissive(val: u32) -> f32 {
-        val as f32
+    pub fn decode_emissive(val: u32) -> u32 {
+        val
     }
 
-    pub fn encode_normal(normal: Vector3<f32>) -> u32 {
+    pub fn encode_normal(normal: &Vector3<f32>) -> u32 {
         assert!(normal.norm() == 1.0);
 
         let mut x = 0u32;
@@ -81,6 +76,8 @@ impl Attachment {
         Vector3::new(x, y, z)
     }
 }
+
+pub type AttachmentId = u8;
 
 /// A path tracing material that uses specific 2 bits to determine the material type.
 pub enum PTMaterial {
@@ -125,11 +122,56 @@ impl std::fmt::Debug for PTMaterial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Diffuse { albedo } => {
-                let gamma_corrected = albedo.into_color_space::<ColorSpaceSrgb>();
-                f.debug_struct("Diffuse")
-                    .field("albedo", &gamma_corrected)
-                    .finish()
+                let srgb = albedo.into_color_space::<ColorSpaceSrgb>();
+                f.debug_struct("Diffuse").field("albedo", &srgb).finish()
             }
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AttachmentMap {
+    map: HashMap<AttachmentId, Attachment>,
+}
+
+impl AttachmentMap {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    pub fn register_attachment(&mut self, attachment: &Attachment) {
+        if let Some(old) = self.map.insert(attachment.id(), attachment.clone()) {
+            // This shouldn't be a performance issue since attachment map inheritance or
+            // construction is rare. If this is in a hot loop then that is an upstream design
+            // issue.
+            assert_eq!(
+                old.name,
+                attachment.name(),
+                "Overriding existing attachment with different name but the same id"
+            );
+        }
+    }
+
+    pub fn get_attachment(&self, id: AttachmentId) -> &Attachment {
+        self.map.get(&id).expect(&format!(
+            "Attachment with id {} doesn't exist in the attachment map.",
+            id
+        ))
+    }
+
+    pub fn inherit_other(&mut self, other: &AttachmentMap) {
+        for (_, attachment) in other.iter() {
+            self.register_attachment(attachment);
+        }
+    }
+
+    pub fn name(&self, id: AttachmentId) -> &str {
+        self.get_attachment(id).name()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&u8, &Attachment)> {
+        self.map.iter()
     }
 }

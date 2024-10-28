@@ -64,8 +64,14 @@ pub struct VoxelDataAllocation {
 }
 
 impl VoxelDataAllocation {
-    pub fn start_index(&self) -> u32 {
+    /// Interprests the start index if the array is represented as `array<u8>`.
+    pub fn start_index_stride_u8(&self) -> u32 {
         self.range.start as u32
+    }
+
+    /// Interprests the start index if the array is represented as `array<u32>`.
+    pub fn start_index_stride_u32(&self) -> u32 {
+        (self.range.start >> 2) as u32
     }
 }
 

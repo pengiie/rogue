@@ -1,5 +1,9 @@
-use std::{ops::Sub, time::Duration};
+use std::{
+    ops::{Add, Sub},
+    time::Duration,
+};
 
+use log::debug;
 use rogue_macros::Resource;
 
 use crate::engine::resource::ResMut;
@@ -48,7 +52,7 @@ impl Time {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(std::time::Duration);
 
 impl Instant {
@@ -73,10 +77,49 @@ impl Instant {
     }
 }
 
+impl Add<Duration> for Instant {
+    type Output = Instant;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        Instant(self.0 + rhs)
+    }
+}
+
 impl Sub<Instant> for Instant {
     type Output = Duration;
 
     fn sub(self, rhs: Instant) -> Self::Output {
         self.0 - rhs.0
+    }
+}
+
+pub struct Timer {
+    time_dur: Duration,
+    last_instant: Instant,
+}
+
+impl Timer {
+    pub fn new(duration: Duration) -> Self {
+        Self {
+            time_dur: duration,
+            last_instant: Instant::now(),
+        }
+    }
+
+    pub fn try_complete(&mut self) -> bool {
+        if self.is_complete() {
+            self.reset();
+            return true;
+        }
+
+        return false;
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.last_instant + self.time_dur <= Instant::now()
+    }
+
+    pub fn reset(&mut self) {
+        self.last_instant = Instant::now();
     }
 }

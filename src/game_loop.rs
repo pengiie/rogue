@@ -4,8 +4,10 @@ use crate::{
     app::App,
     engine::{
         asset::asset::Assets,
+        event::Events,
         graphics::{pipeline_manager::RenderPipelineManager, renderer::Renderer},
         input::Input,
+        physics::physics_world::PhysicsWorld,
         system::System,
         ui::UI,
         voxel::voxel_world::VoxelWorldGpu,
@@ -23,22 +25,23 @@ pub fn game_loop(app: &App) {
     // Run any queued up asset tasks and update finished tasks.
     app.run_system(Assets::update_assets);
 
-    // ------- WORLD ---------
+    // ------- GAME WORLD ---------
     if app
         .resource_bank()
-        .get_resource::<GameWorld>()
-        .should_tick()
+        .get_resource_mut::<GameWorld>()
+        .try_tick()
     {
         // TICK UPDATES
-        app.run_system(GameWorld::tick);
         app.run_system(GameWorld::load_test_models);
-        //app.run_system(GameWorld::update_test_models_position);
+        app.run_system(GameWorld::update_test_models_position);
     }
 
     // ------- PHYSICS ---------
 
     // Update player logic.
     app.run_system(Player::update_player);
+
+    app.run_system(PhysicsWorld::do_physics_update);
 
     // ------- UI ---------
 
@@ -67,6 +70,7 @@ pub fn game_loop(app: &App) {
 
     // ------- FRAME CLEANUP ---------
 
-    // Discard any inputs cached for this frame.
+    // Discard any inputs and events cached for this frame.
     app.run_system(Input::clear_inputs);
+    app.run_system(Events::clear_events);
 }

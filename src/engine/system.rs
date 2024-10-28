@@ -36,7 +36,7 @@ pub trait System<Marker> {
 }
 
 macro_rules! impl_system {
-    ($($param:ident),*) => {
+    ($($param:ident), *$(,)? $($num:literal),*) => {
         impl<F, $($param: SystemParam),*> System<fn($($param),*) -> ()> for F
         where
             F: FnMut($($param),*) + FnMut($(SystemParamItem<$param>),*),
@@ -49,4 +49,4 @@ macro_rules! impl_system {
     };
 }
 
-generate_tuples!(impl_system, 16);
+generate_tuples!(impl_system, 0, 16);

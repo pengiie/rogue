@@ -1,5 +1,6 @@
 use std::{borrow::BorrowMut, collections::HashMap, time::Duration};
 
+use anyhow::anyhow;
 use log::{debug, info};
 use rogue_macros::Resource;
 
@@ -214,24 +215,6 @@ impl RenderPipelineManager {
                             );
 
                             vec![shader_handle]
-                            //                     let raw_shader = assets.get_asset(&shader_handle).unwrap();
-                            //                     let shader = Shader::process_raw(raw_shader, shader_defines.clone())
-                            //                         .expect("First time creation of shader couldn't preprocess.");
-                            //                     let shader_module = shader
-                            //                         .create_module(&device)
-                            //                         .expect("First tiem creation of shader could'nt compile.");
-                            //
-                            //                     let compute_pipeline =
-                            //                         device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            //                             label: Some(&format!("pipeline_{}", name)),
-                            //                             layout: Some(pipeline_layout),
-                            //                             module: &shader_module,
-                            //                             entry_point: "main",
-                            //                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            //                             cache: None,
-                            //                         });
-                            //
-                            //                     Pipeline::Compute(compute_pipeline)
                         }
                     })
                 })
@@ -251,6 +234,7 @@ impl RenderPipelineManager {
         let mut to_remove_ids = Vec::new();
         for (id, processing_pipeline) in &self.processing_pipelines {
             if processing_pipeline.is_ready(assets) {
+                let is_preexisting = self.pipelines.contains_key(id);
                 to_remove_ids.push(*id);
 
                 let pipeline = match &processing_pipeline.create_info {
@@ -268,11 +252,20 @@ impl RenderPipelineManager {
                     } => {
                         let shader_handle = &processing_pipeline.shader_handles[0];
                         let raw_shader = assets.get_asset(shader_handle).unwrap();
-                        let shader = Shader::process_raw(raw_shader, shader_defines.clone())
-                            .expect("First time creation of shader couldn't preprocess.");
-                        let shader_module = shader
-                            .create_module(&device)
-                            .expect("First tiem creation of shader couldn't compile.");
+                        let shader_module =
+                            match Shader::process_raw(raw_shader, shader_defines.clone()) {
+                                Ok(shader) => shader.create_module(&device)
+                                    as anyhow::Result<wgpu::ShaderModule>,
+                                Err(err) => Err(anyhow!(err)),
+                            };
+                        let Ok(shader_module) = shader_module else {
+                            if is_preexisting {
+                                // Keep using the known good pipeline.
+                                break;
+                            }
+
+                            panic!("Failed to create first-time shader for pipeline {}", name);
+                        };
 
                         let pipeline_layout = self.pipeline_layouts.get(id).unwrap();
                         let compute_pipeline =

@@ -8,22 +8,39 @@ use hecs::Bundle;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::engine::{graphics::device::DeviceResource, physics::transform::Transform};
+use crate::{
+    common::color::{
+        Color, ColorSpace, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom, ColorSpaceTransitionInto,
+    },
+    engine::{graphics::device::DeviceResource, physics::transform::Transform},
+};
 
-use super::{esvo::VoxelModelESVO, flat::VoxelModelFlat, voxel_allocator::VoxelAllocator};
+use super::{
+    attachment::{Attachment, AttachmentId, PTMaterial},
+    esvo::VoxelModelESVO,
+    flat::VoxelModelFlat,
+    unit::VoxelModelUnit,
+    voxel_allocator::VoxelAllocator,
+    voxel_transform::VoxelModelTransform,
+    voxel_world::VoxelModelId,
+};
 
 pub struct VoxelRange {
-    pub data: VoxelModelFlat,
+    /// Local position of the voxel model being edited, with origin at (-x, -y, -z).
     position: Vector3<u32>,
-    length: Vector3<u32>,
+    data: VoxelRangeData,
+}
+
+pub enum VoxelRangeData {
+    Unit(VoxelModelUnit),
+    Flat(VoxelModelFlat),
 }
 
 impl VoxelRange {
-    pub fn new(data: VoxelModelFlat, position: Vector3<u32>, length: Vector3<u32>) -> Self {
+    pub fn from_unit(position: Vector3<u32>, unit: impl Into<VoxelModelUnit>) -> Self {
         Self {
-            data,
             position,
-            length,
+            data: VoxelRangeData::Unit(unit.into()),
         }
     }
 
@@ -32,14 +49,34 @@ impl VoxelRange {
     }
 
     pub fn length(&self) -> Vector3<u32> {
-        self.length
+        match &self.data {
+            VoxelRangeData::Unit(_) => Vector3::new(1, 1, 1),
+            VoxelRangeData::Flat(flat) => flat.length().clone(),
+        }
+    }
+
+    pub fn data(&self) -> &VoxelRangeData {
+        &self.data
     }
 }
 
 pub trait VoxelModelImpl: Send + Sync + Any {
-    fn set_voxel_range(&mut self, range: VoxelRange);
+    fn set_voxel_range_impl(&mut self, range: VoxelRange);
+    fn set_voxel_range(&mut self, range: VoxelRange) {
+        // Asserts that the range's position with its length fits within this voxel model.
+        assert!(range
+            .length()
+            .zip_map(&(self.length() - range.position()), |x, y| x <= y)
+            .iter()
+            .all(|x| *x));
+        self.set_voxel_range_impl(range);
+    }
     fn schema(&self) -> VoxelModelSchema;
     fn length(&self) -> Vector3<u32>;
+
+    fn volume(&self) -> u64 {
+        self.length().map(|x| x as u64).product()
+    }
 }
 downcast!(dyn VoxelModelImpl);
 
@@ -87,27 +124,29 @@ impl VoxelModelGpuImpl for VoxelModelGpuNone {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VoxelModelSchema {
-    ESVO = 1,
+pub type VoxelModelSchema = u32;
+
+pub struct RenderableVoxelModelRef(pub VoxelModelId);
+
+impl std::ops::Deref for RenderableVoxelModelRef {
+    type Target = VoxelModelId;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Bundle)]
-pub struct RenderableVoxelModel<T: VoxelModelImplConcrete> {
-    pub transform: Transform,
-    pub voxel_model: VoxelModel<T>,
-    voxel_model_gpu: VoxelModelGpu<T::Gpu>,
+pub struct RenderableVoxelModel {
+    pub transform: VoxelModelTransform,
+    pub renderable_voxel_model_ref: RenderableVoxelModelRef,
 }
 
-impl<T> RenderableVoxelModel<T>
-where
-    T: VoxelModelImplConcrete,
-{
-    pub fn new(transform: Transform, voxel_model: impl Into<VoxelModel<T>>) -> Self {
+impl RenderableVoxelModel {
+    pub fn new(transform: VoxelModelTransform, voxel_model_id: VoxelModelId) -> Self {
         Self {
             transform,
-            voxel_model: voxel_model.into(),
-            voxel_model_gpu: VoxelModelGpu::new(T::Gpu::new()),
+            renderable_voxel_model_ref: RenderableVoxelModelRef(voxel_model_id),
         }
     }
 }
@@ -123,22 +162,15 @@ where
     pub fn new(model_gpu: T) -> Self {
         Self { model_gpu }
     }
+
+    pub fn into_model_gpu(self) -> T {
+        self.model_gpu
+    }
 }
 
 #[derive(Debug)]
 pub struct VoxelModel<T: VoxelModelImpl> {
     model: T,
-}
-
-// Create voxel model type iter generator macro under rogue_macros.
-//
-// Must be a proc macro because we need to iterate over component and generate param names for the
-// intermediate conversion to the &dyn VoxelModelImpl.
-macro_rules! voxel_model_iter {
-    ($model_type:ty, $ecs_world:expr, $( $component:ty),*) => {
-        let q = ecs_world.query::<(&m, $($component),*)>();
-        let i = q.into_iter().map(|entity, (model, )|)
-    };
 }
 
 macro_rules! query_voxel_models {
@@ -155,6 +187,10 @@ where
 
     pub fn length(&self) -> Vector3<u32> {
         self.model.length()
+    }
+
+    pub fn into_model(self) -> T {
+        self.model
     }
 }
 
@@ -206,5 +242,68 @@ where
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.model_gpu
+    }
+}
+
+pub type OptionalVoxelData = Option<VoxelData>;
+
+/// The data of a singular voxel, holds the attachments and values stored by the attachments.
+/// Stored in a contiguous homogenous array to avoid cache misses due to pointer hopping with
+/// something like a HashMap<Attachment, Vec<u32>>.
+///
+/// Data is encoded as, size of attachments, attachment ids, followed by attachment data in the
+/// same order. This data will start at some default size supporting the most common attachment
+/// needs and will have to perform a heap allocation for additional attachments.
+pub struct VoxelData {
+    // TODO: Actually implement that.
+    data: HashMap<AttachmentId, Vec<u32>>,
+}
+
+impl VoxelData {
+    const DEFAULT_CAPACITY: usize = 2;
+
+    pub fn empty() -> Self {
+        Self {
+            data: HashMap::with_capacity(Self::DEFAULT_CAPACITY),
+        }
+    }
+
+    pub fn with_diffuse<S>(mut self, albedo: Color<S>) -> Self
+    where
+        S: ColorSpace + ColorSpaceTransitionInto<ColorSpaceSrgbLinear>,
+    {
+        let material = PTMaterial::diffuse(albedo.into_color_space());
+        self.add_attachment(
+            &Attachment::PTMATERIAL,
+            &Attachment::encode_ptmaterial(&material),
+        );
+        self
+    }
+
+    pub fn with_normal(mut self, normal: Vector3<f32>) -> Self {
+        self.add_attachment(&Attachment::NORMAL, &Attachment::encode_normal(&normal));
+        self
+    }
+
+    pub fn with_emmisive(mut self, candela: u32) -> Self {
+        self.add_attachment(&Attachment::EMMISIVE, &Attachment::encode_emmisive(candela));
+        self
+    }
+
+    fn add_attachment<T: bytemuck::Pod>(&mut self, attachment: &Attachment, data: &T) {
+        self.data.insert(
+            attachment.id(),
+            bytemuck::cast_slice(bytemuck::bytes_of(data)).to_vec(),
+        );
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&AttachmentId, &[u32])> {
+        self.data
+            .iter()
+            .map(|(attachment_id, data)| (attachment_id, data.as_slice()))
+    }
+
+    pub fn attachment_ids(&self) -> impl Iterator<Item = &AttachmentId> {
+        self.data.keys()
     }
 }

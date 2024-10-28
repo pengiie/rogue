@@ -13,8 +13,8 @@ use crate::common::{bitset::Bitset, morton::morton_decode};
 
 use super::{
     attachment::Attachment,
-    esvo::VoxelModelESVO,
-    voxel::{VoxelModelGpuNone, VoxelModelImpl},
+    esvo::{VoxelModelESVO, VoxelModelESVONode},
+    voxel::{VoxelData, VoxelModelGpuNone, VoxelModelImpl},
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -27,7 +27,7 @@ pub struct VoxelModelFlat {
 }
 
 impl VoxelModelImpl for VoxelModelFlat {
-    fn set_voxel_range(&mut self, range: super::voxel::VoxelRange) {
+    fn set_voxel_range_impl(&mut self, range: super::voxel::VoxelRange) {
         todo!()
     }
 
@@ -90,7 +90,8 @@ impl VoxelModelFlat {
         )
     }
 
-    pub fn get_voxel(&self, index: usize) -> VoxelModelFlatVoxelAccess<'_> {
+    pub fn get_voxel(&self, position: Vector3<u32>) -> VoxelModelFlatVoxelAccess<'_> {
+        let index = self.get_voxel_index(position);
         VoxelModelFlatVoxelAccess {
             flat_model: self,
             index,
@@ -124,6 +125,9 @@ impl VoxelModelFlat {
             phantom: std::marker::PhantomData::default(),
         }
     }
+
+    // Creates a rect with with given attributes for each voxel.
+    // TODO: pub fn rect_filled(length: Vector3<u32>, voxel_data: VoxelData) -> Self {}
 }
 
 impl std::fmt::Debug for VoxelModelFlat {
@@ -134,7 +138,7 @@ impl std::fmt::Debug for VoxelModelFlat {
             for z in 0..self.length.y {
                 let mut row = String::new();
                 for x in 0..self.length.z {
-                    let voxel = self.get_voxel(self.get_voxel_index(Vector3::new(x, y, z)));
+                    let voxel = self.get_voxel(Vector3::new(x, y, z));
                     let char = if voxel.is_empty() { '0' } else { '1' };
                     row.push(char);
                     row.push(' ');
@@ -339,7 +343,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
             let mut attachment_data = None;
 
             if flat.in_bounds(pos) {
-                let voxel = flat.get_voxel(flat.get_voxel_index(pos));
+                let voxel = flat.get_voxel(pos);
                 exists = !voxel.is_empty();
                 attachment_data = Some(voxel.get_attachment_data());
             }
@@ -425,7 +429,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                         for (i, (node_data, attachment_lookup_node_data)) in
                             to_add_esvo_nodes.into_iter().enumerate()
                         {
-                            let n = VoxelModelESVO::decode_node(node_data);
+                            let n = VoxelModelESVONode(node_data);
                             // The 3rd to last layer and above will have nodes that use
                             // a child pointer to reference children nodes. This is a
                             // relative pointer however so we must change that here,
@@ -433,17 +437,17 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                             // pointers that don't point to anything.
                             // TODO: Implement far pointers for special cases.
                             let updated_child_ptr = if h < height - 1 {
-                                children_start - n.0 as usize + 1 + i
+                                children_start - n.relative_ptr() as usize + 1 + i
                             } else {
-                                n.0 as usize
+                                n.relative_ptr() as usize
                             };
 
                             esvo_nodes.push((
-                                VoxelModelESVO::encode_node(
+                                VoxelModelESVONode::encode_node(
                                     updated_child_ptr as u32,
-                                    n.1,
-                                    n.2,
-                                    n.3,
+                                    n.is_far(),
+                                    n.valid_mask(),
+                                    n.leaf_mask(),
                                 ),
                                 attachment_lookup_node_data,
                             ));
@@ -456,9 +460,10 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                             } else {
                                 esvo_nodes.len() as u32
                             };
-                            let node_data = VoxelModelESVO::encode_node(
+                            let node_data = VoxelModelESVONode::encode_node(
                                 child_ptr, false, child_mask, leaf_mask,
-                            );
+                            )
+                            .0;
 
                             let attachment_lookup_node_data = if raw_attachment_indices.is_empty() {
                                 None
@@ -492,21 +497,26 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
         }
 
         esvo_nodes.push(levels.first().unwrap().first().unwrap().clone().map_or(
-            (0, None),
+            (VoxelModelESVONode(0), None),
             |node| match node {
                 FlatESVONode::NonLeaf {
                     node_data,
                     attachment_lookup_node_data,
                 } => {
-                    let n = VoxelModelESVO::decode_node(node_data);
+                    let n = VoxelModelESVONode(node_data);
                     let updated_child_ptr = if height > 1 {
-                        esvo_nodes.len() - n.0 as usize + 1
+                        esvo_nodes.len() - n.relative_ptr() as usize + 1
                     } else {
-                        n.0 as usize
+                        n.relative_ptr() as usize
                     };
 
                     (
-                        VoxelModelESVO::encode_node(updated_child_ptr as u32, n.1, n.2, n.3),
+                        VoxelModelESVONode::encode_node(
+                            updated_child_ptr as u32,
+                            n.is_far(),
+                            n.valid_mask(),
+                            n.leaf_mask(),
+                        ),
                         None,
                     )
                 }
@@ -519,6 +529,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
         // Reverse so the root node is first, child_ptrs can stay the same.
         esvo_nodes.reverse();
 
-        VoxelModelESVO::with_nodes(esvo_nodes, esvo_attachment_raw, length, false)
+        todo!("Append the nodes to the esvo, and change the esvo_nodes so that there is not a hashmap per node but separate it out simiar and hold a hashmap of <Attachment, Vec<u32>> and then in VoxelModelESVO create a new function which takes the node data as essentially the same as how the esvo stores it but will append it in a way that generates buckets and page headers");
+        //VoxelModelESVO::with_nodes(esvo_nodes, esvo_attachment_raw, length, false)
     }
 }
