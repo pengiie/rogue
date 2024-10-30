@@ -46,7 +46,7 @@ pub(crate) struct VoxelModelESVO {
 impl VoxelModelESVO {
     const PAGE_SIZE: u32 = 8192;
     const DEFAULT_BUCKET_SIZE: u32 = Self::PAGE_SIZE << 1;
-    const DEFAULT_CHILD_CAPACITY: u32 = 4;
+    const DEFAULT_CHILD_CAPACITY: u32 = 8;
 
     pub fn empty(length: u32, track_updates: bool) -> Self {
         assert!(length.is_power_of_two());
@@ -75,7 +75,7 @@ impl VoxelModelESVO {
 
     // Allocates a child node which itself has a child capacity initially of 0, with the parent
     // node at `parent_index`.
-    fn allocate_node_child(&mut self, parent_index: u32, default_child_capacity: u32) -> u32 {
+    pub fn allocate_node_child(&mut self, parent_index: u32, default_child_capacity: u32) -> u32 {
         let parent_node = &self.node_data[parent_index as usize];
         if parent_node.is_far() {
             todo!("Deal with far pointer case.");
@@ -89,7 +89,7 @@ impl VoxelModelESVO {
         let parent_children_index = parent_index + parent_relative_child_ptr;
         let mut child_slot_index: Option<u32> = None;
         for i in parent_children_index..(parent_children_index + current_child_capacity) {
-            if self.node_metadata_data[i as usize].is_free() {
+            if self.node_metadata_data[i as usize].is_empty_child() {
                 // We found an open child slot for the parents child capactity.
                 child_slot_index = Some(i);
                 break;
@@ -97,6 +97,7 @@ impl VoxelModelESVO {
         }
 
         let child_slot_index = child_slot_index.unwrap_or_else(|| {
+            debug!("failed to find child slot");
             // Re-allocate child capacity for the parent node so we can allocate this node as
             // the parent's child.
             let new_child_capacity = if current_child_capacity == 0 {
@@ -107,7 +108,25 @@ impl VoxelModelESVO {
 
             let new_children_ptr = self.allocate_node_data(new_child_capacity);
             if current_child_capacity != 0 {
-                todo!("copy old child values and update their relative pointers accordingly");
+                assert!(current_child_capacity < 8);
+
+                let copy_len = current_child_capacity as usize;
+                unsafe {
+                    let src_ptr = self
+                        .node_data
+                        .as_ptr()
+                        .offset(parent_children_index as isize);
+                    let dst_ptr = self.node_data.as_ptr().offset(new_children_ptr as isize)
+                        as *mut VoxelModelESVONode;
+                    dst_ptr.copy_from_nonoverlapping(src_ptr, copy_len);
+               todo!("recursively reallocate any children of the chilren we just moved since the relative pointers will now no longer be correct."); 
+                }
+
+                for old_child in &mut self.node_metadata_data[parent_children_index as usize
+                    ..(parent_children_index + current_child_capacity) as usize]
+                {
+                    //*old_child = ESVONodeMetadata::Free;
+                }
             }
 
             let relative_child_ptr = new_children_ptr - parent_index;
@@ -115,6 +134,12 @@ impl VoxelModelESVO {
             self.node_metadata_data[parent_index as usize]
                 .unwrap_mut()
                 .children_capacity = new_child_capacity;
+
+            for new_child_metadata in &mut self.node_metadata_data
+                [new_children_ptr as usize..(new_children_ptr + new_child_capacity) as usize]
+            {
+                *new_child_metadata = ESVONodeMetadata::EmptyChild;
+            }
 
             new_children_ptr
         });
@@ -129,7 +154,7 @@ impl VoxelModelESVO {
     }
 
     // Returns the u32 index where the allocation starts.
-    fn allocate_node_data(&mut self, size: u32) -> u32 {
+    pub fn allocate_node_data(&mut self, size: u32) -> u32 {
         assert!(size > 0 && size <= 8);
 
         let free_bucket_index = self
@@ -192,6 +217,8 @@ impl VoxelModelESVO {
         attachment_id: AttachmentId,
         index: u32,
     ) -> &mut VoxelModelESVOAttachmentLookupNode {
+        assert!(self.attachment_map.contains(attachment_id));
+
         let lookup_data = self.get_attachment_lookup_data_mut(attachment_id);
 
         &mut lookup_data[index as usize]
@@ -200,6 +227,7 @@ impl VoxelModelESVO {
     // Returns the u32 index where the allocation starts.
     fn allocate_raw_attachment_data(&mut self, attachment_id: AttachmentId, size: u32) -> u32 {
         assert!(size > 0 && size <= 8);
+        assert!(self.attachment_map.contains(attachment_id));
 
         let raw_attachment_data = self
             .attachment_raw_data
@@ -274,12 +302,14 @@ impl VoxelModelESVO {
         &mut self,
         attachment_id: AttachmentId,
     ) -> &mut Vec<VoxelModelESVOAttachmentLookupNode> {
+        assert!(self.attachment_map.contains(attachment_id));
         self.attachment_lookup_data
             .entry(attachment_id)
             .or_insert_with(|| vec![VoxelModelESVOAttachmentLookupNode(0); self.node_data.len()])
     }
 
     pub fn get_attachment_raw_data_mut(&mut self, attachment_id: AttachmentId) -> &mut Vec<u32> {
+        assert!(self.attachment_map.contains(attachment_id));
         self.attachment_raw_data
             .entry(attachment_id)
             .or_insert(Vec::new())
@@ -380,11 +410,11 @@ impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
         let mut parent_node_index = self.esvo_model.root_node_index;
         let mut octant = 0;
         'traversal_loop: for (i, traversal) in traversal.enumerate() {
-            debug!("enumeration {} {}", i, traversal);
             if i as u32 == self.esvo_model.height() - 1 {
                 // parent_node_index is equal to the leaf nodes parent.
                 let parent_node_data = &mut self.esvo_model.node_data[parent_node_index as usize];
-                parent_node_data.set_leaf_mask(parent_node_data.leaf_mask() | (1 << octant));
+                parent_node_data.set_leaf_mask(parent_node_data.leaf_mask() | (1 << traversal));
+                parent_node_data.set_valid_mask(parent_node_data.valid_mask() | (1 << traversal));
 
                 octant = traversal;
             } else {
@@ -394,10 +424,6 @@ impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
                     VoxelModelESVO::DEFAULT_CHILD_CAPACITY,
                 ) {
                     Some(child_ptr) => {
-                        debug!(
-                            "setting parent to child {} {}",
-                            parent_node_index, child_ptr
-                        );
                         parent_node_index = child_ptr;
                     }
                     None => {
@@ -426,73 +452,78 @@ impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
             })
             .collect::<Vec<_>>()
         {
-            let old_attachment_mask = self
-                .parent_node_lookup_mut(attachment.id(), parent_node_index)
-                .attachment_mask();
-
-            let new_attachment_mask = old_attachment_mask | (1 << leaf_octant);
-            self.parent_node_lookup_mut(attachment.id(), parent_node_index)
-                .set_attachment_mask(new_attachment_mask);
-            debug!(
-                "set attachment mask {}",
-                self.parent_node_lookup_mut(attachment.id(), parent_node_index)
-                    .attachment_mask()
-            );
-
-            let raw_attachment_index = if old_attachment_mask != new_attachment_mask {
-                // Entry for this octant for the corresponding attachment type doesn't exist yet.
-                //todo!("Add attachment lookup metadata so we can properly grow raw attachment child data and track how many children for raw attachment data are allocated for a node");
-                let has_raw_data = old_attachment_mask > 0;
-                if !has_raw_data {
-                    // No entries for any children in the parent node exist so we must allocate
-                    // some data in the attachment's raw data buffer. We only do this now since we
-                    // want to be lazily allocated for voxel attachment data.
-
-                    // TODO: Make a function that determines this per attachment so that stuff
-                    // like PT material allocates a higher default size than emmisiveness.
-                    const DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE: u32 = 4;
-                    let allocated_raw_ptr = self.esvo_model.allocate_raw_attachment_data(
-                        attachment.id(),
-                        DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE,
-                    );
-
-                    self.parent_node_lookup_mut(attachment.id(), parent_node_index)
-                        .set_raw_index(allocated_raw_ptr);
-                }
-
-                let leaf_attachment_index = self
-                    .parent_node_lookup_mut(attachment.id(), parent_node_index)
-                    .raw_index()
-                    + old_attachment_mask.count_ones();
-
-                let mut must_swap = false;
-                for j in (leaf_octant + 1)..8 {
-                    if (old_attachment_mask & (1 << j)) > 0 {
-                        must_swap = true;
-                        break;
-                    }
-                }
-                if must_swap {
-                    todo!("swap ordering since octants of a higher norm must be after this one due to implicit child ordering in the attachment raw data");
-                }
-
-                leaf_attachment_index
-            } else {
-                panic!(
-                    "attachment already exists at this node and octant {} {}",
-                    old_attachment_mask, new_attachment_mask
-                );
-                let child_offset = (old_attachment_mask & ((1 << leaf_octant) - 1)).count_ones();
-                self.parent_node_lookup_mut(attachment.id(), parent_node_index)
-                    .raw_index()
-                    + child_offset
-            };
-            let raw_attachment_index = (raw_attachment_index * attachment.size()) as usize;
-            let raw_attachment_data = self.esvo_model.get_attachment_raw_data_mut(attachment.id());
-            raw_attachment_data
-                [raw_attachment_index..(raw_attachment_index + attachment.size() as usize)]
-                .copy_from_slice(data);
+            self.set_attachment_data(parent_node_index, leaf_octant, &attachment, data);
         }
+    }
+
+    pub fn set_attachment_data(
+        &mut self,
+        parent_node_index: u32,
+        leaf_octant: u32,
+        attachment: &Attachment,
+        data: &[u32],
+    ) {
+        let old_attachment_mask = self
+            .parent_node_lookup_mut(attachment.id(), parent_node_index)
+            .attachment_mask();
+
+        let new_attachment_mask = old_attachment_mask | (1 << leaf_octant);
+        self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+            .set_attachment_mask(new_attachment_mask);
+
+        let raw_attachment_index = if old_attachment_mask != new_attachment_mask {
+            // Entry for this octant for the corresponding attachment type doesn't exist yet.
+            //todo!("Add attachment lookup metadata so we can properly grow raw attachment child data and track how many children for raw attachment data are allocated for a node");
+            let has_raw_data = old_attachment_mask > 0;
+            if !has_raw_data {
+                // No entries for any children in the parent node exist so we must allocate
+                // some data in the attachment's raw data buffer. We only do this now since we
+                // want to be lazily allocated for voxel attachment data.
+
+                // TODO: Make a function that determines this per attachment so that stuff
+                // like PT material allocates a higher default size than emmisiveness.
+                const DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE: u32 = 8;
+                let allocated_raw_ptr = self.esvo_model.allocate_raw_attachment_data(
+                    attachment.id(),
+                    DEFAULT_RAW_ATTACHMENT_ALLOCATION_SIZE,
+                );
+
+                self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                    .set_raw_index(allocated_raw_ptr);
+            }
+
+            let leaf_attachment_index = self
+                .parent_node_lookup_mut(attachment.id(), parent_node_index)
+                .raw_index()
+                + old_attachment_mask.count_ones();
+
+            let mut must_swap = false;
+            for j in (leaf_octant + 1)..8 {
+                if (old_attachment_mask & (1 << j)) > 0 {
+                    must_swap = true;
+                    break;
+                }
+            }
+            if must_swap {
+                todo!("swap ordering since octants of a higher norm must be after this one due to implicit child ordering in the attachment raw data");
+            }
+
+            leaf_attachment_index
+        } else {
+            panic!(
+                "attachment already exists at this node and octant {} {}",
+                old_attachment_mask, new_attachment_mask
+            );
+            let child_offset = (old_attachment_mask & ((1 << leaf_octant) - 1)).count_ones();
+            self.parent_node_lookup_mut(attachment.id(), parent_node_index)
+                .raw_index()
+                + child_offset
+        };
+        let raw_attachment_index = (raw_attachment_index * attachment.size()) as usize;
+        let raw_attachment_data = self.esvo_model.get_attachment_raw_data_mut(attachment.id());
+        raw_attachment_data
+            [raw_attachment_index..(raw_attachment_index + attachment.size() as usize)]
+            .copy_from_slice(data);
     }
 
     fn parent_node_lookup_mut(
@@ -633,7 +664,7 @@ enum ESVONodeMetadata {
     /// Is allocated and has some node living here.
     Some(ESVONodeMetadataData),
     /// Is allocated and assigned to some parent node but is empty.
-    Allocated,
+    EmptyChild,
     Free,
 }
 
@@ -665,9 +696,9 @@ impl ESVONodeMetadata {
             _ => false,
         }
     }
-    pub fn is_free(&self) -> bool {
+    pub fn is_empty_child(&self) -> bool {
         match self {
-            ESVONodeMetadata::Free => true,
+            ESVONodeMetadata::EmptyChild => true,
             _ => false,
         }
     }
@@ -696,7 +727,7 @@ impl VoxelModelImpl for VoxelModelESVO {
     }
 
     fn schema(&self) -> VoxelModelSchema {
-        0
+        1
     }
 
     fn length(&self) -> Vector3<u32> {
@@ -832,6 +863,11 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         let Some(data_allocation) = &self.data_allocation else {
             return None;
         };
+        if self.attachment_lookup_allocations.is_empty()
+            || self.attachment_raw_allocations.is_empty()
+        {
+            return None;
+        }
 
         let mut attachment_lookup_indices =
             vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
@@ -958,6 +994,15 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             }
 
             self.initialized_data = true;
+            return;
+        }
+
+        // If we are here, we are now incrementally updating the gpu buffer data given updates sent
+        // from the voxel model of memory slices that have changed.
+        if let Some(updates) = &model.updates {
+            if !updates.is_empty() {
+                todo!("Process GPU updates")
+            }
         }
     }
 }

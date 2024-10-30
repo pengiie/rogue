@@ -68,66 +68,79 @@ impl GameWorld {
             game_world.loaded_test_models = true;
 
             let i = Instant::now();
-            let mut room_model = VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
+            let mut room_model = VoxelModelFlat::new_empty(Vector3::new(128, 128, 128));
             for (position, mut voxel) in room_model.xyz_iter_mut() {
-                let is_floor = position.y == 0;
-                let is_right_wall = position.x == 31;
-                let is_left_wall = position.x == 0;
-                let is_back_wall = position.z == 31;
-                let is_ceiling = position.y == 31;
-                let is_light =
-                    position.x >= 10 && position.x <= 19 && position.z >= 10 && position.z <= 19;
-
-                if is_floor || is_right_wall || is_left_wall || is_back_wall || is_ceiling {
-                    let color = if is_floor || is_back_wall || is_ceiling {
-                        if is_ceiling && is_light {
-                            Color::new_srgb(1.0, 1.0, 1.0)
-                        } else {
-                            Color::new_srgb(0.5, 0.5, 0.5)
-                        }
-                    } else if is_left_wall {
-                        Color::new_srgb(1.0, 0.0, 0.0)
-                    } else if is_right_wall {
-                        Color::new_srgb(0.0, 1.0, 0.0)
-                    } else {
-                        unreachable!()
-                    };
-
-                    let normal: Vector3<f32> = if is_floor {
-                        Vector3::y()
-                    } else if is_ceiling {
-                        -Vector3::y()
-                    } else if is_left_wall {
-                        Vector3::x()
-                    } else if is_right_wall {
-                        -Vector3::x()
-                    } else if is_back_wall {
-                        -Vector3::z()
-                    } else {
-                        unreachable!()
-                    };
-
+                if position.y == 0 {
                     voxel.set_attachment(
                         Attachment::PTMATERIAL,
                         Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
-                            color.into_color_space(),
+                            Color::new_srgb(
+                                position.x as f32 / 32.0,
+                                position.z as f32 / 32.0,
+                                0.5,
+                            )
+                            .into_color_space(),
                         ))),
                     );
-                    voxel.set_attachment(
-                        Attachment::NORMAL,
-                        Some(Attachment::encode_normal(&normal)),
-                    );
-
-                    if is_ceiling && is_light {
-                        voxel.set_attachment(
-                            Attachment::EMMISIVE,
-                            Some(Attachment::encode_emmisive(
-                                (100.0 * (vox_consts::VOXEL_WORLD_UNIT_LENGTH).powi(2)).floor()
-                                    as u32,
-                            )),
-                        );
-                    }
                 }
+                // let is_floor = position.y == 0;
+                // let is_right_wall = position.x == 31;
+                // let is_left_wall = position.x == 0;
+                // let is_back_wall = position.z == 31;
+                // let is_ceiling = position.y == 31;
+                // let is_light =
+                //     position.x >= 10 && position.x <= 19 && position.z >= 10 && position.z <= 19;
+
+                // if is_floor || is_right_wall || is_left_wall || is_back_wall || is_ceiling {
+                //     let color = if is_floor || is_back_wall || is_ceiling {
+                //         if is_ceiling && is_light {
+                //             Color::new_srgb(1.0, 1.0, 1.0)
+                //         } else {
+                //             Color::new_srgb(0.5, 0.5, 0.5)
+                //         }
+                //     } else if is_left_wall {
+                //         Color::new_srgb(1.0, 0.0, 0.0)
+                //     } else if is_right_wall {
+                //         Color::new_srgb(0.0, 1.0, 0.0)
+                //     } else {
+                //         unreachable!()
+                //     };
+
+                //     let normal: Vector3<f32> = if is_floor {
+                //         Vector3::y()
+                //     } else if is_ceiling {
+                //         -Vector3::y()
+                //     } else if is_left_wall {
+                //         Vector3::x()
+                //     } else if is_right_wall {
+                //         -Vector3::x()
+                //     } else if is_back_wall {
+                //         -Vector3::z()
+                //     } else {
+                //         unreachable!()
+                //     };
+
+                //     voxel.set_attachment(
+                //         Attachment::PTMATERIAL,
+                //         Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
+                //             color.into_color_space(),
+                //         ))),
+                //     );
+                //     voxel.set_attachment(
+                //         Attachment::NORMAL,
+                //         Some(Attachment::encode_normal(&normal)),
+                //     );
+
+                //     if is_ceiling && is_light {
+                //         voxel.set_attachment(
+                //             Attachment::EMMISIVE,
+                //             Some(Attachment::encode_emmisive(
+                //                 (100.0 * (vox_consts::VOXEL_WORLD_UNIT_LENGTH).powi(2)).floor()
+                //                     as u32,
+                //             )),
+                //         );
+                //     }
+                // }
             }
             debug!(
                 "Took {} seconds to generate flat model",
@@ -136,8 +149,9 @@ impl GameWorld {
 
             // Green box 4x4
             let i = Instant::now();
-            // let room_model = VoxelModel::<VoxelModelESVO>::new((&room_model).into());
-            let room_model = VoxelModel::<VoxelModelESVO>::new(VoxelModelESVO::empty(32, true));
+            let room_model = VoxelModel::<VoxelModelESVO>::new((&room_model).into());
+            //let room_model = VoxelModel::<VoxelModelESVO>::new(VoxelModelESVO::empty(32, true));
+            debug!("{:?}", room_model);
             let room_model_id =
                 voxel_world.register_renderable_voxel_model("room_model", room_model);
             game_world.test_model_id = room_model_id;
@@ -145,12 +159,12 @@ impl GameWorld {
                 "Took {} seconds to convert flat model to an esvo model",
                 i.elapsed().as_secs_f32()
             );
-            // debug!("{:?}", voxel_model);
 
             ecs_world.spawn(RenderableVoxelModel::new(
                 VoxelModelTransform::with_position_rotation(
                     Vector3::new(0.0, 0.0, 1.0),
                     UnitQuaternion::from_euler_angles(0.0, -45.0f32.to_radians(), 0.0),
+                    //
                 ),
                 room_model_id,
             ));
@@ -186,11 +200,11 @@ impl GameWorld {
         let unit_voxel = VoxelModelUnit::with_data(
             VoxelData::empty().with_diffuse(Color::new_srgb(1.0, 0.0, 0.0)),
         );
-        voxel_model.set_voxel_range(VoxelRange::from_unit(curr_pos, unit_voxel));
-        debug!(
-            "Set voxel at {} {} {} for i == {}",
-            curr_pos.x, curr_pos.y, curr_pos.z, game_world.i
-        );
+        //voxel_model.set_voxel_range(VoxelRange::from_unit(curr_pos, unit_voxel));
+        //debug!(
+        //    "Set voxel at {} {} {} for i == {}",
+        //    curr_pos.x, curr_pos.y, curr_pos.z, game_world.i
+        //);
         game_world.i = (game_world.i + 1) % voxel_model.volume() as u32;
         // for (entity, (vox_transform)) in ecs_world
         //     .query_mut::<(&mut VoxelModelTransform)>()

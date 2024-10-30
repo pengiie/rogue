@@ -280,9 +280,9 @@ fn esvo_get_node_attachment_ptr(esvo_info_data_ptr: u32,
                                 attachment_index: u32,
                                 node_index: u32,
                                 octant: u32) -> u32 {
-  let node_data_ptr = u_world_acceleration.data[esvo_info_data_ptr];
-  let attachment_lookup_ptr = u_world_acceleration.data[esvo_info_data_ptr + 1 + attachment_index];
-  let attachment_raw_ptr = u_world_acceleration.data[esvo_info_data_ptr + 1 + RENDER_INDICES_LENGTH + attachment_index];
+  let node_data_ptr = u_world_model_info.data[esvo_info_data_ptr];
+  let attachment_lookup_ptr = u_world_model_info.data[esvo_info_data_ptr + 1];
+  let attachment_raw_ptr = u_world_model_info.data[esvo_info_data_ptr + 1 + RENDER_INDICES_LENGTH + attachment_index];
   if (attachment_lookup_ptr == 0xFFFFFFFFu || attachment_raw_ptr == 0xFFFFFFFFu) {
     return 0xFFFFFFFFu;
   }
@@ -291,11 +291,13 @@ fn esvo_get_node_attachment_ptr(esvo_info_data_ptr: u32,
   let page_header_index = node_index & ~(0x1FFFu);
   let bucket_info_index = page_header_index + u_world_data.data[node_data_ptr + page_header_index];
 
+
   // Coincides with page header, the start index of this bucket. 
   let bucket_info_ptr = node_data_ptr + bucket_info_index;
   let bucket_start_index = u_world_data.data[bucket_info_ptr]; 
   let lookup_offset = node_index - bucket_start_index;
-  let lookup_index = u_world_data.data[bucket_info_ptr + 1] + lookup_offset;
+  //let lookup_index = u_world_data.data[bucket_info_ptr + 1] + lookup_offset;
+  let lookup_index = lookup_offset;
   let lookup_info = u_world_data.data[attachment_lookup_ptr + lookup_index];
 
   // Check that the voxel has this attachment type.
@@ -336,7 +338,7 @@ fn voxel_model_trace_miss() -> VoxelModelTrace {
   return VoxelModelTrace(false, ray_voxel_hit_empty());
 }
 
-fn voxel_model_trace_hit(radiance_outgoing: vec3f, albedo: vec3f,
+fn voxel_model_trace_hit(albedo: vec3f, radiance_outgoing: vec3f, 
                          normal: vec3f, sample_position: vec3f, hit_position: vec3f) -> VoxelModelTrace {
   return VoxelModelTrace(true, RayVoxelHit(albedo, radiance_outgoing, normal, sample_position, hit_position));
 }
@@ -347,7 +349,7 @@ struct ESVOStackItem {
 }
 
 fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
-  let node_data_ptr = u_world_acceleration.data[voxel_model.data_ptrs_ptr];
+  let node_data_ptr = u_world_model_info.data[voxel_model.model_data_ptr];
   let root_hit_info = voxel_model.hit_info;
   let root_aabb = voxel_model.aabb;
 
@@ -362,84 +364,110 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
   var curr_height = 0u;
   var should_push = true;
 
-  for (var i = 0; i < 1024; i++) {
+  var alb = vec3f(0.0);
+  for (var i = 0; i < 1028; i++) {
     let curr_hit_info = ray_to_aabb(ray, curr_aabb);
     let value_mask = (curr_node_data >> 8) & 0xFF;
     let in_octant = (value_mask & (0x1u << curr_octant)) > 0;
 
+    alb = vec3f(f32(i + 1) / 128.0);
     if (in_octant && should_push) {
       let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
       if (is_leaf) {
         let material_ptr = esvo_get_node_attachment_ptr(
-          voxel_model.data_ptrs_ptr,
+          voxel_model.model_data_ptr,
           0u,
           curr_node_index,
           curr_octant
         );
 
+        if (material_ptr == 0xFFFFFFF1u) {
+          alb = vec3f(1.0, 0.0, 1.0);
+          break;
+        }
+
         // Check if this voxel has a material, if it doesn't then skip it.
         if (material_ptr != 0xFFFFFFFFu) {
-          let normal_ptr = esvo_get_node_attachment_ptr(
-            voxel_model.data_ptrs_ptr,
-            1u,
-            curr_node_index,
-            curr_octant
-          );
-          // Check if this voxel has a normal, if it doesn't then skip it, we can't .
-          if (normal_ptr != 0xFFFFFFFFu) {
-            // This is a valid path tracing voxel.
-            let compressed_normal = u_world_data.data[normal_ptr];
-            let stored_normal = normalize(vec3f(
-              (f32((compressed_normal >> 16u) & 0xFFu) / 255.0) * 2.0 - 1.0,
-              (f32((compressed_normal >> 8u) & 0xFFu) / 255.0) * 2.0 - 1.0,
-              (f32(compressed_normal & 0xFFu) / 255.0) * 2.0 - 1.0,
-            ));
+          let hit_position = ray.origin + ray.dir * curr_hit_info.t_enter;
+          alb = vec3f(1.0, 0.0, 0.0);
 
-            let compresed_material = u_world_data.data[material_ptr];
-            let material_type = compresed_material >> 30;
+          let compresed_material = u_world_data.data[material_ptr];
+          let material_type = compresed_material >> 30;
 
-            // Process the diffuse material.
-            if (material_type == 0u) {
-              let albedo = vec3f(
-                f32((compresed_material >> 16u) & 0xFFu) / 255.0,
-                f32((compresed_material >> 8u) & 0xFFu) / 255.0,
-                f32(compresed_material & 0xFFu) / 255.0,
-              );
-
-              let emmisive_ptr = esvo_get_node_attachment_ptr(
-                voxel_model.data_ptrs_ptr,
-                2u,
-                curr_node_index,
-                curr_octant
-              );
-
-              var radiance_outgoing = vec3f(0.0);
-              // This voxel is emmisive so it generates it's own radiance.
-              if (emmisive_ptr != 0xFFFFFFFFu) {
-                let candela = f32(u_world_data.data[emmisive_ptr]);
-                radiance_outgoing = albedo * candela;
-              }
-
-              let hit_position = ray.origin + ray.dir * curr_hit_info.t_enter;
-              // Multiply the normal which has a length of one by some tiny epsilon.
-              let sample_position = curr_aabb.center + (stored_normal * 1.5);
-              return voxel_model_trace_hit(radiance_outgoing, albedo, stored_normal, sample_position, hit_position);
-            }
+          // Process the diffuse material.
+          if (material_type == 0u) {
+            let albedo = vec3f(
+              f32((compresed_material >> 16u) & 0xFFu) / 255.0,
+              f32((compresed_material >> 8u) & 0xFFu) / 255.0,
+              f32(compresed_material & 0xFFu) / 255.0,
+            );
+            return voxel_model_trace_hit(albedo, vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position);
+          } else {
+            // Unknown material.
+            return VoxelModelTrace(false, RayVoxelHit(vec3f(1.0, 1.0, 0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position));
           }
+          //let normal_ptr = esvo_get_node_attachment_ptr(
+          //  voxel_model.model_data_ptr,
+          //  1u,
+          //  curr_node_index,
+          //  curr_octant
+          //);
+          // Check if this voxel has a normal, if it doesn't then skip it, we can't .
+          // if (normal_ptr != 0xFFFFFFFFu) {
+          //   // This is a valid path tracing voxel.
+          //   let compressed_normal = u_world_data.data[normal_ptr];
+          //   let stored_normal = normalize(vec3f(
+          //     (f32((compressed_normal >> 16u) & 0xFFu) / 255.0) * 2.0 - 1.0,
+          //     (f32((compressed_normal >> 8u) & 0xFFu) / 255.0) * 2.0 - 1.0,
+          //     (f32(compressed_normal & 0xFFu) / 255.0) * 2.0 - 1.0,
+          //   ));
+
+          //  let compresed_material = u_world_data.data[material_ptr];
+          //  let material_type = compresed_material >> 30;
+
+          //  // Process the diffuse material.
+          //  if (material_type == 0u) {
+          //    let albedo = vec3f(
+          //      f32((compresed_material >> 16u) & 0xFFu) / 255.0,
+          //      f32((compresed_material >> 8u) & 0xFFu) / 255.0,
+          //      f32(compresed_material & 0xFFu) / 255.0,
+          //    );
+
+          //    let emmisive_ptr = esvo_get_node_attachment_ptr(
+          //      voxel_model.model_data_ptr,
+          //      2u,
+          //      curr_node_index,
+          //      curr_octant
+          //    );
+
+          //    var radiance_outgoing = vec3f(0.0);
+          //    // This voxel is emmisive so it generates it's own radiance.
+          //    if (emmisive_ptr != 0xFFFFFFFFu) {
+          //      let candela = f32(u_world_data.data[emmisive_ptr]);
+          //      radiance_outgoing = albedo * candela;
+          //    }
+
+          //    let hit_position = ray.origin + ray.dir * curr_hit_info.t_enter;
+          //    // Multiply the normal which has a length of one by some tiny epsilon.
+          ////    let sample_position = curr_aabb.center + (stored_normal * 1.5);
+
+          //    return voxel_model_trace_hit(radiance_outgoing, albedo, vec3f(0.0), vec3f(0.0), hit_position);
+            //}
+          //}
         }
+      } else {
+        stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
+        curr_height += 1u;
+
+        let child_offset = curr_node_data >> 17;
+        let octant_offset = countOneBits(value_mask & ((1u << curr_octant) - 1));
+        curr_octant = esvo_next_octant(ray, curr_aabb, curr_hit_info.t_enter);
+        curr_aabb = esvo_next_octant_aabb(curr_aabb, curr_octant);
+        curr_node_index = curr_node_index + child_offset + octant_offset;
+        curr_node_data = u_world_data.data[node_data_ptr + curr_node_index];
+
+        continue;
       }
-      
-      stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
-      curr_height += 1u;
-
-      let child_offset = curr_node_data >> 17;
-      let octant_offset = countOneBits(value_mask & ((1u << curr_octant) - 1));
-      curr_octant = esvo_next_octant(ray, curr_aabb, curr_hit_info.t_enter);
-      curr_aabb = esvo_next_octant_aabb(curr_aabb, curr_octant);
-      curr_node_index = curr_node_index + child_offset + octant_offset;
-      curr_node_data = u_world_data.data[node_data_ptr + curr_node_index];
-
-      continue;
     }
 
     let exit = vec3<bool>(
@@ -492,66 +520,22 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
     }
   }
 
-  return voxel_model_trace_miss();
+  return VoxelModelTrace(false, RayVoxelHit(alb, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3(0.0)));
 }
 
 struct VoxelModelHit {
-  // The pointer to where this model's data ptrs are located in u_world_acceleration.
-  data_ptrs_ptr: u32,
-  schema: u32,
-  hit_info: RayAABBInfo,
+  ray: Ray,
   aabb: AABB,
-  i: u32
+  hit_info: RayAABBInfo,
+  model_schema: u32,
+  model_data_ptr: u32,
 }
 
-fn get_next_voxel_model(ray: Ray, t_last_exit: f32) -> VoxelModelHit {
-  var closest: VoxelModelHit = VoxelModelHit(0, 0, 
-                                             RayAABBInfo(0.0, 0.0, 0.0, vec3f(0.0), vec3f(0.0), false), 
-                                             AABB(vec3f(0.0), vec3f(0.0)), 0u);
-  var min_t = 100000.0;
-  var current_index = 0u;
-  for (var i = 0u; i < u_world_info.voxel_entity_count; i++) {
-    let model_data_size = u_world_acceleration.data[current_index];
-    // Don't reintersect the same model we just intersected.
-    let min = bitcast<vec3<f32>>(vec3<u32>(
-      u_world_acceleration.data[current_index + 2],
-      u_world_acceleration.data[current_index + 3],
-      u_world_acceleration.data[current_index + 4],
-    ));
-    let max = bitcast<vec3<f32>>(vec3<u32>(
-      u_world_acceleration.data[current_index + 5],
-      u_world_acceleration.data[current_index + 6],
-      u_world_acceleration.data[current_index + 7],
-    ));
-
-    let aabb = aabb_min_max(min, max);
-    let hit_info = ray_to_aabb(ray, aabb);
-    // We this model as closest if it is hit, 
-    if (hit_info.hit && hit_info.t_exit < min_t && hit_info.t_exit >= t_last_exit) {
-      // Ensure the t-value entering this model is greater than our current minimum t-value needed.
-      // If it is the same ensure this model comes after any previous model with the exact same t-value.
-      // Since we only update min_t if we have a new t-value greater than, we will always access models with the
-      // exact same t-value in acsending order of `i` index.
-      //if (hit_info.t_enter_unbound > t_enter_min || (hit_info.t_enter_unbound == t_enter_min && i > last_model_i)) {
-        min_t = hit_info.t_exit;
-        closest = VoxelModelHit(current_index + 8,
-                                u_world_acceleration.data[current_index + 1],
-                                hit_info,
-                                aabb, i);
-      //}
-    }
-
-    current_index = current_index + model_data_size;
-  }
-
-  return closest;
-}
-
-fn trace_voxel_model(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
-  switch (voxel_model.schema) {
+fn trace_voxel_model(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
+  switch (model_hit_info.model_schema) {
     case 1u: {
       // TODO: Check the height of the esvo and choose the appropriate esvo_trace with stack size closest.
-      return esvo_trace(voxel_model, ray);    
+      return esvo_trace(model_hit_info, model_hit_info.ray);    
     }
     default: {
       return voxel_model_trace_miss();
@@ -633,16 +617,42 @@ fn next_ray_voxel_hit(ray: Ray) -> vec3f {
   for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
 
     // Test intersection with OBB.
-    let i = entity_index * 16;
+    let i = entity_index * 19;
     let aabb_bounds = aabb_min_max(
-      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i], u_world_acceleration.data[i + 1], u_world_acceleration.data[i + 2])),
-      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 3], u_world_acceleration.data[i + 4], u_world_acceleration.data[i + 5]))
+      bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i],
+        u_world_acceleration.data[i + 1],
+        u_world_acceleration.data[i + 2]
+      )),
+      bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i + 3],
+        u_world_acceleration.data[i + 4],
+        u_world_acceleration.data[i + 5]
+      )),
     );
-    let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 6], u_world_acceleration.data[i + 7], u_world_acceleration.data[i + 8]));
+
+    let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(
+      u_world_acceleration.data[i + 6],
+      u_world_acceleration.data[i + 7],
+      u_world_acceleration.data[i + 8]
+    ));
+
     let obb_rotation = mat3x3f(
-      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 9], u_world_acceleration.data[i + 10], u_world_acceleration.data[i + 11])),
-      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 12], u_world_acceleration.data[i + 13], u_world_acceleration.data[i + 14])),
-      bitcast<vec3<f32>>(vec3<u32>(u_world_acceleration.data[i + 15], u_world_acceleration.data[i + 16], u_world_acceleration.data[i + 17])),
+      bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i + 9],
+        u_world_acceleration.data[i + 10],
+        u_world_acceleration.data[i + 11]
+      )),
+      bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i + 12],
+        u_world_acceleration.data[i + 13],
+        u_world_acceleration.data[i + 14]
+      )),
+      bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i + 15],
+        u_world_acceleration.data[i + 16],
+        u_world_acceleration.data[i + 17]
+      )),
     );
 
     let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
@@ -651,38 +661,21 @@ fn next_ray_voxel_hit(ray: Ray) -> vec3f {
 
     let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
     if (hit_info.hit) {
-      return vec3f(1.0,1.0,1.0);
+      let model_ptr = u_world_acceleration.data[i + 18];
+      let model_schema = u_world_model_info.data[model_ptr];
+      let model_hit_info = VoxelModelHit(ray_rot, aabb_bounds, hit_info, model_schema, model_ptr + 1);
+
+      let trace = trace_voxel_model(model_hit_info);
+      if (trace.hit) {
+        let voxel_hit = trace.hit_data;
+        return vec3f(voxel_hit.albedo);
+      } else {
+        return sample_background_radiance(ray) + trace.hit_data.albedo;
+      }
     }
 
 
   }
-//   if (!next_model.hit_info.hit) {
-//     radiance_accumulated = sample_background_radiance(ray_curr);
-//     break;
-//   }
-// 
-//   let trace = trace_voxel_model(next_model, ray_curr);
-//   // For now end ray traversal if we didn't hit anything, we only trace the first model we hit.
-//   if (!trace.hit) {
-//     radiance_accumulated = sample_background_radiance(ray_curr);
-//     break;
-//   }
-// 
-//   //let random_sample_dir = normalize(trace.normal + rand_unit_vec3f());
-//   ////let random_sample_dir = rand_hemisphere(trace.normal);
-//   //let l = max(dot(trace.normal, random_sample_dir), 0.0);
-//   //let d = distance(trace.hit_position, ray_curr.origin);
-// 
-//   //radiance_accumulated += attenuation * trace.radiance_outgoing;
-// 
-//   radiance_accumulated = trace.albedo;
-//   break;
-//   // if (length(trace.radiance_outgoing) > 0.0) {
-//   //   break;
-//   // }
-// 
-//   // attenuation *= trace.albedo * l;
-//   // ray_curr = Ray(trace.sample_position, random_sample_dir, 1.0 / random_sample_dir);
 
   return sample_background_radiance(ray);
 }

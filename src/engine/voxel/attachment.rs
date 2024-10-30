@@ -17,7 +17,7 @@ impl Attachment {
     pub const PTMATERIAL_ID: AttachmentId = 0;
     pub const NORMAL_ID: AttachmentId = 1;
     pub const EMMISIVE_ID: AttachmentId = 2;
-    pub const MAX_ATTACHMENT_ID: AttachmentId = 31;
+    pub const MAX_ATTACHMENT_ID: AttachmentId = 2;
 
     pub const PTMATERIAL: Attachment =
         Attachment::new(Attachment::PTMATERIAL_ID, "pathtracing_material", 1);
@@ -159,6 +159,10 @@ impl AttachmentMap {
             "Attachment with id {} doesn't exist in the attachment map.",
             id
         ))
+    }
+
+    pub fn contains(&self, attachment_id: AttachmentId) -> bool {
+        self.map.contains_key(&attachment_id)
     }
 
     pub fn inherit_other(&mut self, other: &AttachmentMap) {
