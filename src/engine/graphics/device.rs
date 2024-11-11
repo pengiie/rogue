@@ -98,7 +98,7 @@ impl DeviceResource {
                 format: surface_format,
                 width: surface_size.width,
                 height: surface_size.height,
-                present_mode: wgpu::PresentMode::AutoVsync,
+                present_mode: wgpu::PresentMode::AutoNoVsync,
                 desired_maximum_frame_latency: 3,
                 alpha_mode: surface_caps.alpha_modes[0],
                 view_formats: vec![],

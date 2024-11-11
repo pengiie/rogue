@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct Bitset {
     data: Vec<u32>,
     bits: usize,
@@ -6,7 +7,7 @@ pub struct Bitset {
 impl Bitset {
     pub fn new(bits: usize) -> Self {
         Self {
-            data: vec![0; bits.next_multiple_of(32)],
+            data: vec![0; bits.next_multiple_of(32) / 32],
             bits,
         }
     }
@@ -28,5 +29,9 @@ impl Bitset {
     /// Length of the bitset in the number of bits.
     pub fn bits(&self) -> usize {
         self.bits
+    }
+
+    pub fn data(&self) -> &[u32] {
+        self.data.as_slice()
     }
 }

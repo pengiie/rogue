@@ -68,6 +68,9 @@ pub struct Settings {
     /// The mouse sensitivity of pixels per degree of rotation.
     pub mouse_sensitivity: f32,
 
+    /// The chunk render distance.
+    pub chunk_render_distance: u32,
+
     pub graphics: GraphicsSettings,
 }
 
@@ -75,7 +78,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             camera_fov: consts::FRAC_PI_2,
-            mouse_sensitivity: 0.005,
+            mouse_sensitivity: 0.002,
+
+            chunk_render_distance: 8,
 
             graphics: GraphicsSettings::default(),
         }

@@ -2,16 +2,13 @@ use crate::app::App;
 
 use super::resource::ResourceBank;
 
-mod voxel_constants;
-pub mod vox_consts {
-    pub use super::voxel_constants::*;
-}
 pub mod attachment;
 pub mod esvo;
 pub mod flat;
 pub mod unit;
 pub mod voxel;
 pub mod voxel_allocator;
+pub mod voxel_constants;
 pub mod voxel_terrain;
 pub mod voxel_transform;
 pub mod voxel_world;

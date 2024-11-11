@@ -81,13 +81,14 @@ pub type AttachmentId = u8;
 
 /// A path tracing material that uses specific 2 bits to determine the material type.
 pub enum PTMaterial {
-    Diffuse { albedo: Color<ColorSpaceSrgbLinear> },
+    Diffuse { albedo: Color<ColorSpaceSrgb> },
 }
 
 impl PTMaterial {
-    pub fn diffuse(albedo: Color<ColorSpaceSrgbLinear>) -> Self {
+    pub fn diffuse(albedo: Color<ColorSpaceSrgb>) -> Self {
         PTMaterial::Diffuse { albedo }
     }
+
     fn encode(&self) -> u32 {
         match self {
             PTMaterial::Diffuse { albedo } => {
@@ -110,7 +111,7 @@ impl PTMaterial {
                 let b = ((val >> 8) & 0xFF) as f32 / 255.0;
 
                 PTMaterial::Diffuse {
-                    albedo: Color::<ColorSpaceSrgbLinear>::new(r, g, b),
+                    albedo: Color::<ColorSpaceSrgb>::new(r, g, b),
                 }
             }
             _ => panic!("Encountered unsupported material type {}", mat_ty),
@@ -122,7 +123,7 @@ impl std::fmt::Debug for PTMaterial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Diffuse { albedo } => {
-                let srgb = albedo.into_color_space::<ColorSpaceSrgb>();
+                let srgb = albedo;
                 f.debug_struct("Diffuse").field("albedo", &srgb).finish()
             }
         }

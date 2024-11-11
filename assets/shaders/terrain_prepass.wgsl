@@ -1,3 +1,8 @@
+// Constants ---------------------------
+const EPSILON: f32 = 0.0;
+const RENDER_INDICES_LENGTH: u32 = 3u;
+const NULL_ATTACHMENT: u32 = 0xFFFFFFFF;
+
 // Ray -------------------------------------------------
 
 struct Ray {
@@ -275,7 +280,6 @@ fn esvo_ray_aabb_normal(ray_aabb_info: RayAABBInfo, ray: Ray) -> vec3f {
 }
 
 // Returns the raw attachment ptr into the raw buffer, or 0xFFFF_FFFF if it doesn't exist.
-const RENDER_INDICES_LENGTH: u32 = 3u;
 fn esvo_get_node_attachment_ptr(esvo_info_data_ptr: u32,
                                 attachment_index: u32,
                                 node_index: u32,
@@ -348,10 +352,11 @@ struct ESVOStackItem {
   octant: u32,
 }
 
-fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
+fn trace_esvo(voxel_model: VoxelModelHit) -> VoxelModelTrace {
   let node_data_ptr = u_world_model_info.data[voxel_model.model_data_ptr];
   let root_hit_info = voxel_model.hit_info;
   let root_aabb = voxel_model.aabb;
+  let ray = voxel_model.ray;
 
   // TODO: Dynamically choose a stack size given the voxel model being rendered.
   var stack = array<ESVOStackItem, 8>();
@@ -396,11 +401,11 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
 
           // Process the diffuse material.
           if (material_type == 0u) {
-            let albedo = vec3f(
+            let albedo = srgb_to_lrgb(vec3f(
               f32((compresed_material >> 16u) & 0xFFu) / 255.0,
               f32((compresed_material >> 8u) & 0xFFu) / 255.0,
               f32(compresed_material & 0xFFu) / 255.0,
-            );
+            ));
             return voxel_model_trace_hit(albedo, vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position);
           } else {
             // Unknown material.
@@ -523,6 +528,107 @@ fn esvo_trace(voxel_model: VoxelModelHit, ray: Ray) -> VoxelModelTrace {
   return VoxelModelTrace(false, RayVoxelHit(alb, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3(0.0)));
 }
 
+const FLAT_MODEL_DATA_ATTACHMENT_OFFSET: u32 = 4;
+fn flat_get_attachment_ptr(flat_model_ptr: u32,
+                           attachment_index: u32,
+                           voxel_index: u32) -> u32 {
+  let flat_attachment_presence_ptr = u_world_model_info.data[flat_model_ptr + FLAT_MODEL_DATA_ATTACHMENT_OFFSET + attachment_index];
+  let flat_attachment_data_ptr = u_world_model_info.data[flat_model_ptr + FLAT_MODEL_DATA_ATTACHMENT_OFFSET + 
+                                                         RENDER_INDICES_LENGTH + attachment_index];
+
+  let has_attachment = (u_world_data.data[flat_attachment_presence_ptr + voxel_index / 32] & (1u << (voxel_index % 32))) > 0;
+  if (!has_attachment) {
+    return NULL_ATTACHMENT;
+  }
+
+  let attachment_word_count = 1u;
+  let attachment_data_ptr = flat_attachment_data_ptr + voxel_index * attachment_word_count;
+  return attachment_data_ptr;
+}
+
+fn trace_flat(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
+  let model_data_ptr = model_hit_info.model_data_ptr;
+  let length = vec3<i32>(vec3<u32>(
+    u_world_model_info.data[model_data_ptr],
+    u_world_model_info.data[model_data_ptr + 1],
+    u_world_model_info.data[model_data_ptr + 2],
+  ));
+  let xy_area = length.x * length.y;
+  let voxel_presence_ptr = u_world_model_info.data[model_data_ptr + 3];
+
+  let root_aabb = model_hit_info.aabb;
+  let root_hit_info = model_hit_info.hit_info;
+
+  let world_space_ray_pos = ray_advance(model_hit_info.ray, root_hit_info.t_enter).origin - (root_aabb.center - root_aabb.side_length);
+
+  // Normalize and clamp the ray origin against the voxel models
+  // AABB min and max, then multiple by length to perform DDA.
+  let flat_ray_pos = saturate(world_space_ray_pos / (root_aabb.side_length * 2)) * vec3f(length);
+  let flat_ray = Ray(flat_ray_pos, model_hit_info.ray.dir, model_hit_info.ray.inv_dir);
+
+  let grid_step = vec3<i32>(sign(flat_ray.dir));
+  let unit_t = abs(flat_ray.inv_dir);
+
+  var grid_pos = clamp(vec3<i32>(floor(flat_ray.origin)), vec3<i32>(0), length - 1);
+  var curr_t = ray_to_point(flat_ray, vec3f(grid_pos) + vec3f(grid_step) * 0.5 + 0.5);
+  var last_t = vec3f(0.0);
+
+  var alb = vec3f(0);
+  var j = 1;
+  while (grid_pos.x >= 0 && grid_pos.y >= 0 && grid_pos.z >= 0 &&
+         grid_pos.x < length.x && grid_pos.y < length.y && grid_pos.z < length.z) {
+    // Use manhattan distance since DDA steps an axis at a time. Multiply by 2 to be less bright.
+    alb = vec3f(j) / (vec3f(length.x * 2 + length.y * 2 + length.z * 2));
+    j++; 
+
+    let voxel_index = u32(grid_pos.x + grid_pos.y * length.x + grid_pos.z * xy_area);
+    let voxel_is_present = (u_world_data.data[voxel_presence_ptr + voxel_index / 32] & (1u << (voxel_index % 32))) > 0;
+    if (voxel_is_present) {
+      // Scales the local voxel space to world space in terms of our t-value.
+      let t_world_scaling = (root_aabb.side_length * 2) / vec3f(length);
+      let world_last_t = last_t * t_world_scaling;
+
+      let local_ray_hit_t = min(world_last_t.x, min(world_last_t.y, world_last_t.z));
+      var mask = world_last_t.xyz <= min(world_last_t.zxy, world_last_t.yzx);
+      // This is the first iteration, thus we can't rely on last_t to form out mask since it isn't set yet.
+      if (j == 2) {
+        mask = root_hit_info.t_min == vec3f(root_hit_info.t_enter);
+      }
+
+      let world_hit_t = root_hit_info.t_enter + local_ray_hit_t;
+      let normal = vec3f(mask);
+      
+      let material_ptr = flat_get_attachment_ptr(model_data_ptr, 0u, voxel_index);
+      // Check if this voxel has a material, if it doesn't then skip it.
+      if (material_ptr != 0xFFFFFFFFu) {
+        alb = vec3f(1.0, 0.0, 0.0);
+
+        let compresed_material = u_world_data.data[material_ptr];
+        let material_type = compresed_material >> 30;
+
+        // Process the diffuse material.
+        if (material_type == 0u) {
+          let albedo = srgb_to_lrgb(vec3f(
+            f32((compresed_material >> 16u) & 0xFFu) / 255.0,
+            f32((compresed_material >> 8u) & 0xFFu) / 255.0,
+            f32(compresed_material & 0xFFu) / 255.0,
+          ));
+          return voxel_model_trace_hit(albedo, vec3f(0.0), normal, vec3f(0.0), vec3f(0.0));
+        } else {
+          // Unknown material.
+          return VoxelModelTrace(false, RayVoxelHit(vec3f(1.0, 1.0, 0.0), vec3f(0.0), normal, vec3f(0.0), vec3f(0.0)));
+        }
+      }
+    }
+
+    let mask = curr_t <= min(curr_t.zxy, curr_t.yzx);
+    grid_pos += vec3<i32>(mask) * grid_step;
+    last_t = curr_t;
+    curr_t += vec3<f32>(mask) * unit_t;
+  }
+  return VoxelModelTrace(false, RayVoxelHit(alb, vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3(0.0)));
+}
+
 struct VoxelModelHit {
   ray: Ray,
   aabb: AABB,
@@ -534,8 +640,11 @@ struct VoxelModelHit {
 fn trace_voxel_model(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
   switch (model_hit_info.model_schema) {
     case 1u: {
-      // TODO: Check the height of the esvo and choose the appropriate esvo_trace with stack size closest.
-      return esvo_trace(model_hit_info, model_hit_info.ray);    
+      // TODO: Check the height of the esvo and choose the appropriate trace_esvo with stack size closest.
+      return trace_esvo(model_hit_info);    
+    }
+    case 2u: {
+      return trace_flat(model_hit_info);
     }
     default: {
       return voxel_model_trace_miss();
@@ -612,69 +721,88 @@ fn sample_background_radiance(ray: Ray) -> vec3f {
   return background_color;
 }
 
-const BOUNCES: u32 = 3;
+const BOUNCES: u32 = 6;
+const T_LIMIT: f32 = 1000.0;
 fn next_ray_voxel_hit(ray: Ray) -> vec3f {
-  for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
+  // The last voxel model t-value the ray intersected with. Tracked so we only look
+  // at intersections after this value.
+  var last_model_t = -T_LIMIT;
 
-    // Test intersection with OBB.
-    let i = entity_index * 19;
-    let aabb_bounds = aabb_min_max(
-      bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i],
-        u_world_acceleration.data[i + 1],
-        u_world_acceleration.data[i + 2]
-      )),
-      bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i + 3],
-        u_world_acceleration.data[i + 4],
-        u_world_acceleration.data[i + 5]
-      )),
-    );
+  for (var passed = 0u; passed < 100; passed++) {
+    var closest_voxel_model_hit: VoxelModelHit;
+    var closest_model_t = T_LIMIT;
 
-    let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(
-      u_world_acceleration.data[i + 6],
-      u_world_acceleration.data[i + 7],
-      u_world_acceleration.data[i + 8]
-    ));
+    for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
+      // Test intersection with OBB.
+      let i = entity_index * 19;
+      let aabb_bounds = aabb_min_max(
+        bitcast<vec3<f32>>(vec3<u32>(
+          u_world_acceleration.data[i],
+          u_world_acceleration.data[i + 1],
+          u_world_acceleration.data[i + 2]
+        )),
+        bitcast<vec3<f32>>(vec3<u32>(
+          u_world_acceleration.data[i + 3],
+          u_world_acceleration.data[i + 4],
+          u_world_acceleration.data[i + 5]
+        )),
+      );
 
-    let obb_rotation = mat3x3f(
-      bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i + 9],
-        u_world_acceleration.data[i + 10],
-        u_world_acceleration.data[i + 11]
-      )),
-      bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i + 12],
-        u_world_acceleration.data[i + 13],
-        u_world_acceleration.data[i + 14]
-      )),
-      bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i + 15],
-        u_world_acceleration.data[i + 16],
-        u_world_acceleration.data[i + 17]
-      )),
-    );
+      let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(
+        u_world_acceleration.data[i + 6],
+        u_world_acceleration.data[i + 7],
+        u_world_acceleration.data[i + 8]
+      ));
 
-    let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
-    let ray_rot_dir = obb_rotation * ray.dir;
-    let ray_rot = Ray(ray_rot_origin, ray_rot_dir, 1.0 / ray_rot_dir);
+      let obb_rotation = mat3x3f(
+        bitcast<vec3<f32>>(vec3<u32>(
+          u_world_acceleration.data[i + 9],
+          u_world_acceleration.data[i + 10],
+          u_world_acceleration.data[i + 11]
+        )),
+        bitcast<vec3<f32>>(vec3<u32>(
+          u_world_acceleration.data[i + 12],
+          u_world_acceleration.data[i + 13],
+          u_world_acceleration.data[i + 14]
+        )),
+        bitcast<vec3<f32>>(vec3<u32>(
+          u_world_acceleration.data[i + 15],
+          u_world_acceleration.data[i + 16],
+          u_world_acceleration.data[i + 17]
+        )),
+      );
 
-    let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
-    if (hit_info.hit) {
-      let model_ptr = u_world_acceleration.data[i + 18];
-      let model_schema = u_world_model_info.data[model_ptr];
-      let model_hit_info = VoxelModelHit(ray_rot, aabb_bounds, hit_info, model_schema, model_ptr + 1);
+      let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
+      let ray_rot_dir = normalize(obb_rotation * ray.dir);
+      let ray_rot = Ray(ray_rot_origin, ray_rot_dir, 1.0 / ray_rot_dir);
 
-      let trace = trace_voxel_model(model_hit_info);
-      if (trace.hit) {
-        let voxel_hit = trace.hit_data;
-        return vec3f(voxel_hit.albedo);
-      } else {
-        return sample_background_radiance(ray) + trace.hit_data.albedo;
+      let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
+      let is_closer = hit_info.t_enter < closest_model_t;
+      let is_after_prev_model_t = hit_info.t_enter > last_model_t;
+      if (hit_info.hit && is_after_prev_model_t && is_closer) {
+        let model_ptr = u_world_acceleration.data[i + 18];
+        let model_schema = u_world_model_info.data[model_ptr];
+        let model_hit_info = VoxelModelHit(ray_rot, aabb_bounds, hit_info, model_schema, model_ptr + 1);
+
+        closest_model_t = hit_info.t_enter;
+        closest_voxel_model_hit = model_hit_info;
       }
     }
 
+    // We didn't hit anything so end early.
+    if (closest_model_t == last_model_t) {
+      break;
+    }
 
+    let trace = trace_voxel_model(closest_voxel_model_hit);
+    if (trace.hit) {
+      let hit_data = trace.hit_data;
+      let n = abs(hit_data.normal);
+      let l = n.y + n.x * 0.8 + n.z * 0.5;
+      return hit_data.albedo * l; 
+    } else {
+      last_model_t = closest_model_t;
+    }
   }
 
   return sample_background_radiance(ray);

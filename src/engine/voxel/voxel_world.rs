@@ -21,7 +21,6 @@ use crate::{
         graphics::device::DeviceResource,
         physics::transform::Transform,
         resource::{Res, ResMut},
-        voxel::vox_consts,
     },
 };
 
@@ -365,7 +364,7 @@ impl VoxelWorldGpu {
             voxel_world_gpu.acceleration_buffer =
                 Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("world_acceleration_buffer"),
-                    size: 4 * 1000, // 1000 voxel models
+                    size: 4 * 40000, // 1000 voxel models
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
@@ -376,7 +375,7 @@ impl VoxelWorldGpu {
             voxel_world_gpu.voxel_model_info_buffer =
                 Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("world_voxel_model_info_buffer"),
-                    size: 4 * 1000, // 1000 u32s
+                    size: 4 * 40000, // 1000 u32s
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
@@ -384,7 +383,8 @@ impl VoxelWorldGpu {
         }
 
         if voxel_world_gpu.allocator.is_none() {
-            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 24));
+            // 1 gig
+            voxel_world_gpu.allocator = Some(VoxelAllocator::new(&device, 1 << 30));
             voxel_world_gpu.is_dirty = true;
         }
         let allocator = voxel_world_gpu.allocator.as_mut().unwrap();
@@ -482,6 +482,10 @@ impl VoxelWorldGpu {
 
             // Used in the gpu world info to know the limits of the acceleration buffer.
             voxel_world_gpu.rendered_voxel_model_entity_count = entity_voxel_models.len() as u32;
+            debug!(
+                "Rendering {} voxel models.",
+                voxel_world_gpu.rendered_voxel_model_entity_count
+            );
 
             device.queue().write_buffer(
                 voxel_world_gpu.world_acceleration_buffer(),

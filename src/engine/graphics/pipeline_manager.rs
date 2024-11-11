@@ -4,10 +4,13 @@ use anyhow::anyhow;
 use log::{debug, info};
 use rogue_macros::Resource;
 
-use crate::engine::{
-    asset::asset::{AssetFile, AssetHandle, AssetId, AssetLoader, AssetPath, Assets},
-    resource::{Res, ResMut},
-    window::time::Instant,
+use crate::{
+    common::id::create_id_type,
+    engine::{
+        asset::asset::{AssetFile, AssetHandle, AssetId, AssetLoader, AssetPath, Assets},
+        resource::{Res, ResMut},
+        window::time::Instant,
+    },
 };
 
 use super::{
@@ -325,7 +328,7 @@ impl RenderPipelineManager {
         let id = self.id_counter;
         self.id_counter += 1;
 
-        PipelineId { id }
+        PipelineId(id)
     }
 
     /// Enqueues a pipeline with the create info supplied.
@@ -369,24 +372,7 @@ pub struct PipelineData {
     shaders: Vec<AssetHandle>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PipelineId {
-    id: u64,
-}
-
-impl PipelineId {
-    pub const fn null() -> Self {
-        Self { id: u64::MAX }
-    }
-
-    pub fn is_null(&self) -> bool {
-        *self == Self::null()
-    }
-}
-
-pub struct PipelineHandle {
-    id: PipelineId,
-}
+create_id_type!(PipelineId);
 
 enum Pipeline {
     Render(wgpu::RenderPipeline),

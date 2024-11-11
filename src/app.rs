@@ -113,18 +113,12 @@ impl App {
     fn init_post_graphics(&mut self) {
         let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
         let ui_state = UIState::default();
-        let mut render_pipeline_manager = RenderPipelineManager::new();
-        let renderer = Renderer::new(
-            &self.resource_bank().get_resource::<DeviceResource>(),
-            &mut render_pipeline_manager,
-        );
 
         let rb = self.resource_bank_mut();
         rb.insert(ui_state);
         rb.insert(egui);
-        rb.insert(render_pipeline_manager);
-        rb.insert(renderer);
 
+        engine::graphics::initialize_graphics_resources(rb);
         engine::voxel::initialize_voxel_world_resources(rb);
         // Game Stuff
 

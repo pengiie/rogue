@@ -35,9 +35,9 @@ pub mod blit {
     pub const PATH: &str = "shaders::blit::wgsl";
 }
 
-pub mod voxel_trace {
-    pub const SOURCE: &str = include_shader!("voxel_trace.wgsl");
-    pub const PATH: &str = "shaders::voxel_trace::wgsl";
+pub mod terrain_prepass {
+    pub const SOURCE: &str = include_shader!("terrain_prepass.wgsl");
+    pub const PATH: &str = "shaders::terrain_prepass::wgsl";
     pub const WORKGROUP_SIZE: [u32; 3] = [8, 8, 1];
 }
 

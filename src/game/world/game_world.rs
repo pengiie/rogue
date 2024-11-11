@@ -19,7 +19,6 @@ use crate::{
             esvo::VoxelModelESVO,
             flat::VoxelModelFlat,
             unit::VoxelModelUnit,
-            vox_consts,
             voxel::{
                 RenderableVoxelModel, RenderableVoxelModelRef, VoxelData, VoxelModel,
                 VoxelModelSchema, VoxelRange,
@@ -68,16 +67,16 @@ impl GameWorld {
             game_world.loaded_test_models = true;
 
             let i = Instant::now();
-            let mut room_model = VoxelModelFlat::new_empty(Vector3::new(128, 128, 128));
+            let mut room_model = VoxelModelFlat::new_empty(Vector3::new(256, 256, 256));
             for (position, mut voxel) in room_model.xyz_iter_mut() {
                 if position.y == 0 {
                     voxel.set_attachment(
                         Attachment::PTMATERIAL,
                         Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
                             Color::new_srgb(
-                                position.x as f32 / 32.0,
-                                position.z as f32 / 32.0,
-                                0.5,
+                                (position.x as f32 / 128.0),
+                                (position.z as f32 / 128.0),
+                                rand::random::<f32>() * 0.1 + 0.45,
                             )
                             .into_color_space(),
                         ))),
@@ -149,7 +148,8 @@ impl GameWorld {
 
             // Green box 4x4
             let i = Instant::now();
-            let room_model = VoxelModel::<VoxelModelESVO>::new((&room_model).into());
+            //let room_model = VoxelModel::<VoxelModelESVO>::new((&room_model).into());
+            let room_model = VoxelModel::new(room_model);
             //let room_model = VoxelModel::<VoxelModelESVO>::new(VoxelModelESVO::empty(32, true));
             debug!("{:?}", room_model);
             let room_model_id =
@@ -160,14 +160,14 @@ impl GameWorld {
                 i.elapsed().as_secs_f32()
             );
 
-            ecs_world.spawn(RenderableVoxelModel::new(
-                VoxelModelTransform::with_position_rotation(
-                    Vector3::new(0.0, 0.0, 1.0),
-                    UnitQuaternion::from_euler_angles(0.0, -45.0f32.to_radians(), 0.0),
-                    //
-                ),
-                room_model_id,
-            ));
+            //ecs_world.spawn(RenderableVoxelModel::new(
+            //    VoxelModelTransform::with_position(
+            //        Vector3::new(0.0, 0.0, 1.0),
+            //        //UnitQuaternion::from_euler_angles(0.0, -45.0f32.to_radians(), 0.0),
+            //        //
+            //    ),
+            //    room_model_id,
+            //));
 
             let mut box_model = VoxelModelFlat::new_empty(Vector3::new(4, 8, 4));
             // ecs_world.spawn(RenderableVoxelModel::new(

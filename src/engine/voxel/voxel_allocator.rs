@@ -30,9 +30,17 @@ impl VoxelAllocator {
     }
 
     pub fn allocate(&mut self, size: u64) -> Option<VoxelDataAllocation> {
-        assert!(size.next_power_of_two() <= self.allocations.size);
+        assert!(
+            size.next_power_of_two() <= self.allocations.size,
+            "Tried to allocate {} bytes but allocator can only hold {}",
+            size.next_power_of_two(),
+            self.allocations.size
+        );
         let allocation = self.allocations.allocate(size.next_power_of_two());
-        debug!("Allocated {:?}", allocation);
+        debug!(
+            "Allocated requested size in bytes: {}, {:?}",
+            size, allocation
+        );
 
         allocation
     }

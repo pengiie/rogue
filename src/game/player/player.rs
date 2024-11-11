@@ -27,7 +27,7 @@ impl Player {
         Self {
             euler: Vector3::zeros(),
             paused: true,
-            movement_speed: 1.0,
+            movement_speed: 4.0,
         }
     }
     pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>) {

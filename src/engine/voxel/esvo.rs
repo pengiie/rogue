@@ -24,6 +24,7 @@ use super::{
         VoxelModelImplConcrete, VoxelModelSchema, VoxelRange, VoxelRangeData,
     },
     voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
+    voxel_constants,
 };
 
 #[derive(Clone)]
@@ -45,7 +46,7 @@ pub(crate) struct VoxelModelESVO {
 
 impl VoxelModelESVO {
     const PAGE_SIZE: u32 = 8192;
-    const DEFAULT_BUCKET_SIZE: u32 = Self::PAGE_SIZE << 1;
+    const DEFAULT_BUCKET_SIZE: u32 = Self::PAGE_SIZE;
     const DEFAULT_CHILD_CAPACITY: u32 = 8;
 
     pub fn empty(length: u32, track_updates: bool) -> Self {
@@ -97,7 +98,6 @@ impl VoxelModelESVO {
         }
 
         let child_slot_index = child_slot_index.unwrap_or_else(|| {
-            debug!("failed to find child slot");
             // Re-allocate child capacity for the parent node so we can allocate this node as
             // the parent's child.
             let new_child_capacity = if current_child_capacity == 0 {
@@ -320,9 +320,10 @@ impl VoxelModelESVO {
     pub fn push_empty_bucket(&mut self, bucket_size: u32) {
         assert!(bucket_size.is_power_of_two());
 
+        debug!("node data is {} long", self.node_data.len());
         let start_offset = self.node_data.len() as u32;
         assert!(
-            (start_offset + 1).is_power_of_two(),
+            (start_offset.max(1)).is_power_of_two(),
             "Somehow the start offset isn't a power of 2, start offset: {}",
             start_offset
         );
@@ -345,14 +346,27 @@ impl VoxelModelESVO {
             ESVONodeMetadata::Free,
         );
         assert_eq!(self.node_data.len(), self.node_metadata_data.len());
+        for (_, attachment_lookup_data) in &mut self.attachment_lookup_data {
+            attachment_lookup_data.resize(
+                attachment_lookup_data.len() + bucket_metadata.bucket_total_size as usize,
+                VoxelModelESVOAttachmentLookupNode(0),
+            );
+
+            assert_eq!(self.node_data.len(), attachment_lookup_data.len());
+        }
 
         self.bucket_metadata.push(bucket_metadata);
         // Writing index 0 of bucket info.
         self.node_data[bucket_metadata.bucket_info_start as usize] =
             VoxelModelESVONode::encode_data(bucket_metadata.bucket_absolute_start);
         assert_eq!(
-            bucket_metadata.bucket_total_size - bucket_metadata.bucket_info_start,
-            self.bucket_info_size()
+            (bucket_metadata.bucket_absolute_start + bucket_metadata.bucket_total_size)
+                - bucket_metadata.bucket_info_start,
+            self.bucket_info_size(),
+            "Expected size between {} and {} to be {}, but it was not.",
+            bucket_metadata.bucket_info_start,
+            bucket_metadata.bucket_total_size,
+            self.bucket_info_size(),
         );
 
         // Write page headers to point to block info
@@ -541,6 +555,7 @@ impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
 pub struct VoxelModelESVOAttachmentLookupNode(pub u32);
 
 impl VoxelModelESVOAttachmentLookupNode {
+    pub const RELATIVE_PTR_BITS: u32 = 15;
     pub const fn encode_lookup(raw_index: u32, attachment_mask: u32) -> Self {
         assert!(raw_index < (1 << 15), "raw index is too big.");
         assert!(attachment_mask < (1 << 8), "attachment mask is too big.");
@@ -553,7 +568,10 @@ impl VoxelModelESVOAttachmentLookupNode {
     }
 
     pub fn set_raw_index(&mut self, raw_index: u32) {
-        assert!(raw_index < (1 << 15), "raw index is too big.");
+        assert!(
+            raw_index < (1 << Self::RELATIVE_PTR_BITS),
+            "raw index is too big."
+        );
 
         self.0 = (self.0 & 0x0000_00FF) | (raw_index << 8);
     }
@@ -723,11 +741,10 @@ impl VoxelModelImpl for VoxelModelESVO {
             }
             VoxelRangeData::Flat(_) => todo!(),
         }
-        debug!("ESVO: {:?}", self);
     }
 
     fn schema(&self) -> VoxelModelSchema {
-        1
+        voxel_constants::MODEL_ESVO_SCHEMA
     }
 
     fn length(&self) -> Vector3<u32> {
@@ -946,7 +963,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
         if !self.initialized_data && self.data_allocation.is_some() {
-            debug!("Writing voxel model initial data");
+            debug!("Writing ESVO voxel model initial data");
 
             // debug!("Writing node data {:?}", model.node_data.as_slice());
             allocator.write_world_data(

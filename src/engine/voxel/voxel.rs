@@ -10,7 +10,8 @@ use rogue_macros::Resource;
 
 use crate::{
     common::color::{
-        Color, ColorSpace, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom, ColorSpaceTransitionInto,
+        Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
+        ColorSpaceTransitionInto,
     },
     engine::{graphics::device::DeviceResource, physics::transform::Transform},
 };
@@ -270,7 +271,7 @@ impl VoxelData {
 
     pub fn with_diffuse<S>(mut self, albedo: Color<S>) -> Self
     where
-        S: ColorSpace + ColorSpaceTransitionInto<ColorSpaceSrgbLinear>,
+        S: ColorSpace + ColorSpaceTransitionInto<ColorSpaceSrgb>,
     {
         let material = PTMaterial::diffuse(albedo.into_color_space());
         self.add_attachment(

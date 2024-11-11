@@ -74,7 +74,7 @@ impl Egui {
         &mut self.ctx
     }
 
-    pub fn resolve_ui(&mut self, window: &Window, func: impl FnOnce(&egui::Context)) {
+    pub fn resolve_ui(&mut self, window: &Window, mut func: impl FnMut(&egui::Context)) {
         egui_winit::update_viewport_info(
             &mut self.viewport_info,
             &self.ctx,

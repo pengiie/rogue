@@ -66,6 +66,15 @@ pub trait ColorSpace {}
 pub trait ColorSpaceTransitionFrom<From: ColorSpace> {
     fn transition(xyz: Vector3<f32>) -> Vector3<f32>;
 }
+impl<S> ColorSpaceTransitionFrom<S> for S
+where
+    S: ColorSpace,
+{
+    fn transition(xyz: Vector3<f32>) -> Vector3<f32> {
+        xyz
+    }
+}
+
 pub trait ColorSpaceTransitionInto<Into: ColorSpace> {
     fn transition(xyz: Vector3<f32>) -> Vector3<f32>;
 }
