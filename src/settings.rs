@@ -80,7 +80,7 @@ impl Default for Settings {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: 0.002,
 
-            chunk_render_distance: 8,
+            chunk_render_distance: 2,
 
             graphics: GraphicsSettings::default(),
         }

@@ -448,7 +448,7 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: voxel_world_gpu.world_acceleration_buffer(),
+                            buffer: voxel_world_gpu.world_terrain_acceleration_buffer(),
                             offset: 0,
                             size: None,
                         }),

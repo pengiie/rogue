@@ -3,6 +3,50 @@ const EPSILON: f32 = 0.0;
 const RENDER_INDICES_LENGTH: u32 = 3u;
 const NULL_ATTACHMENT: u32 = 0xFFFFFFFF;
 
+const TERRAIN_CHUNK_WORLD_UNIT_LENGTH: f32 = 32.0;
+
+// Morton ----------------------------------
+
+// Split first 10 bits by inserting two 0s to the left of each bit.
+fn morton_split_by_2(x: u32) -> u32 {
+  var y = x & 0x000003ff; //      00000000000000000000001111111111
+  y = (y | (y << 16)) & 0x030000ff; // 00000011000000000000000011111111
+  y = (y | (y << 8)) & 0x0300f00f; //  00000011000000001111000000001111
+  y = (y | (y << 4)) & 0x030c30c3; //  00000011000011000011000011000011
+  y = (y | (y << 2)) & 0x09249249; //  00001001001001001001001001001001
+  return y;
+}
+
+fn morton_encode_3(x: u32, y: u32, z: u32) -> u32 {
+  return morton_split_by_2(x) | (morton_split_by_2(y) << 1) | (morton_split_by_2(z) << 2);
+}
+
+fn morton_compact_by_1(x: u32) -> u32 {
+  var y = x & 0x55555555; //      01010101010101010101010101010101
+  y = (y | (y >> 1)) & 0x33333333; //  00110011001100110011001100110011
+  y = (y | (y >> 2)) & 0x0f0f0f0f; //  00001111000011110000111100001111
+  y = (y | (y >> 4)) & 0x00ff00ff; //  00000000111111110000000011111111
+  y = (y | (y >> 8)) & 0x0000ffff; //  00000000000000001111111111111111
+  return y;
+}
+
+fn morton_decode_2(morton: u32) -> vec2<u32> {
+  return vec2<u32>(morton_compact_by_1(morton), morton_compact_by_1(morton >> 1));
+}
+
+fn morton_compact_by_2(x: u32) -> u32 {
+  var y = x & 0x09249249; //      00001001001001001001001001001001
+  y = (y | (y >> 2)) & 0x030c30c3; //  00000011000011000011000011000011
+  y = (y | (y >> 4)) & 0x0300f00f; //  00000011000000001111000000001111
+  y = (y | (y >> 8)) & 0x030000ff; //  00000011000000000000000011111111
+  y = (y | (y >> 16)) & 0x000003ff; // 00000000000000000000001111111111
+  return y;
+}
+
+fn morton_decode_3(morton: u32) -> vec3<u32> {
+  return vec3<u32>(morton_compact_by_2(morton), morton_compact_by_2(morton >> 1), morton_compact_by_2(morton >> 2));
+}
+
 // Ray -------------------------------------------------
 
 struct Ray {
@@ -162,6 +206,12 @@ struct WorldAcceleration {
   data: array<u32>
 }
 
+struct WorldTerrainAcceleration {
+  chunk_origin: vec3<i32>,
+  side_length: u32,
+  data: array<u32>
+}
+
 struct WorldData {
   data: array<u32>
 }
@@ -170,7 +220,7 @@ struct WorldData {
 @group(0) @binding(1) var u_radiance_total: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var u_radiance_total_prev: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> u_world_info: WorldInfo; 
-@group(0) @binding(4) var<storage, read> u_world_acceleration: WorldAcceleration; 
+@group(0) @binding(4) var<storage, read> u_world_terrain_acceleration: WorldTerrainAcceleration; 
 @group(0) @binding(5) var<storage, read> u_world_model_info: WorldModelInfo; 
 @group(0) @binding(6) var<storage, read> u_world_data: WorldData; 
 
@@ -586,16 +636,16 @@ fn trace_flat(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
     if (voxel_is_present) {
       // Scales the local voxel space to world space in terms of our t-value.
       let t_world_scaling = (root_aabb.side_length * 2) / vec3f(length);
-      let world_last_t = last_t * t_world_scaling;
+      let scaled_last_t = last_t * t_world_scaling;
 
-      let local_ray_hit_t = min(world_last_t.x, min(world_last_t.y, world_last_t.z));
-      var mask = world_last_t.xyz <= min(world_last_t.zxy, world_last_t.yzx);
+      let local_ray_hit_t = min(scaled_last_t.x, min(scaled_last_t.y, scaled_last_t.z));
+      let world_hit_t = root_hit_info.t_enter + local_ray_hit_t;
+
+      var mask = scaled_last_t.xyz <= min(scaled_last_t.zxy, scaled_last_t.yzx);
       // This is the first iteration, thus we can't rely on last_t to form out mask since it isn't set yet.
       if (j == 2) {
         mask = root_hit_info.t_min == vec3f(root_hit_info.t_enter);
       }
-
-      let world_hit_t = root_hit_info.t_enter + local_ray_hit_t;
       let normal = vec3f(mask);
       
       let material_ptr = flat_get_attachment_ptr(model_data_ptr, 0u, voxel_index);
@@ -613,7 +663,9 @@ fn trace_flat(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
             f32((compresed_material >> 8u) & 0xFFu) / 255.0,
             f32(compresed_material & 0xFFu) / 255.0,
           ));
-          return voxel_model_trace_hit(albedo, vec3f(0.0), normal, vec3f(0.0), vec3f(0.0));
+          let world_hit_pos = model_hit_info.ray.origin + model_hit_info.ray.dir * world_hit_t;
+          return voxel_model_trace_hit(albedo, vec3f(0.0), normal, 
+                                       vec3f(0.0), world_hit_pos);
         } else {
           // Unknown material.
           return VoxelModelTrace(false, RayVoxelHit(vec3f(1.0, 1.0, 0.0), vec3f(0.0), normal, vec3f(0.0), vec3f(0.0)));
@@ -723,87 +775,129 @@ fn sample_background_radiance(ray: Ray) -> vec3f {
 
 const BOUNCES: u32 = 6;
 const T_LIMIT: f32 = 1000.0;
-fn next_ray_voxel_hit(ray: Ray) -> vec3f {
+fn next_ray_terrain_hit(ray: Ray) -> vec3f {
+  let chunk_render_origin = u_world_terrain_acceleration.chunk_origin;
+  let render_distance = i32(u_world_terrain_acceleration.side_length);
+
+  let chunk_ray_pos = (ray.origin / TERRAIN_CHUNK_WORLD_UNIT_LENGTH) - vec3f(chunk_render_origin);
+  let chunk_ray = Ray(chunk_ray_pos, ray.dir, ray.inv_dir);
+
+  let grid_step = vec3<i32>(sign(chunk_ray.dir));
+  let unit_t = abs(chunk_ray.inv_dir);
+
+  var grid_pos = vec3<i32>(floor(chunk_ray.origin));
+  var curr_t = ray_to_point(chunk_ray, vec3f(grid_pos) + vec3f(grid_step) * 0.5 + 0.5);
+  var last_t = vec3f(0.0);
+
+  var alb = vec3f(0);
+  var j = 1;
+  while (grid_pos.x >= 0 && grid_pos.y >= 0 && grid_pos.z >= 0 &&
+         grid_pos.x < render_distance && grid_pos.y < render_distance && grid_pos.z < render_distance) {
+    // Use manhattan distance since DDA steps an axis at a time. Multiply by 2 to be less bright.
+    alb = vec3f(j) / (vec3f(render_distance * 6));
+    j++; 
+
+    let chunk_index = morton_encode_3(u32(grid_pos.x), u32(grid_pos.y), u32(grid_pos.z));
+    let model_ptr = u_world_terrain_acceleration.data[chunk_index];
+    if (model_ptr != 0xFFFFFFFF) {
+       let model_schema = u_world_model_info.data[model_ptr];
+       let min = vec3f(grid_pos + chunk_render_origin) * TERRAIN_CHUNK_WORLD_UNIT_LENGTH;
+       let aabb = aabb_min_max(min, min + TERRAIN_CHUNK_WORLD_UNIT_LENGTH);
+       let hit_info = ray_to_aabb(ray, aabb);
+       let model_hit_info = VoxelModelHit(ray, aabb, hit_info, model_schema, model_ptr + 1);
+       let trace = trace_voxel_model(model_hit_info);
+       if (trace.hit) {
+         let trace_data = trace.hit_data;
+         let depth = distance(ray.origin, trace_data.hit_position);
+         return vec3f(depth / 700.0f);
+       }
+    }
+
+    let mask = curr_t <= min(curr_t.zxy, curr_t.yzx);
+    grid_pos += vec3<i32>(mask) * grid_step;
+    last_t = curr_t;
+    curr_t += vec3<f32>(mask) * unit_t;
+  }
   // The last voxel model t-value the ray intersected with. Tracked so we only look
   // at intersections after this value.
-  var last_model_t = -T_LIMIT;
+  // var last_model_t = -T_LIMIT;
 
-  for (var passed = 0u; passed < 100; passed++) {
-    var closest_voxel_model_hit: VoxelModelHit;
-    var closest_model_t = T_LIMIT;
+  // for (var passed = 0u; passed < 100; passed++) {
+  //   var closest_voxel_model_hit: VoxelModelHit;
+  //   var closest_model_t = T_LIMIT;
 
-    for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
-      // Test intersection with OBB.
-      let i = entity_index * 19;
-      let aabb_bounds = aabb_min_max(
-        bitcast<vec3<f32>>(vec3<u32>(
-          u_world_acceleration.data[i],
-          u_world_acceleration.data[i + 1],
-          u_world_acceleration.data[i + 2]
-        )),
-        bitcast<vec3<f32>>(vec3<u32>(
-          u_world_acceleration.data[i + 3],
-          u_world_acceleration.data[i + 4],
-          u_world_acceleration.data[i + 5]
-        )),
-      );
+  //   for (var entity_index = 0u; entity_index < u_world_info.voxel_entity_count; entity_index++) {
+  //     // Test intersection with OBB.
+  //     let i = entity_index * 19;
+  //     let aabb_bounds = aabb_min_max(
+  //       bitcast<vec3<f32>>(vec3<u32>(
+  //         u_world_acceleration.data[i],
+  //         u_world_acceleration.data[i + 1],
+  //         u_world_acceleration.data[i + 2]
+  //       )),
+  //       bitcast<vec3<f32>>(vec3<u32>(
+  //         u_world_acceleration.data[i + 3],
+  //         u_world_acceleration.data[i + 4],
+  //         u_world_acceleration.data[i + 5]
+  //       )),
+  //     );
 
-      let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(
-        u_world_acceleration.data[i + 6],
-        u_world_acceleration.data[i + 7],
-        u_world_acceleration.data[i + 8]
-      ));
+  //     let obb_rotation_anchor = bitcast<vec3<f32>>(vec3<u32>(
+  //       u_world_acceleration.data[i + 6],
+  //       u_world_acceleration.data[i + 7],
+  //       u_world_acceleration.data[i + 8]
+  //     ));
 
-      let obb_rotation = mat3x3f(
-        bitcast<vec3<f32>>(vec3<u32>(
-          u_world_acceleration.data[i + 9],
-          u_world_acceleration.data[i + 10],
-          u_world_acceleration.data[i + 11]
-        )),
-        bitcast<vec3<f32>>(vec3<u32>(
-          u_world_acceleration.data[i + 12],
-          u_world_acceleration.data[i + 13],
-          u_world_acceleration.data[i + 14]
-        )),
-        bitcast<vec3<f32>>(vec3<u32>(
-          u_world_acceleration.data[i + 15],
-          u_world_acceleration.data[i + 16],
-          u_world_acceleration.data[i + 17]
-        )),
-      );
+  //     let obb_rotation = mat3x3f(
+  //       bitcast<vec3<f32>>(vec3<u32>(
+  //         u_world_acceleration.data[i + 9],
+  //         u_world_acceleration.data[i + 10],
+  //         u_world_acceleration.data[i + 11]
+  //       )),
+  //       bitcast<vec3<f32>>(vec3<u32>(
+  //         u_world_acceleration.data[i + 12],
+  //         u_world_acceleration.data[i + 13],
+  //         u_world_acceleration.data[i + 14]
+  //       )),
+  //       bitcast<vec3<f32>>(vec3<u32>(
+  //         u_world_acceleration.data[i + 15],
+  //         u_world_acceleration.data[i + 16],
+  //         u_world_acceleration.data[i + 17]
+  //       )),
+  //     );
 
-      let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
-      let ray_rot_dir = normalize(obb_rotation * ray.dir);
-      let ray_rot = Ray(ray_rot_origin, ray_rot_dir, 1.0 / ray_rot_dir);
+  //     let ray_rot_origin = obb_rotation * (ray.origin - obb_rotation_anchor) + obb_rotation_anchor;
+  //     let ray_rot_dir = normalize(obb_rotation * ray.dir);
+  //     let ray_rot = Ray(ray_rot_origin, ray_rot_dir, 1.0 / ray_rot_dir);
 
-      let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
-      let is_closer = hit_info.t_enter < closest_model_t;
-      let is_after_prev_model_t = hit_info.t_enter > last_model_t;
-      if (hit_info.hit && is_after_prev_model_t && is_closer) {
-        let model_ptr = u_world_acceleration.data[i + 18];
-        let model_schema = u_world_model_info.data[model_ptr];
-        let model_hit_info = VoxelModelHit(ray_rot, aabb_bounds, hit_info, model_schema, model_ptr + 1);
+  //     let hit_info = ray_to_aabb(ray_rot, aabb_bounds);
+  //     let is_closer = hit_info.t_enter < closest_model_t;
+  //     let is_after_prev_model_t = hit_info.t_enter > last_model_t;
+  //     if (hit_info.hit && is_after_prev_model_t && is_closer) {
+  //       let model_ptr = u_world_acceleration.data[i + 18];
+  //       let model_schema = u_world_model_info.data[model_ptr];
+  //       let model_hit_info = VoxelModelHit(ray_rot, aabb_bounds, hit_info, model_schema, model_ptr + 1);
 
-        closest_model_t = hit_info.t_enter;
-        closest_voxel_model_hit = model_hit_info;
-      }
-    }
+  //       closest_model_t = hit_info.t_enter;
+  //       closest_voxel_model_hit = model_hit_info;
+  //     }
+  //   }
 
-    // We didn't hit anything so end early.
-    if (closest_model_t == last_model_t) {
-      break;
-    }
+  //   // We didn't hit anything so end early.
+  //   if (closest_model_t == last_model_t) {
+  //     break;
+  //   }
 
-    let trace = trace_voxel_model(closest_voxel_model_hit);
-    if (trace.hit) {
-      let hit_data = trace.hit_data;
-      let n = abs(hit_data.normal);
-      let l = n.y + n.x * 0.8 + n.z * 0.5;
-      return hit_data.albedo * l; 
-    } else {
-      last_model_t = closest_model_t;
-    }
-  }
+  //   let trace = trace_voxel_model(closest_voxel_model_hit);
+  //   if (trace.hit) {
+  //     let hit_data = trace.hit_data;
+  //     let n = abs(hit_data.normal);
+  //     let l = n.y + n.x * 0.8 + n.z * 0.5;
+  //     return hit_data.albedo * l; 
+  //   } else {
+  //     last_model_t = closest_model_t;
+  //   }
+  // }
 
   return sample_background_radiance(ray);
 }
@@ -843,7 +937,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   );
   
   let ray = construct_camera_ray(vec2f(coords) + offset, vec2f(dimensions));
-  let sampled_pixel_radiance = next_ray_voxel_hit(ray);
+  let sampled_pixel_radiance = next_ray_terrain_hit(ray);
 
   // Apply monte carlo estimator using stored accumulated pixel radiance samples.
   var pixel_radiance_prev = vec3f(0.0);

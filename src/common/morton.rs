@@ -28,3 +28,24 @@ pub fn morton_encode(position: Vector3<u32>) -> u64 {
 pub fn morton_decode(morton: u64) -> Vector3<u32> {
     Vector3::new(compact(morton), compact(morton >> 1), compact(morton >> 2))
 }
+
+pub fn morton_traversal(mut morton: u64, height: u32) -> u64 {
+    let mut reverse = 0u64;
+    for i in 0..height {
+        reverse = (reverse << 3) | (morton & 7);
+        morton >>= 3;
+    }
+
+    reverse
+}
+
+mod tests {
+    use crate::common::morton::morton_traversal;
+
+    #[test]
+    fn test_traversal() {
+        let a = 0x2E; // 101110
+        let b = 0x35; // 110101
+        assert_eq!(morton_traversal(a, 2), b);
+    }
+}

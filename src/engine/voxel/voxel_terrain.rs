@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 use log::debug;
 use nalgebra::Vector3;
@@ -35,6 +35,7 @@ pub struct VoxelTerrain {
     chunk_render_distance: u32,
 
     chunk_tree: Option<ChunkTree>,
+    is_chunk_tree_dirty: bool,
 }
 
 impl VoxelTerrain {
@@ -43,6 +44,7 @@ impl VoxelTerrain {
             chunk_render_distance: 0,
 
             chunk_tree: None,
+            is_chunk_tree_dirty: false,
         }
     }
 
@@ -53,6 +55,8 @@ impl VoxelTerrain {
         mut ecs_world: ResMut<ECSWorld>,
         mut voxel_world: ResMut<VoxelWorld>,
     ) {
+        terrain.is_chunk_tree_dirty = false;
+
         // Construct the chunk tree.
         // Enqueues the chunks.
         if terrain.chunk_tree.is_none() {
@@ -102,14 +106,12 @@ impl VoxelTerrain {
                             let chunk_position =
                                 Vector3::new(chunk_x as f32, chunk_y as f32, chunk_z as f32)
                                     * voxel_constants::TERRAIN_CHUNK_WORLD_UNIT_LENGTH;
-                            let chunk_entity_id = ecs_world.spawn(RenderableVoxelModel::new(
-                                VoxelModelTransform::with_position(chunk_position),
-                                chunk_model_id,
-                            ));
 
                             terrain.try_enqueue_chunk(
                                 Vector3::new(chunk_x, chunk_y, chunk_z),
-                                chunk_entity_id,
+                                ChunkData {
+                                    voxel_model_id: chunk_model_id,
+                                },
                             );
                         }
                     }
@@ -118,11 +120,7 @@ impl VoxelTerrain {
         }
     }
 
-    pub fn try_enqueue_chunk(
-        &mut self,
-        chunk_position: Vector3<i32>,
-        chunk_entity_id: hecs::Entity,
-    ) {
+    pub fn try_enqueue_chunk(&mut self, chunk_position: Vector3<i32>, chunk_data: ChunkData) {
         let Some(chunk_tree) = &mut self.chunk_tree else {
             debug!("Chunk tree isn't loaded!!!");
             return;
@@ -131,7 +129,8 @@ impl VoxelTerrain {
         if !chunk_tree.is_world_chunk_loaded(chunk_position)
             || !chunk_tree.is_world_chunk_enqueued(chunk_position)
         {
-            chunk_tree.set_world_chunk_entity(chunk_position, chunk_entity_id)
+            chunk_tree.set_world_chunk_data(chunk_position, chunk_data);
+            self.is_chunk_tree_dirty = true;
         }
     }
 
@@ -145,6 +144,16 @@ impl VoxelTerrain {
 
         let ranges = min.zip_map(&max, |a, b| a..b);
         (ranges.x.clone(), ranges.y.clone(), ranges.z.clone())
+    }
+
+    pub fn chunk_tree(&self) -> &ChunkTree {
+        self.chunk_tree
+            .as_ref()
+            .expect("Chunk tree should have been constructed by now.")
+    }
+
+    pub fn is_chunk_tree_dirty(&self) -> bool {
+        self.is_chunk_tree_dirty
     }
 }
 
@@ -166,7 +175,7 @@ impl ChunkTreeNode {
 }
 
 /// Octree that holds chunks.
-struct ChunkTree {
+pub struct ChunkTree {
     children: [ChunkTreeNode; 8],
     chunk_side_length: u32,
     chunk_half_length: u32,
@@ -181,6 +190,7 @@ impl ChunkTree {
         let corner_origin = chunk_center_origin.map(|x| x - half_chunk_length as i32);
         return Self::new(corner_origin, half_chunk_length * 2);
     }
+
     fn new(corner_origin: Vector3<i32>, chunk_side_length: u32) -> Self {
         assert!(chunk_side_length >= 2);
         Self {
@@ -197,44 +207,39 @@ impl ChunkTree {
             .all(|x| *x >= 0 && *x < self.chunk_side_length as i32)
     }
 
-    fn world_pos_morton(&self, chunk_world_position: Vector3<i32>) -> u64 {
+    fn world_pos_traversal_morton(&self, chunk_world_position: Vector3<i32>) -> u64 {
         let relative_position = chunk_world_position - self.chunk_origin;
         assert!(
             self.in_bounds(&relative_position),
             "Given chunk position is out of bounds and can't be accessed from this chunk tree."
         );
-        morton::morton_encode(relative_position.map(|x| x as u32))
+        let morton = morton::morton_encode(relative_position.map(|x| x as u32));
+        morton::morton_traversal(morton, self.chunk_side_length.trailing_zeros())
     }
 
     fn is_world_chunk_loaded(&self, chunk_world_position: Vector3<i32>) -> bool {
-        let morton = self.world_pos_morton(chunk_world_position);
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
         return self.is_loaded(morton);
     }
 
     fn is_world_chunk_enqueued(&self, chunk_world_position: Vector3<i32>) -> bool {
-        let morton = self.world_pos_morton(chunk_world_position);
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
         return self.is_loaded(morton);
     }
 
-    fn set_world_chunk_entity(
-        &mut self,
-        chunk_world_position: Vector3<i32>,
-        chunk_entity_id: hecs::Entity,
-    ) {
-        let morton = self.world_pos_morton(chunk_world_position);
-        return self.set_chunk_entity(morton, chunk_entity_id);
+    fn set_world_chunk_data(&mut self, chunk_world_position: Vector3<i32>, chunk_data: ChunkData) {
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
+        return self.set_chunk_data(morton, chunk_data);
     }
 
-    fn set_chunk_entity(&mut self, morton: u64, chunk_entity_id: hecs::Entity) {
+    fn set_chunk_data(&mut self, morton: u64, data: ChunkData) {
         let octant = (morton & 7) as usize;
 
         if self.is_pre_leaf() {
-            self.children[octant] = ChunkTreeNode::Leaf(ChunkData {
-                entity_id: chunk_entity_id,
-            });
+            self.children[octant] = ChunkTreeNode::Leaf(data);
         } else {
             if let ChunkTreeNode::Node(subtree) = &mut self.children[octant] {
-                subtree.set_chunk_entity(morton >> 3, chunk_entity_id);
+                subtree.set_chunk_data(morton >> 3, data);
             } else {
                 assert!(!self.children[octant].is_leaf());
                 let mask = Vector3::new(
@@ -244,10 +249,9 @@ impl ChunkTree {
                 );
                 let child_world_origin = self.chunk_origin + mask * self.chunk_half_length as i32;
 
-                self.children[octant] = ChunkTreeNode::Node(Box::new(ChunkTree::new(
-                    child_world_origin,
-                    self.chunk_half_length,
-                )));
+                let mut subtree = ChunkTree::new(child_world_origin, self.chunk_half_length);
+                subtree.set_chunk_data(morton >> 3, data);
+                self.children[octant] = ChunkTreeNode::Node(Box::new(subtree));
             }
         }
     }
@@ -267,6 +271,18 @@ impl ChunkTree {
         };
     }
 
+    pub fn volume(&self) -> u32 {
+        self.chunk_side_length * self.chunk_side_length * self.chunk_side_length
+    }
+
+    pub fn chunk_origin(&self) -> Vector3<i32> {
+        self.chunk_origin
+    }
+
+    pub fn chunk_side_length(&self) -> u32 {
+        self.chunk_side_length
+    }
+
     fn is_enqueued(&self, morton: u64) -> bool {
         let octant = (morton & 7) as usize;
         let child = &self.children[octant];
@@ -279,7 +295,7 @@ impl ChunkTree {
 }
 
 struct ChunkData {
-    entity_id: hecs::Entity,
+    voxel_model_id: VoxelModelId,
 }
 
 // LOD 0 is the highest resolution.
@@ -288,5 +304,47 @@ struct ChunkData {
 impl ChunkData {
     fn world_length(lod: u32) -> f32 {
         voxel_constants::TERRAIN_CHUNK_WORLD_UNIT_LENGTH * (lod + 1) as f32
+    }
+}
+
+pub struct ChunkTreeGpuNode {}
+
+/// This isn't actually a tree for now we just do a flat 3d array in morton order so we can dda
+/// through the chunks. In the future I'll make this into a tree when render distances get large.
+pub struct ChunkTreeGpu {
+    pub data: Vec<u32>,
+}
+
+impl ChunkTreeGpu {
+    pub fn build(chunk_tree: &ChunkTree, voxel_model_map: HashMap<VoxelModelId, u32>) -> Self {
+        let volume = chunk_tree.volume();
+        let mut data = vec![0xFFFF_FFFF; volume as usize];
+
+        let mut to_process = vec![(Vector3::<u32>::new(0, 0, 0), chunk_tree)];
+        while !to_process.is_empty() {
+            let (curr_origin, curr_node) = to_process.pop().unwrap();
+            for (octant, child) in curr_node.children.iter().enumerate() {
+                let mask = Vector3::new(
+                    (octant & 1) as u32,
+                    ((octant >> 1) & 1) as u32,
+                    ((octant >> 2) & 1) as u32,
+                );
+                let child_position = curr_origin + mask * curr_node.chunk_half_length;
+
+                match child {
+                    ChunkTreeNode::Node(sub_tree) => {
+                        to_process.push((child_position, sub_tree));
+                    }
+                    ChunkTreeNode::Leaf(chunk) => {
+                        let morton = morton::morton_encode(child_position);
+                        data[morton as usize] =
+                            *voxel_model_map.get(&chunk.voxel_model_id).unwrap();
+                    }
+                    ChunkTreeNode::Empty | ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => {}
+                }
+            }
+        }
+
+        Self { data }
     }
 }

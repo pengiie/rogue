@@ -32,6 +32,7 @@ use super::{
         VoxelRange,
     },
     voxel_allocator::VoxelAllocator,
+    voxel_terrain::{self, ChunkTreeGpu, VoxelTerrain},
     voxel_transform::VoxelModelTransform,
 };
 
@@ -324,6 +325,8 @@ pub struct VoxelWorldGpu {
     /// The acceleration buffer for rendered entity voxel model bounds interaction, hold the
     /// pointed to voxel model index and the position and rotation matrix data of this entity.
     acceleration_buffer: Option<wgpu::Buffer>,
+    /// The acceleration buffer for the voxel terrain.
+    terrain_acceleration_buffer: Option<wgpu::Buffer>,
     /// The buffer for every unique voxel models info such as its data pointers and length.
     voxel_model_info_buffer: Option<wgpu::Buffer>,
     // Rendered voxel models entities, count of entities pointing to models in the acceleration buffer.
@@ -341,6 +344,7 @@ impl VoxelWorldGpu {
     pub fn new() -> Self {
         Self {
             acceleration_buffer: None,
+            terrain_acceleration_buffer: None,
             voxel_model_info_buffer: None,
             rendered_voxel_model_entity_count: 0,
             allocator: None,
@@ -363,7 +367,18 @@ impl VoxelWorldGpu {
         if voxel_world_gpu.acceleration_buffer.is_none() {
             voxel_world_gpu.acceleration_buffer =
                 Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("world_acceleration_buffer"),
+                    label: Some("world_entity_acceleration_buffer"),
+                    size: 4 * 40000, // 1000 voxel models
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            voxel_world_gpu.is_dirty = true;
+        }
+
+        if voxel_world_gpu.terrain_acceleration_buffer.is_none() {
+            voxel_world_gpu.terrain_acceleration_buffer =
+                Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("world_terrain_acceleration_buffer"),
                     size: 4 * 40000, // 1000 voxel models
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
@@ -401,6 +416,7 @@ impl VoxelWorldGpu {
     pub fn write_render_data(
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
+        voxel_terrain: Res<VoxelTerrain>,
         ecs_world: Res<ECSWorld>,
         device: Res<DeviceResource>,
     ) {
@@ -424,11 +440,6 @@ impl VoxelWorldGpu {
             ecs_world.query::<(&VoxelModelTransform, &RenderableVoxelModelRef)>();
 
         // TODO: Implement frustum culling.
-        let entity_voxel_models = entity_voxel_models_query.iter().collect::<Vec<_>>();
-        let used_voxel_model_ids = entity_voxel_models
-            .iter()
-            .map(|(_, (transform, id_ref))| *id_ref.deref().deref())
-            .collect::<HashSet<_>>();
         let mut voxel_model_info_map = HashMap::new();
 
         // Update renderable voxel model info buffer.
@@ -436,10 +447,6 @@ impl VoxelWorldGpu {
         for (voxel_model_id, (voxel_model, voxel_model_gpu)) in
             voxel_world.renderable_models_dyn_iter()
         {
-            if !used_voxel_model_ids.contains(&voxel_model_id) {
-                continue;
-            }
-
             let model_info_ptr = voxel_model_info_data.len() as u32;
             let Some(mut model_gpu_info_ptrs) = voxel_model_gpu.aggregate_model_info() else {
                 continue;
@@ -463,8 +470,9 @@ impl VoxelWorldGpu {
         // Write acceleration buffer data.
         {
             let mut entity_acceleration_data = Vec::new();
+            let mut rendered_entity_count = 0;
             for (entity, (transform, RenderableVoxelModelRef(voxel_model_id))) in
-                &entity_voxel_models
+                entity_voxel_models_query.iter()
             {
                 let Some((data_ptr, model)) = voxel_model_info_map.get(voxel_model_id) else {
                     // The voxel model isn't ready to be rendered on the gpu so skip rendering it.
@@ -478,19 +486,48 @@ impl VoxelWorldGpu {
                 //   - Voxel model info data pointer (indexing in voxel_model_info_buffer)
                 entity_acceleration_data.append(&mut obb.as_acceleration_data());
                 entity_acceleration_data.push(*data_ptr);
+
+                rendered_entity_count += 1;
             }
 
             // Used in the gpu world info to know the limits of the acceleration buffer.
-            voxel_world_gpu.rendered_voxel_model_entity_count = entity_voxel_models.len() as u32;
-            debug!(
-                "Rendering {} voxel models.",
-                voxel_world_gpu.rendered_voxel_model_entity_count
-            );
+            voxel_world_gpu.rendered_voxel_model_entity_count = rendered_entity_count;
 
             device.queue().write_buffer(
                 voxel_world_gpu.world_acceleration_buffer(),
                 0,
                 bytemuck::cast_slice(&entity_acceleration_data),
+            );
+        }
+
+        // Write voxel terrain acceleration buffer data.
+        if voxel_terrain.is_chunk_tree_dirty() {
+            let chunk_tree = voxel_terrain.chunk_tree();
+            let chunk_tree_gpu = ChunkTreeGpu::build(
+                chunk_tree,
+                voxel_model_info_map
+                    .iter()
+                    .map(|(id, (model_ptr, model))| (*id, *model_ptr))
+                    .collect::<HashMap<_, _>>(),
+            );
+
+            let co = chunk_tree.chunk_origin();
+            let metadata = vec![
+                co.x as u32,
+                co.y as u32,
+                co.z as u32,
+                chunk_tree.chunk_side_length(),
+            ];
+            debug!("metadata: {:?}", &chunk_tree.chunk_side_length());
+            device.queue().write_buffer(
+                voxel_world_gpu.world_terrain_acceleration_buffer(),
+                0,
+                bytemuck::cast_slice(&metadata),
+            );
+            device.queue().write_buffer(
+                voxel_world_gpu.world_terrain_acceleration_buffer(),
+                (metadata.len() * std::mem::size_of::<u32>()) as u64,
+                bytemuck::cast_slice(&chunk_tree_gpu.data),
             );
         }
     }
@@ -503,6 +540,12 @@ impl VoxelWorldGpu {
         self.acceleration_buffer
             .as_ref()
             .expect("world_acceleration_buffer not initialized when it should have been by now")
+    }
+
+    pub fn world_terrain_acceleration_buffer(&self) -> &wgpu::Buffer {
+        self.terrain_acceleration_buffer.as_ref().expect(
+            "world_terrain_acceleration_buffer not initialized when it should have been by now",
+        )
     }
 
     pub fn world_voxel_model_info_buffer(&self) -> &wgpu::Buffer {
