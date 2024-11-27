@@ -1,11 +1,18 @@
-use std::{collections::HashMap, ops::Range};
+use core::panic;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::mpsc::{Receiver, Sender},
+    time::Duration,
+};
 
+use egui::ahash::HashSetExt;
 use log::debug;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
 use crate::{
-    common::{aabb::AABB, color::Color, morton},
+    common::{aabb::AABB, color::Color, morton, ring_queue::RingQueue},
     engine::{
         ecs::ecs_world::ECSWorld,
         event::Events,
@@ -16,11 +23,13 @@ use crate::{
             flat::VoxelModelFlat,
             voxel::{RenderableVoxelModel, VoxelModel},
         },
+        window::time::Timer,
     },
     settings::Settings,
 };
 
 use super::{
+    chunk_generator::ChunkGenerator,
     voxel_constants,
     voxel_transform::VoxelModelTransform,
     voxel_world::{VoxelModelId, VoxelWorld},
@@ -30,22 +39,36 @@ pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
 }
 
+#[derive(Hash, PartialEq, Eq)]
+pub struct ChunkTicket {
+    chunk_position: Vector3<i32>,
+}
+
 #[derive(Resource)]
 pub struct VoxelTerrain {
     chunk_render_distance: u32,
 
     chunk_tree: Option<ChunkTree>,
-    is_chunk_tree_dirty: bool,
+    chunk_queue: ChunkQueue,
+    queue_timer: Timer,
 }
 
 impl VoxelTerrain {
-    pub fn new() -> Self {
+    pub fn new(settings: &Settings) -> Self {
         Self {
             chunk_render_distance: 0,
 
             chunk_tree: None,
-            is_chunk_tree_dirty: false,
+            chunk_queue: ChunkQueue::new(settings),
+            queue_timer: Timer::new(Duration::from_millis(500)),
         }
+    }
+
+    fn initialize_chunk_tree(&mut self, settings: &Settings) {
+        self.chunk_render_distance = settings.chunk_render_distance;
+        let chunk_tree =
+            ChunkTree::new_with_center(Vector3::new(0, 0, 0), self.chunk_render_distance);
+        self.chunk_tree = Some(chunk_tree);
     }
 
     pub fn update_post_physics(
@@ -55,82 +78,48 @@ impl VoxelTerrain {
         mut ecs_world: ResMut<ECSWorld>,
         mut voxel_world: ResMut<VoxelWorld>,
     ) {
-        terrain.is_chunk_tree_dirty = false;
+        let terrain: &mut VoxelTerrain = &mut terrain;
 
-        // Construct the chunk tree.
-        // Enqueues the chunks.
         if terrain.chunk_tree.is_none() {
-            terrain.chunk_render_distance = settings.chunk_render_distance;
+            terrain.initialize_chunk_tree(&settings);
+        };
 
-            let chunk_tree =
-                ChunkTree::new_with_center(Vector3::new(0, 0, 0), terrain.chunk_render_distance);
-            terrain.chunk_tree = Some(chunk_tree);
-
-            let mut chunk_voxel_model = VoxelModelFlat::new_empty(Vector3::new(
-                voxel_constants::TERRAIN_CHUNK_LENGTH,
-                voxel_constants::TERRAIN_CHUNK_LENGTH,
-                voxel_constants::TERRAIN_CHUNK_LENGTH,
-            ));
-            for (position, mut voxel) in chunk_voxel_model.xyz_iter_mut() {
-                let target_y = ((((position.x as f32 + (position.z as f32 * 0.05).cos() * 50.0)
-                    * 0.01)
-                    .sin()
-                    + 1.0)
-                    * 10.0);
-                if position.y == target_y as u32 {
-                    voxel.set_attachment(
-                        Attachment::PTMATERIAL,
-                        Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
-                            Color::new_srgb(
-                                (position.x as f32 / 128.0),
-                                (position.z as f32 / 128.0),
-                                0.5,
-                            )
-                            .into_color_space(),
-                        ))),
-                    );
-                }
-            }
-            let chunk_model_id = voxel_world.register_renderable_voxel_model::<VoxelModelFlat>(
-                "chunk_model",
-                VoxelModel::new(chunk_voxel_model),
-            );
-
-            // TODO: Auto chunk loading from some "source", rn we hardcode all the chunks.
+        // Try enqueue any non enqueued chunks.
+        if terrain.queue_timer.try_complete() {
             let (range_x, range_y, range_z) = terrain.origin_render_range();
             for chunk_x in range_x.clone() {
                 for chunk_y in range_y.clone() {
                     for chunk_z in range_z.clone() {
-                        debug!("position {} {} {}", chunk_x, chunk_y, chunk_z);
-                        if chunk_y == 0 {
-                            let chunk_position =
-                                Vector3::new(chunk_x as f32, chunk_y as f32, chunk_z as f32)
-                                    * voxel_constants::TERRAIN_CHUNK_WORLD_UNIT_LENGTH;
-
-                            terrain.try_enqueue_chunk(
-                                Vector3::new(chunk_x, chunk_y, chunk_z),
-                                ChunkData {
-                                    voxel_model_id: chunk_model_id,
-                                },
-                            );
-                        }
+                        terrain.try_enqueue_load_chunk(Vector3::new(chunk_x, chunk_y, chunk_z));
                     }
                 }
             }
         }
+
+        // Process next chunk.
+        terrain.chunk_tree.as_mut().unwrap().is_dirty = false;
+        terrain.chunk_queue.handle_enqueued_chunks();
+        terrain
+            .chunk_queue
+            .handle_finished_chunks(terrain.chunk_tree.as_mut().unwrap(), &mut voxel_world);
     }
 
-    pub fn try_enqueue_chunk(&mut self, chunk_position: Vector3<i32>, chunk_data: ChunkData) {
+    pub fn try_enqueue_load_chunk(&mut self, chunk_position: Vector3<i32>) {
         let Some(chunk_tree) = &mut self.chunk_tree else {
             debug!("Chunk tree isn't loaded!!!");
             return;
         };
 
         if !chunk_tree.is_world_chunk_loaded(chunk_position)
-            || !chunk_tree.is_world_chunk_enqueued(chunk_position)
+            && !chunk_tree.is_world_chunk_enqueued(chunk_position)
         {
-            chunk_tree.set_world_chunk_data(chunk_position, chunk_data);
-            self.is_chunk_tree_dirty = true;
+            if self.chunk_queue.try_enqueue_chunk(chunk_position) {
+                debug!("Enqueued chunk {:?}", chunk_position);
+                self.chunk_tree
+                    .as_mut()
+                    .unwrap()
+                    .set_world_chunk_enqued(chunk_position);
+            }
         }
     }
 
@@ -153,7 +142,104 @@ impl VoxelTerrain {
     }
 
     pub fn is_chunk_tree_dirty(&self) -> bool {
-        self.is_chunk_tree_dirty
+        self.chunk_tree.as_ref().is_some_and(|tree| tree.is_dirty)
+    }
+}
+
+pub struct FinishedChunk {
+    chunk_position: Vector3<i32>,
+    flat: VoxelModelFlat,
+}
+
+impl FinishedChunk {
+    pub fn is_empty(&self) -> bool {
+        self.flat.is_empty()
+    }
+}
+
+pub struct ChunkQueue {
+    chunk_queue: RingQueue<ChunkTicket>,
+    chunk_generator: ChunkGenerator,
+    chunk_handler_pool: rayon::ThreadPool,
+    finished_chunk_recv: Receiver<FinishedChunk>,
+    finished_chunk_send: Sender<FinishedChunk>,
+}
+
+impl ChunkQueue {
+    pub fn new(settings: &Settings) -> Self {
+        let (finished_chunk_send, finished_chunk_recv) = std::sync::mpsc::channel();
+        Self {
+            chunk_queue: RingQueue::with_capacity(settings.chunk_queue_capacity as usize),
+            chunk_generator: ChunkGenerator::new(),
+            chunk_handler_pool: rayon::ThreadPoolBuilder::new().build().unwrap(),
+            finished_chunk_recv,
+            finished_chunk_send,
+        }
+    }
+
+    pub fn try_enqueue_chunk(&mut self, chunk_position: Vector3<i32>) -> bool {
+        if self.chunk_queue.is_full() {
+            return false;
+        }
+
+        self.chunk_queue.push(ChunkTicket { chunk_position });
+        return true;
+    }
+
+    pub fn handle_finished_chunks(
+        &mut self,
+        chunk_tree: &mut ChunkTree,
+        voxel_world: &mut VoxelWorld,
+    ) {
+        // Loops until the reciever is empty.
+        'lp: loop {
+            match self.finished_chunk_recv.try_recv() {
+                Ok(finished_chunk) => {
+                    if finished_chunk.is_empty() {
+                        chunk_tree.set_world_chunk_empty(finished_chunk.chunk_position);
+                    } else {
+                        let chunk_name = format!(
+                            "chunk_{}_{}_{}",
+                            finished_chunk.chunk_position.x,
+                            finished_chunk.chunk_position.y,
+                            finished_chunk.chunk_position.z
+                        );
+                        let voxel_model_id = voxel_world.register_renderable_voxel_model(
+                            chunk_name,
+                            VoxelModel::new(finished_chunk.flat),
+                        );
+                        chunk_tree.set_world_chunk_data(
+                            finished_chunk.chunk_position,
+                            ChunkData { voxel_model_id },
+                        );
+                        debug!(
+                            "Recieved finished chunk {:?}",
+                            finished_chunk.chunk_position
+                        );
+                    }
+                }
+                Err(err) => match err {
+                    std::sync::mpsc::TryRecvError::Disconnected => {
+                        panic!("Shouldn't be disconnected")
+                    }
+                    _ => break 'lp,
+                },
+            }
+        }
+    }
+
+    pub fn handle_enqueued_chunks(&mut self) {
+        if !self.chunk_queue.is_empty() {
+            let ticket = self.chunk_queue.try_pop().unwrap();
+            let send = self.finished_chunk_send.clone();
+            self.chunk_handler_pool.spawn(move || {
+                let flat = ChunkGenerator::generate_chunk(ticket.chunk_position);
+                send.send(FinishedChunk {
+                    chunk_position: ticket.chunk_position,
+                    flat,
+                });
+            });
+        }
     }
 }
 
@@ -182,6 +268,7 @@ pub struct ChunkTree {
 
     /// Where the origin is the the -XYZ corner of the tree.
     chunk_origin: Vector3<i32>,
+    is_dirty: bool,
 }
 
 impl ChunkTree {
@@ -198,6 +285,7 @@ impl ChunkTree {
             chunk_side_length,
             chunk_half_length: chunk_side_length >> 1,
             chunk_origin: corner_origin,
+            is_dirty: false,
         }
     }
 
@@ -224,7 +312,67 @@ impl ChunkTree {
 
     fn is_world_chunk_enqueued(&self, chunk_world_position: Vector3<i32>) -> bool {
         let morton = self.world_pos_traversal_morton(chunk_world_position);
-        return self.is_loaded(morton);
+        return self.is_enqueued(morton);
+    }
+
+    fn set_world_chunk_enqued(&mut self, chunk_world_position: Vector3<i32>) {
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
+        return self.set_chunk_enqueued(morton);
+    }
+
+    fn set_chunk_enqueued(&mut self, morton: u64) {
+        let octant = (morton & 7) as usize;
+
+        if self.is_pre_leaf() {
+            self.children[octant] = ChunkTreeNode::Enqeueud;
+        } else {
+            if let ChunkTreeNode::Node(subtree) = &mut self.children[octant] {
+                subtree.set_chunk_enqueued(morton >> 3);
+            } else {
+                assert!(!self.children[octant].is_leaf());
+                let mask = Vector3::new(
+                    (octant & 1) as i32,
+                    ((octant >> 1) & 1) as i32,
+                    ((octant >> 2) & 1) as i32,
+                );
+                let child_world_origin = self.chunk_origin + mask * self.chunk_half_length as i32;
+
+                let mut subtree = ChunkTree::new(child_world_origin, self.chunk_half_length);
+                subtree.set_chunk_enqueued(morton >> 3);
+                self.children[octant] = ChunkTreeNode::Node(Box::new(subtree));
+            }
+        }
+    }
+
+    fn set_world_chunk_empty(&mut self, chunk_world_position: Vector3<i32>) {
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
+        return self.set_chunk_empty(morton);
+    }
+
+    fn set_chunk_empty(&mut self, morton: u64) {
+        self.is_dirty = true;
+
+        let octant = (morton & 7) as usize;
+
+        if self.is_pre_leaf() {
+            self.children[octant] = ChunkTreeNode::Empty;
+        } else {
+            if let ChunkTreeNode::Node(subtree) = &mut self.children[octant] {
+                subtree.set_chunk_empty(morton >> 3);
+            } else {
+                assert!(!self.children[octant].is_leaf());
+                let mask = Vector3::new(
+                    (octant & 1) as i32,
+                    ((octant >> 1) & 1) as i32,
+                    ((octant >> 2) & 1) as i32,
+                );
+                let child_world_origin = self.chunk_origin + mask * self.chunk_half_length as i32;
+
+                let mut subtree = ChunkTree::new(child_world_origin, self.chunk_half_length);
+                subtree.set_chunk_empty(morton >> 3);
+                self.children[octant] = ChunkTreeNode::Node(Box::new(subtree));
+            }
+        }
     }
 
     fn set_world_chunk_data(&mut self, chunk_world_position: Vector3<i32>, chunk_data: ChunkData) {
@@ -233,6 +381,8 @@ impl ChunkTree {
     }
 
     fn set_chunk_data(&mut self, morton: u64, data: ChunkData) {
+        self.is_dirty = true;
+
         let octant = (morton & 7) as usize;
 
         if self.is_pre_leaf() {
@@ -271,6 +421,17 @@ impl ChunkTree {
         };
     }
 
+    fn is_enqueued(&self, morton: u64) -> bool {
+        let octant = (morton & 7) as usize;
+        let child = &self.children[octant];
+
+        return match child {
+            ChunkTreeNode::Node(subtree) => subtree.is_enqueued(morton >> 3),
+            ChunkTreeNode::Enqeueud => true,
+            _ => false,
+        };
+    }
+
     pub fn volume(&self) -> u32 {
         self.chunk_side_length * self.chunk_side_length * self.chunk_side_length
     }
@@ -281,16 +442,6 @@ impl ChunkTree {
 
     pub fn chunk_side_length(&self) -> u32 {
         self.chunk_side_length
-    }
-
-    fn is_enqueued(&self, morton: u64) -> bool {
-        let octant = (morton & 7) as usize;
-        let child = &self.children[octant];
-
-        return match child {
-            ChunkTreeNode::Enqeueud => true,
-            _ => false,
-        };
     }
 }
 

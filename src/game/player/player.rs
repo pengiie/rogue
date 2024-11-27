@@ -38,7 +38,7 @@ impl Player {
         ecs_world.spawn((
             Player::new(),
             Camera::new(),
-            Transform::with_translation(Translation3::new(0.0, 1.0, 0.0)),
+            Transform::with_translation(Translation3::new(0.0, 8.0, 0.0)),
         ));
     }
 
@@ -89,7 +89,7 @@ impl Player {
 
         let mut speed = player.movement_speed;
         if input.is_key_down(Key::LControl) {
-            speed = 6.0;
+            speed = 10.0;
         }
 
         transform.isometry.translation.vector +=

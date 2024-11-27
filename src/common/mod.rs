@@ -6,4 +6,5 @@ pub mod id;
 pub mod morton;
 pub mod obb;
 pub mod oneshot;
+pub mod ring_queue;
 pub mod set;

@@ -2,7 +2,7 @@ use log::debug;
 
 use crate::engine::graphics::device::DeviceResource;
 
-const WORLD_DATA_BUFFER_SIZE: u64 = 1 << 29;
+const WORLD_DATA_BUFFER_SIZE: u64 = 1 << 31;
 
 /// Handles allocation of contiguous blocks of memory for voxel models. Necessary so data can
 /// easily be replicated with a large gpu voxel "heap" buffer.
@@ -22,6 +22,10 @@ impl VoxelAllocator {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        debug!(
+            "STARTING WITH VRAM OF {}MB",
+            initial_size as f32 / (1 << 20) as f32
+        );
 
         Self {
             world_data_buffer,

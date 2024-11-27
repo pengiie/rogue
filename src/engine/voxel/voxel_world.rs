@@ -518,7 +518,6 @@ impl VoxelWorldGpu {
                 co.z as u32,
                 chunk_tree.chunk_side_length(),
             ];
-            debug!("metadata: {:?}", &chunk_tree.chunk_side_length());
             device.queue().write_buffer(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 0,

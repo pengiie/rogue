@@ -664,7 +664,8 @@ fn trace_flat(model_hit_info: VoxelModelHit) -> VoxelModelTrace {
             f32(compresed_material & 0xFFu) / 255.0,
           ));
           let world_hit_pos = model_hit_info.ray.origin + model_hit_info.ray.dir * world_hit_t;
-          return voxel_model_trace_hit(albedo, vec3f(0.0), normal, 
+          let l = normal.x + normal.y * 0.6 + normal.z * 0.4;
+          return voxel_model_trace_hit(albedo * l, vec3f(0.0), normal, 
                                        vec3f(0.0), world_hit_pos);
         } else {
           // Unknown material.
@@ -809,7 +810,7 @@ fn next_ray_terrain_hit(ray: Ray) -> vec3f {
        if (trace.hit) {
          let trace_data = trace.hit_data;
          let depth = distance(ray.origin, trace_data.hit_position);
-         return vec3f(depth / 700.0f);
+         return vec3f(trace_data.albedo);
        }
     }
 

@@ -1,5 +1,5 @@
 /// Since 8 voxels is 1 meter, this corresponds to 16x16 meter chunks.
-pub const TERRAIN_CHUNK_LENGTH: u32 = 256;
+pub const TERRAIN_CHUNK_LENGTH: u32 = 128;
 pub const TERRAIN_CHUNK_VOLUME: u32 = TERRAIN_CHUNK_LENGTH.pow(3);
 pub const TERRAIN_CHUNK_WORLD_UNIT_LENGTH: f32 =
     TERRAIN_CHUNK_LENGTH as f32 * VOXEL_WORLD_UNIT_LENGTH;

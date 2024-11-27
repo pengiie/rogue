@@ -1,4 +1,8 @@
-use std::{collections::HashSet, f32::consts};
+use std::{
+    collections::HashSet,
+    f32::consts,
+    num::{NonZero, NonZeroUsize},
+};
 
 use downcast::Any;
 use log::debug;
@@ -70,6 +74,7 @@ pub struct Settings {
 
     /// The chunk render distance.
     pub chunk_render_distance: u32,
+    pub chunk_queue_capacity: u32,
 
     pub graphics: GraphicsSettings,
 }
@@ -81,6 +86,9 @@ impl Default for Settings {
             mouse_sensitivity: 0.002,
 
             chunk_render_distance: 2,
+            chunk_queue_capacity: std::thread::available_parallelism()
+                .unwrap_or(NonZeroUsize::new(4).unwrap())
+                .get() as u32,
 
             graphics: GraphicsSettings::default(),
         }

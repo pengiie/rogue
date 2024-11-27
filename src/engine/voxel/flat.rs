@@ -73,6 +73,10 @@ impl VoxelModelFlat {
         )
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.attachment_presence_data.is_empty()
+    }
+
     pub fn get_voxel_index(&self, position: Vector3<u32>) -> usize {
         position.x as usize
             + position.y as usize * self.length.x as usize
@@ -90,6 +94,14 @@ impl VoxelModelFlat {
     pub fn get_voxel(&self, position: Vector3<u32>) -> VoxelModelFlatVoxelAccess<'_> {
         let index = self.get_voxel_index(position);
         VoxelModelFlatVoxelAccess {
+            flat_model: self,
+            index,
+        }
+    }
+
+    pub fn get_voxel_mut(&mut self, position: Vector3<u32>) -> VoxelModelFlatVoxelAccessMut<'_> {
+        let index = self.get_voxel_index(position);
+        VoxelModelFlatVoxelAccessMut {
             flat_model: self,
             index,
         }
@@ -321,17 +333,7 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-enum FlatESVONode {
-    // TODO: allow internal nodes to also hold interpolated attachment data if applicable
-    // (interpolation of the attachment depending on the type of attachment)
-    NonLeaf {
-        node_data: u32,
-        attachment_lookup_node_data: Option<HashMap<Attachment, u32>>,
-    },
-    Leaf {
-        attachment_data: HashMap<Attachment, Vec<u32>>,
-    },
-}
+enum FlatESVONode {}
 
 impl From<&VoxelModelFlat> for VoxelModelESVO {
     fn from(flat: &VoxelModelFlat) -> Self {
@@ -348,6 +350,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
 
             if flat.in_bounds(pos) {
                 let flat_voxel = flat.get_voxel(pos);
+
                 if !flat_voxel.is_empty() {
                     let mut esvo_voxel = esvo.get_voxel_mut(pos);
                     let (parent_node_index, leaf_octant) = esvo_voxel.get_or_create_leaf_node();
@@ -505,7 +508,6 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();
 
         if !self.initialized_data && self.voxel_presence_allocation.is_some() {
-            debug!("Writing Flat voxel model initial data");
             self.flat_length = model.length;
 
             allocator.write_world_data(
