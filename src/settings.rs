@@ -74,6 +74,8 @@ pub struct Settings {
 
     /// The chunk render distance.
     pub chunk_render_distance: u32,
+    /// The amount of chunk that can be enqueued at a time.
+    /// The current default is number of logical CPUs.
     pub chunk_queue_capacity: u32,
 
     pub graphics: GraphicsSettings,

@@ -10,6 +10,8 @@ pub struct VoxelAllocator {
     world_data_buffer: wgpu::Buffer,
 
     // TODO: create deallocation reciever so we can cleanup removed models.
+    // TODO: track frame bandwidth so we reduce frame staggers when multiple
+    // models or a large model uploads.
     allocations: VoxelAllocatorTree,
 }
 

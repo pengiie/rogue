@@ -92,7 +92,7 @@ impl DeviceResource {
                     )
                 })
                 .expect("Couldn't find compatible surface format");
-            println!("Surface format {:?}", surface_format);
+            info!("Surface format {:?}", surface_format);
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: surface_format,

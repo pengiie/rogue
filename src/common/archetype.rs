@@ -120,6 +120,10 @@ impl Archetype {
     pub fn iter_mut(&mut self) -> ArchetypeIterMut<'_> {
         ArchetypeIterMut::new(self)
     }
+
+    pub fn length(&self) -> usize {
+        self.data[0].len() / self.types[0].size() as usize
+    }
 }
 
 pub trait ArchetypeStorage {

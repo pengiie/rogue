@@ -74,6 +74,44 @@ impl VoxelModelESVO {
         s
     }
 
+    /// Allocates children for the node at parent_index, handling far pointers and assigning the
+    /// parent child pointer and node metadata promotion automatically. Allocation size is exactly of child_count.
+    ///
+    /// Returns the index into the beginning of the child allocation, skipping far pointers.
+    pub fn allocate_node_children(&mut self, parent_index: u32, child_count: u32) -> u32 {
+        let new_children_ptr = self.allocate_node_data(child_count);
+
+        let relative_child_ptr = new_children_ptr - parent_index;
+        self.node_data[parent_index as usize].set_relative_ptr(relative_child_ptr);
+
+        let metadata = &mut self.node_metadata_data[parent_index as usize];
+        match metadata {
+            ESVONodeMetadata::Some(m) => {
+                m.children_capacity = child_count;
+            }
+            ESVONodeMetadata::EmptyChild(pi) => {
+                let pi = *pi;
+                *metadata = ESVONodeMetadata::Some(ESVONodeMetadataData {
+                    parent_index: pi,
+                    children_capacity: child_count,
+                });
+            }
+            ESVONodeMetadata::Free => panic!("Can't allocate if the parent_index is free."),
+        };
+
+        for new_child_metadata in &mut self.node_metadata_data
+            [new_children_ptr as usize..(new_children_ptr + child_count) as usize]
+        {
+            *new_child_metadata = ESVONodeMetadata::EmptyChild(parent_index);
+        }
+
+        new_children_ptr
+    }
+
+    pub fn get_node_mut(&mut self, node_index: u32) -> &mut VoxelModelESVONode {
+        &mut self.node_data[node_index as usize]
+    }
+
     // Allocates a child node which itself has a child capacity initially of 0, with the parent
     // node at `parent_index`.
     pub fn allocate_node_child(&mut self, parent_index: u32, default_child_capacity: u32) -> u32 {
@@ -138,7 +176,7 @@ impl VoxelModelESVO {
             for new_child_metadata in &mut self.node_metadata_data
                 [new_children_ptr as usize..(new_children_ptr + new_child_capacity) as usize]
             {
-                *new_child_metadata = ESVONodeMetadata::EmptyChild;
+                *new_child_metadata = ESVONodeMetadata::EmptyChild(parent_index);
             }
 
             new_children_ptr
@@ -212,7 +250,7 @@ impl VoxelModelESVO {
         start_index
     }
 
-    fn get_attachment_lookup_node_mut(
+    pub fn get_attachment_lookup_node_mut(
         &mut self,
         attachment_id: AttachmentId,
         index: u32,
@@ -225,7 +263,7 @@ impl VoxelModelESVO {
     }
 
     // Returns the u32 index where the allocation starts.
-    fn allocate_raw_attachment_data(&mut self, attachment_id: AttachmentId, size: u32) -> u32 {
+    pub fn allocate_raw_attachment_data(&mut self, attachment_id: AttachmentId, size: u32) -> u32 {
         assert!(size > 0 && size <= 8);
         assert!(self.attachment_map.contains(attachment_id));
 
@@ -238,6 +276,15 @@ impl VoxelModelESVO {
         raw_attachment_data.resize(raw_attachment_data.len() + size as usize, 0);
 
         start_index
+    }
+
+    pub fn resize_raw_attachment_data(&mut self, attachment_id: AttachmentId, new_len: u32) {
+        assert!(self.attachment_map.contains(attachment_id));
+        let raw_attachment_data = self
+            .attachment_raw_data
+            .get_mut(&attachment_id)
+            .expect("Can't shrink a non existant buffer.");
+        raw_attachment_data.resize(new_len as usize, 0);
     }
 
     /// Will get or create the child node for this parent index, if the child doesn't exist and
@@ -296,6 +343,10 @@ impl VoxelModelESVO {
             esvo_model: self,
             position,
         }
+    }
+
+    pub fn root_node_index(&self) -> u32 {
+        self.root_node_index
     }
 
     pub fn get_attachment_lookup_data_mut(
@@ -681,8 +732,8 @@ struct ESVONodeMetadataData {
 enum ESVONodeMetadata {
     /// Is allocated and has some node living here.
     Some(ESVONodeMetadataData),
-    /// Is allocated and assigned to some parent node but is empty.
-    EmptyChild,
+    /// Is allocated and assigned to some parent node but is empty, holds the parent index.
+    EmptyChild(u32),
     Free,
 }
 
@@ -716,7 +767,7 @@ impl ESVONodeMetadata {
     }
     pub fn is_empty_child(&self) -> bool {
         match self {
-            ESVONodeMetadata::EmptyChild => true,
+            ESVONodeMetadata::EmptyChild(_) => true,
             _ => false,
         }
     }

@@ -206,7 +206,7 @@ impl ChunkQueue {
                         );
                         let voxel_model_id = voxel_world.register_renderable_voxel_model(
                             chunk_name,
-                            VoxelModel::new(finished_chunk.flat),
+                            VoxelModel::<VoxelModelESVO>::new(finished_chunk.flat.into()),
                         );
                         chunk_tree.set_world_chunk_data(
                             finished_chunk.chunk_position,
@@ -487,9 +487,12 @@ impl ChunkTreeGpu {
                         to_process.push((child_position, sub_tree));
                     }
                     ChunkTreeNode::Leaf(chunk) => {
-                        let morton = morton::morton_encode(child_position);
-                        data[morton as usize] =
-                            *voxel_model_map.get(&chunk.voxel_model_id).unwrap();
+                        // Chunk voxel model may not exist in the voxel model map yet if it is
+                        // still updating the gpu-side buffer, so it is not ready to be rendered.
+                        if let Some(chunk_ptr) = voxel_model_map.get(&chunk.voxel_model_id) {
+                            let morton = morton::morton_encode(child_position);
+                            data[morton as usize] = *chunk_ptr;
+                        }
                     }
                     ChunkTreeNode::Empty | ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => {}
                 }

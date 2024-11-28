@@ -36,7 +36,7 @@ use super::{
     voxel_transform::VoxelModelTransform,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct VoxelModelId {
     id: u64,
 }
@@ -244,7 +244,8 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIter<'a> {
             .unwrap();
 
         let Some((global_id, ptrs)) = current_archetype.next().or_else(|| None) else {
-            return None;
+            self.current_archetype_index += 1;
+            return self.next();
         };
 
         let voxel_model_ref = {
@@ -292,7 +293,8 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
             .unwrap();
 
         let Some((global_id, ptrs)) = current_archetype.next().or_else(|| None) else {
-            return None;
+            self.current_archetype_index += 1;
+            return self.next();
         };
 
         let voxel_model_ref = {
