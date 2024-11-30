@@ -64,7 +64,7 @@ impl VoxelModelESVO {
             updates: track_updates.then_some(Vec::new()),
         };
 
-        s.root_node_index = s.allocate_node_data(1);
+        s.root_node_index = s.allocate_node_data(0, 1);
         s.node_metadata_data[s.root_node_index as usize] =
             ESVONodeMetadata::Some(ESVONodeMetadataData {
                 parent_index: 0,
@@ -79,10 +79,18 @@ impl VoxelModelESVO {
     ///
     /// Returns the index into the beginning of the child allocation, skipping far pointers.
     pub fn allocate_node_children(&mut self, parent_index: u32, child_count: u32) -> u32 {
-        let new_children_ptr = self.allocate_node_data(child_count);
+        let new_children_ptr = self.allocate_node_data(parent_index, child_count);
+        //debug!(
+        //    "allocated node data at: {} {}",
+        //    parent_index, new_children_ptr
+        //);
 
         let relative_child_ptr = new_children_ptr - parent_index;
         self.node_data[parent_index as usize].set_relative_ptr(relative_child_ptr);
+        //debug!(
+        //    "Settings parent {} child ptr to {}",
+        //    parent_index, relative_child_ptr
+        //);
 
         let metadata = &mut self.node_metadata_data[parent_index as usize];
         match metadata {
@@ -144,7 +152,7 @@ impl VoxelModelESVO {
                 (current_child_capacity * 2).min(8)
             };
 
-            let new_children_ptr = self.allocate_node_data(new_child_capacity);
+            let new_children_ptr = self.allocate_node_data(parent_index, new_child_capacity);
             if current_child_capacity != 0 {
                 assert!(current_child_capacity < 8);
 
@@ -192,14 +200,16 @@ impl VoxelModelESVO {
     }
 
     // Returns the u32 index where the allocation starts.
-    pub fn allocate_node_data(&mut self, size: u32) -> u32 {
+    pub fn allocate_node_data(&mut self, after_index: u32, size: u32) -> u32 {
         assert!(size > 0 && size <= 8);
 
         let free_bucket_index = self
             .bucket_metadata
             .iter()
             .find_map(|info| {
-                if info.node_size + size <= info.node_capacity {
+                if info.node_size + size <= info.node_capacity
+                    && info.bucket_free_start > after_index
+                {
                     Some(info.metadata_index)
                 } else {
                     None

@@ -1,9 +1,9 @@
 // Constants ---------------------------
-const EPSILON: f32 = 0.0;
+const EPSILON: f32 = 0.0001;
 const RENDER_INDICES_LENGTH: u32 = 3u;
 const NULL_ATTACHMENT: u32 = 0xFFFFFFFF;
 
-const TERRAIN_CHUNK_WORLD_UNIT_LENGTH: f32 = 32.0;
+const TERRAIN_CHUNK_WORLD_UNIT_LENGTH: f32 = 8.0;
 
 // Morton ----------------------------------
 
@@ -456,7 +456,15 @@ fn trace_esvo(voxel_model: VoxelModelHit) -> VoxelModelTrace {
               f32((compresed_material >> 8u) & 0xFFu) / 255.0,
               f32(compresed_material & 0xFFu) / 255.0,
             ));
-            return voxel_model_trace_hit(albedo, vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position);
+
+            let normal = vec3f(vec3<bool>(
+              curr_hit_info.t_min.x == curr_hit_info.t_enter,
+              curr_hit_info.t_min.y == curr_hit_info.t_enter,
+              curr_hit_info.t_min.z == curr_hit_info.t_enter,
+            ));
+
+            let l = normal.x + normal.y * 0.6 + normal.z * 0.4;
+            return voxel_model_trace_hit(albedo * l, vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position);
           } else {
             // Unknown material.
             return VoxelModelTrace(false, RayVoxelHit(vec3f(1.0, 1.0, 0.0), vec3f(0.0), vec3f(0.0), vec3f(0.0), hit_position));
@@ -780,8 +788,19 @@ fn next_ray_terrain_hit(ray: Ray) -> vec3f {
   let chunk_render_origin = u_world_terrain_acceleration.chunk_origin;
   let render_distance = i32(u_world_terrain_acceleration.side_length);
 
-  let chunk_ray_pos = (ray.origin / TERRAIN_CHUNK_WORLD_UNIT_LENGTH) - vec3f(chunk_render_origin);
-  let chunk_ray = Ray(chunk_ray_pos, ray.dir, ray.inv_dir);
+  let root_min = vec3f(chunk_render_origin) * TERRAIN_CHUNK_WORLD_UNIT_LENGTH;
+  let root_max = root_min + vec3f(render_distance) * TERRAIN_CHUNK_WORLD_UNIT_LENGTH;
+  let root_aabb = aabb_min_max(root_min, root_max);
+  let root_hit_info = ray_to_aabb(ray, root_aabb);
+  var hit_ray: Ray;
+  if (!root_hit_info.hit) {
+    return sample_background_radiance(ray);
+  } else {
+    hit_ray = ray_advance(ray, root_hit_info.t_enter + EPSILON);
+  }
+
+  let chunk_ray_pos = (hit_ray.origin / TERRAIN_CHUNK_WORLD_UNIT_LENGTH) - vec3f(chunk_render_origin);
+  let chunk_ray = Ray(chunk_ray_pos, hit_ray.dir, hit_ray.inv_dir);
 
   let grid_step = vec3<i32>(sign(chunk_ray.dir));
   let unit_t = abs(chunk_ray.inv_dir);
@@ -796,7 +815,7 @@ fn next_ray_terrain_hit(ray: Ray) -> vec3f {
          grid_pos.x < render_distance && grid_pos.y < render_distance && grid_pos.z < render_distance) {
     // Use manhattan distance since DDA steps an axis at a time. Multiply by 2 to be less bright.
     alb = vec3f(j) / (vec3f(render_distance * 6));
-    j++; 
+    j++;
 
     let chunk_index = morton_encode_3(u32(grid_pos.x), u32(grid_pos.y), u32(grid_pos.z));
     let model_ptr = u_world_terrain_acceleration.data[chunk_index];

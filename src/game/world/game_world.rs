@@ -152,9 +152,9 @@ impl GameWorld {
             let room_model = VoxelModel::new(room_model);
             //let room_model = VoxelModel::<VoxelModelESVO>::new(VoxelModelESVO::empty(32, true));
             debug!("{:?}", room_model);
-            let room_model_id =
-                voxel_world.register_renderable_voxel_model("room_model", room_model);
-            game_world.test_model_id = room_model_id;
+            //let room_model_id =
+            //    voxel_world.register_renderable_voxel_model("room_model", room_model);
+            //game_world.test_model_id = room_model_id;
             debug!(
                 "Took {} seconds to convert flat model to an esvo model",
                 i.elapsed().as_secs_f32()
@@ -188,31 +188,31 @@ impl GameWorld {
         mut voxel_world: ResMut<VoxelWorld>,
         mut game_world: ResMut<GameWorld>,
     ) {
-        let voxel_model = voxel_world.get_dyn_model_mut(game_world.test_model_id);
+        //let voxel_model = voxel_world.get_dyn_model_mut(game_world.test_model_id);
 
-        let length = voxel_model.length();
-        let index = game_world.i as usize;
-        let curr_pos = Vector3::new(
-            (index % length.x as usize) as u32,
-            ((index / length.x as usize) % length.y as usize) as u32,
-            (index / (length.x as usize * length.y as usize)) as u32,
-        );
-        let unit_voxel = VoxelModelUnit::with_data(
-            VoxelData::empty().with_diffuse(Color::new_srgb(1.0, 0.0, 0.0)),
-        );
-        //voxel_model.set_voxel_range(VoxelRange::from_unit(curr_pos, unit_voxel));
-        //debug!(
-        //    "Set voxel at {} {} {} for i == {}",
-        //    curr_pos.x, curr_pos.y, curr_pos.z, game_world.i
+        //let length = voxel_model.length();
+        //let index = game_world.i as usize;
+        //let curr_pos = Vector3::new(
+        //    (index % length.x as usize) as u32,
+        //    ((index / length.x as usize) % length.y as usize) as u32,
+        //    (index / (length.x as usize * length.y as usize)) as u32,
         //);
-        game_world.i = (game_world.i + 1) % voxel_model.volume() as u32;
-        // for (entity, (vox_transform)) in ecs_world
-        //     .query_mut::<(&mut VoxelModelTransform)>()
-        //     .into_iter()
-        // {
-        //     if
-        //     vox_transform.rotation *=
-        //         UnitQuaternion::from_euler_angles(0.0, -0.5f32.to_radians(), 0.0);
-        // }
+        //let unit_voxel = VoxelModelUnit::with_data(
+        //    VoxelData::empty().with_diffuse(Color::new_srgb(1.0, 0.0, 0.0)),
+        //);
+        ////voxel_model.set_voxel_range(VoxelRange::from_unit(curr_pos, unit_voxel));
+        ////debug!(
+        ////    "Set voxel at {} {} {} for i == {}",
+        ////    curr_pos.x, curr_pos.y, curr_pos.z, game_world.i
+        ////);
+        //game_world.i = (game_world.i + 1) % voxel_model.volume() as u32;
+        //// for (entity, (vox_transform)) in ecs_world
+        ////     .query_mut::<(&mut VoxelModelTransform)>()
+        ////     .into_iter()
+        //// {
+        ////     if
+        ////     vox_transform.rotation *=
+        ////         UnitQuaternion::from_euler_angles(0.0, -0.5f32.to_radians(), 0.0);
+        //// }
     }
 }

@@ -344,7 +344,7 @@ struct FlatESVONode {
 impl FlatESVONode {
     pub fn zero() -> Self {
         FlatESVONode {
-            child_ptr: 0,
+            child_ptr: u32::MAX,
             info: 0,
         }
     }
@@ -473,6 +473,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
         node_list.push(levels[0][0].clone());
 
         let mut to_process = Vec::new();
+        //debug!("ROOT node index is {}", node_list.len() - 1);
         let root_node = node_list.last().unwrap();
         to_process.push((root_node, 1, 0));
 
@@ -486,8 +487,12 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
             // We can override the entire node data since we allocate the children right after.
             let curr_esvo_node = esvo.get_node_mut(curr_esvo_node_index);
             curr_esvo_node.0 = curr_flat_node.info & 0xFFFF;
+            //debug!(
+            //    "Addressing current esvo index {} with traversal {}",
+            //    curr_esvo_node_index, traversal
+            //);
 
-            let children_allocation_esvo_ptr = if curr_flat_node.child_ptr == 0 {
+            let children_allocation_esvo_ptr = if curr_flat_node.child_ptr == u32::MAX {
                 0
             } else {
                 esvo.allocate_node_children(curr_esvo_node_index, curr_flat_node.child_node_count())
@@ -543,6 +548,10 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                     //    child_offset,
                     //    curr_flat_node.node_mask()
                     //);
+                    //debug!(
+                    //    "Current flat node child ptr is {}",
+                    //    curr_flat_node.child_ptr
+                    //);
                     to_process.push((
                         child_flat_node,
                         children_allocation_esvo_ptr + child_offset as u32,
@@ -561,6 +570,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                 esvo.resize_raw_attachment_data(*attachment_id, attachment_ptr + used_raw_size);
             }
         }
+        debug!("FLAT to ESVO finale: {:?}", esvo);
 
         esvo
     }

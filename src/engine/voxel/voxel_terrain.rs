@@ -35,6 +35,8 @@ use super::{
     voxel_world::{VoxelModelId, VoxelWorld},
 };
 
+type ChunkModelType = VoxelModelESVO;
+
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
 }
@@ -60,7 +62,7 @@ impl VoxelTerrain {
 
             chunk_tree: None,
             chunk_queue: ChunkQueue::new(settings),
-            queue_timer: Timer::new(Duration::from_millis(500)),
+            queue_timer: Timer::new(Duration::from_millis(100)),
         }
     }
 
@@ -85,7 +87,7 @@ impl VoxelTerrain {
         };
 
         // Try enqueue any non enqueued chunks.
-        if terrain.queue_timer.try_complete() {
+        if !terrain.chunk_queue.chunk_queue.is_full() && terrain.queue_timer.try_complete() {
             let (range_x, range_y, range_z) = terrain.origin_render_range();
             for chunk_x in range_x.clone() {
                 for chunk_y in range_y.clone() {
@@ -114,7 +116,6 @@ impl VoxelTerrain {
             && !chunk_tree.is_world_chunk_enqueued(chunk_position)
         {
             if self.chunk_queue.try_enqueue_chunk(chunk_position) {
-                debug!("Enqueued chunk {:?}", chunk_position);
                 self.chunk_tree
                     .as_mut()
                     .unwrap()
@@ -148,12 +149,12 @@ impl VoxelTerrain {
 
 pub struct FinishedChunk {
     chunk_position: Vector3<i32>,
-    flat: VoxelModelFlat,
+    esvo: Option<ChunkModelType>,
 }
 
 impl FinishedChunk {
     pub fn is_empty(&self) -> bool {
-        self.flat.is_empty()
+        self.esvo.is_none()
     }
 }
 
@@ -161,6 +162,7 @@ pub struct ChunkQueue {
     chunk_queue: RingQueue<ChunkTicket>,
     chunk_generator: ChunkGenerator,
     chunk_handler_pool: rayon::ThreadPool,
+    chunk_handler_count: u32,
     finished_chunk_recv: Receiver<FinishedChunk>,
     finished_chunk_send: Sender<FinishedChunk>,
 }
@@ -171,7 +173,11 @@ impl ChunkQueue {
         Self {
             chunk_queue: RingQueue::with_capacity(settings.chunk_queue_capacity as usize),
             chunk_generator: ChunkGenerator::new(),
-            chunk_handler_pool: rayon::ThreadPoolBuilder::new().build().unwrap(),
+            chunk_handler_pool: rayon::ThreadPoolBuilder::new()
+                .num_threads(settings.chunk_queue_capacity as usize)
+                .build()
+                .unwrap(),
+            chunk_handler_count: 0,
             finished_chunk_recv,
             finished_chunk_send,
         }
@@ -195,8 +201,10 @@ impl ChunkQueue {
         'lp: loop {
             match self.finished_chunk_recv.try_recv() {
                 Ok(finished_chunk) => {
+                    self.chunk_handler_count -= 1;
                     if finished_chunk.is_empty() {
                         chunk_tree.set_world_chunk_empty(finished_chunk.chunk_position);
+                        debug!("Recieved empty chunk {:?}", finished_chunk.chunk_position);
                     } else {
                         let chunk_name = format!(
                             "chunk_{}_{}_{}",
@@ -206,7 +214,7 @@ impl ChunkQueue {
                         );
                         let voxel_model_id = voxel_world.register_renderable_voxel_model(
                             chunk_name,
-                            VoxelModel::<VoxelModelESVO>::new(finished_chunk.flat.into()),
+                            VoxelModel::new(finished_chunk.esvo.unwrap()),
                         );
                         chunk_tree.set_world_chunk_data(
                             finished_chunk.chunk_position,
@@ -229,14 +237,19 @@ impl ChunkQueue {
     }
 
     pub fn handle_enqueued_chunks(&mut self) {
-        if !self.chunk_queue.is_empty() {
+        if !self.chunk_queue.is_empty()
+            && self.chunk_handler_count < self.chunk_handler_pool.current_num_threads() as u32
+        {
             let ticket = self.chunk_queue.try_pop().unwrap();
+            debug!("Enqueued chunk {:?}", ticket.chunk_position);
             let send = self.finished_chunk_send.clone();
+            self.chunk_handler_count += 1;
             self.chunk_handler_pool.spawn(move || {
                 let flat = ChunkGenerator::generate_chunk(ticket.chunk_position);
+                let is_empty = flat.is_empty();
                 send.send(FinishedChunk {
                     chunk_position: ticket.chunk_position,
-                    flat,
+                    esvo: (!is_empty).then(|| flat.into()),
                 });
             });
         }
@@ -346,12 +359,11 @@ impl ChunkTree {
 
     fn set_world_chunk_empty(&mut self, chunk_world_position: Vector3<i32>) {
         let morton = self.world_pos_traversal_morton(chunk_world_position);
+        self.is_dirty = true;
         return self.set_chunk_empty(morton);
     }
 
     fn set_chunk_empty(&mut self, morton: u64) {
-        self.is_dirty = true;
-
         let octant = (morton & 7) as usize;
 
         if self.is_pre_leaf() {
@@ -376,13 +388,12 @@ impl ChunkTree {
     }
 
     fn set_world_chunk_data(&mut self, chunk_world_position: Vector3<i32>, chunk_data: ChunkData) {
+        self.is_dirty = true;
         let morton = self.world_pos_traversal_morton(chunk_world_position);
         return self.set_chunk_data(morton, chunk_data);
     }
 
     fn set_chunk_data(&mut self, morton: u64, data: ChunkData) {
-        self.is_dirty = true;
-
         let octant = (morton & 7) as usize;
 
         if self.is_pre_leaf() {

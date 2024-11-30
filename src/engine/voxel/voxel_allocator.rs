@@ -13,6 +13,7 @@ pub struct VoxelAllocator {
     // TODO: track frame bandwidth so we reduce frame staggers when multiple
     // models or a large model uploads.
     allocations: VoxelAllocatorTree,
+    total_allocated_size: u64,
 }
 
 impl VoxelAllocator {
@@ -32,6 +33,7 @@ impl VoxelAllocator {
         Self {
             world_data_buffer,
             allocations: VoxelAllocatorTree::new(0, 0, initial_size),
+            total_allocated_size: 0,
         }
     }
 
@@ -42,7 +44,9 @@ impl VoxelAllocator {
             size.next_power_of_two(),
             self.allocations.size
         );
-        let allocation = self.allocations.allocate(size.next_power_of_two());
+        let allocation_size = size.next_power_of_two();
+        self.total_allocated_size += allocation_size;
+        let allocation = self.allocations.allocate(allocation_size);
         debug!(
             "Allocated requested size in bytes: {}, {:?}",
             size, allocation
@@ -68,6 +72,10 @@ impl VoxelAllocator {
 
     pub fn world_data_buffer(&self) -> &wgpu::Buffer {
         &self.world_data_buffer
+    }
+
+    pub fn total_allocated_size(&self) -> u64 {
+        self.total_allocated_size
     }
 }
 

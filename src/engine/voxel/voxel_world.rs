@@ -358,6 +358,10 @@ impl VoxelWorldGpu {
         self.is_dirty
     }
 
+    pub fn voxel_allocator(&self) -> Option<&VoxelAllocator> {
+        self.allocator.as_ref()
+    }
+
     pub fn update_gpu_objects(
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,

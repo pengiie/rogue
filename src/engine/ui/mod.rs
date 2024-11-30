@@ -4,6 +4,7 @@ use state::UIState;
 use super::{
     graphics::renderer::Renderer,
     resource::{Res, ResMut},
+    voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
     window::{
         time::{Instant, Time},
         window::Window,
@@ -33,8 +34,27 @@ impl UI {
         }
     }
 
-    pub fn draw(window: Res<Window>, mut egui: ResMut<Egui>, mut state: ResMut<UIState>) {
+    pub fn draw(
+        window: Res<Window>,
+        mut egui: ResMut<Egui>,
+        mut state: ResMut<UIState>,
+        voxel_world: Res<VoxelWorldGpu>,
+    ) {
         egui.resolve_ui(&window, |ctx| {
+            let mut total_allocation_str;
+            let al = voxel_world
+                .voxel_allocator()
+                .map_or(0, |alloc| alloc.total_allocated_size());
+            if al >= 2u64.pow(30) {
+                total_allocation_str = format!("{:.3}GiB", al as f32 / 2f32.powf(30.0));
+            } else if al >= 2u64.pow(20) {
+                total_allocation_str = format!("{:.3}MiB", al as f32 / 2f32.powf(20.0));
+            } else if al >= 2u64.pow(10) {
+                total_allocation_str = format!("{:.3}KiB", al as f32 / 2f32.powf(10.0));
+            } else {
+                total_allocation_str = format!("{:.3}B", al);
+            }
+
             egui::Window::new("diagnostics")
                 .current_pos(egui::pos2(4.0, 4.0))
                 .movable(false)
@@ -42,6 +62,7 @@ impl UI {
                     ui.label(format!("FPS: {}", state.fps));
                     ui.label(format!("Samples: {}", state.samples));
                     ui.label(format!("Frame time: {}ms", state.delta_time_ms));
+                    ui.label(format!("Currently allocated: {}", total_allocation_str));
                     ui.add(
                         egui::Slider::new(&mut state.player_fov, 10.0..=170.0)
                             .text("fov")
