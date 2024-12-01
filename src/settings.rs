@@ -87,7 +87,7 @@ impl Default for Settings {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: 0.002,
 
-            chunk_render_distance: 8,
+            chunk_render_distance: 16,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,

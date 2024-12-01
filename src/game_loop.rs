@@ -10,7 +10,10 @@ use crate::{
         physics::physics_world::PhysicsWorld,
         system::System,
         ui::UI,
-        voxel::{voxel_terrain::VoxelTerrain, voxel_world::VoxelWorldGpu},
+        voxel::{
+            voxel_terrain::VoxelTerrain,
+            voxel_world::{VoxelWorld, VoxelWorldGpu},
+        },
         window::time::Time,
     },
     game::{player::player::Player, world::game_world::GameWorld},
@@ -75,4 +78,5 @@ pub fn game_loop(app: &App) {
     // Discard any inputs and events cached for this frame.
     app.run_system(Input::clear_inputs);
     app.run_system(Events::clear_events);
+    app.run_system(VoxelWorldGpu::clear_frame_state);
 }

@@ -8,7 +8,6 @@ pub mod esvo;
 pub mod flat;
 pub mod unit;
 pub mod voxel;
-pub mod voxel_allocator;
 pub mod voxel_constants;
 pub mod voxel_terrain;
 pub mod voxel_transform;

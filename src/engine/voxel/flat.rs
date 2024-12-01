@@ -14,7 +14,10 @@ use nalgebra::Vector3;
 
 use crate::{
     common::{bitset::Bitset, morton::morton_decode},
-    engine::graphics::device::DeviceResource,
+    engine::graphics::{
+        device::DeviceResource,
+        gpu_allocator::{GpuBufferAllocation, GpuBufferAllocator},
+    },
 };
 
 use super::{
@@ -24,7 +27,6 @@ use super::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelGpuNone, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema,
     },
-    voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
     voxel_constants,
 };
 
@@ -570,7 +572,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
                 esvo.resize_raw_attachment_data(*attachment_id, attachment_ptr + used_raw_size);
             }
         }
-        debug!("FLAT to ESVO finale: {:?}", esvo);
+        //debug!("FLAT to ESVO finale: {:?}", esvo);
 
         esvo
     }
@@ -596,9 +598,9 @@ impl VoxelModelImpl for VoxelModelFlat {
 
 pub struct VoxelModelFlatGpu {
     flat_length: Vector3<u32>,
-    voxel_presence_allocation: Option<VoxelDataAllocation>,
-    voxel_attachment_presence_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
-    voxel_attachment_data_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
+    voxel_presence_allocation: Option<GpuBufferAllocation>,
+    voxel_attachment_presence_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
+    voxel_attachment_data_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
 
     initialized_data: bool,
 }
@@ -659,8 +661,13 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
         Some(info)
     }
 
-    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+    fn update_gpu_objects(
+        &mut self,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) -> bool {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();
+        let mut did_allocate = false;
 
         if self.voxel_presence_allocation.is_none() {
             let presence_allocation_size = model.presence_data.data().len() * 4;
@@ -669,6 +676,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     .allocate(presence_allocation_size as u64)
                     .expect("Failed to allocate flat voxel presence data."),
             );
+            did_allocate = true;
         }
 
         for (attachment_id, presence_bitset) in &model.attachment_presence_data {
@@ -683,6 +691,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         .allocate(presence_allocation_size as u64)
                         .expect("Failed to allocate flat attachment presence data."),
                 );
+                did_allocate = true;
             }
         }
 
@@ -698,14 +707,17 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         .allocate(attachment_data_allocation_size as u64)
                         .expect("Failed to allocate flat attachment data."),
                 );
+                did_allocate = true;
             }
         }
+
+        return did_allocate;
     }
 
     fn write_gpu_updates(
         &mut self,
         device: &DeviceResource,
-        allocator: &mut VoxelAllocator,
+        allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();
@@ -713,7 +725,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
         if !self.initialized_data && self.voxel_presence_allocation.is_some() {
             self.flat_length = model.length;
 
-            allocator.write_world_data(
+            allocator.write_allocation_data(
                 device,
                 self.voxel_presence_allocation.as_ref().unwrap(),
                 bytemuck::cast_slice::<u32, u8>(model.presence_data.data()),
@@ -725,7 +737,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     .get(&attachment.id())
                     .expect("Voxel attachment presence allocation should've been allocated at this point.");
 
-                allocator.write_world_data(
+                allocator.write_allocation_data(
                     device,
                     allocation,
                     bytemuck::cast_slice::<u32, u8>(presence_data.data()),
@@ -738,7 +750,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     .get(&attachment.id())
                     .expect("Voxel attachment presence allocation should've been allocated at this point.");
 
-                allocator.write_world_data(
+                allocator.write_allocation_data(
                     device,
                     allocation,
                     bytemuck::cast_slice::<u32, u8>(attachment_data),

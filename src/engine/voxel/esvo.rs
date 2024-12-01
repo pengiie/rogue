@@ -14,7 +14,10 @@ use nalgebra::{ComplexField, Vector3};
 
 use crate::{
     common::morton::{morton_decode, morton_encode},
-    engine::graphics::device::DeviceResource,
+    engine::graphics::{
+        device::DeviceResource,
+        gpu_allocator::{GpuBufferAllocation, GpuBufferAllocator},
+    },
 };
 
 use super::{
@@ -23,7 +26,6 @@ use super::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelRange, VoxelRangeData,
     },
-    voxel_allocator::{VoxelAllocator, VoxelDataAllocation},
     voxel_constants,
 };
 
@@ -45,9 +47,10 @@ pub(crate) struct VoxelModelESVO {
 }
 
 impl VoxelModelESVO {
-    const PAGE_SIZE: u32 = 8192;
-    const DEFAULT_BUCKET_SIZE: u32 = Self::PAGE_SIZE;
+    const PAGE_SIZE: u32 = 1 << 13; // 8192
+    const DEFAULT_BUCKET_SIZE: u32 = 1 << 14;
     const DEFAULT_CHILD_CAPACITY: u32 = 8;
+    const MAX_RAW_INDEX: u32 = (1 << 16) - 1;
 
     pub fn empty(length: u32, track_updates: bool) -> Self {
         assert!(length.is_power_of_two());
@@ -64,7 +67,7 @@ impl VoxelModelESVO {
             updates: track_updates.then_some(Vec::new()),
         };
 
-        s.root_node_index = s.allocate_node_data(0, 1);
+        s.root_node_index = s.allocate_node_data(0, 1, Self::MAX_RAW_INDEX);
         s.node_metadata_data[s.root_node_index as usize] =
             ESVONodeMetadata::Some(ESVONodeMetadataData {
                 parent_index: 0,
@@ -79,7 +82,8 @@ impl VoxelModelESVO {
     ///
     /// Returns the index into the beginning of the child allocation, skipping far pointers.
     pub fn allocate_node_children(&mut self, parent_index: u32, child_count: u32) -> u32 {
-        let new_children_ptr = self.allocate_node_data(parent_index, child_count);
+        let new_children_ptr =
+            self.allocate_node_data(parent_index, child_count, Self::MAX_RAW_INDEX);
         //debug!(
         //    "allocated node data at: {} {}",
         //    parent_index, new_children_ptr
@@ -152,7 +156,7 @@ impl VoxelModelESVO {
                 (current_child_capacity * 2).min(8)
             };
 
-            let new_children_ptr = self.allocate_node_data(parent_index, new_child_capacity);
+            let new_children_ptr = self.allocate_node_data(parent_index, new_child_capacity, Self::MAX_RAW_INDEX);
             if current_child_capacity != 0 {
                 assert!(current_child_capacity < 8);
 
@@ -200,7 +204,12 @@ impl VoxelModelESVO {
     }
 
     // Returns the u32 index where the allocation starts.
-    pub fn allocate_node_data(&mut self, after_index: u32, size: u32) -> u32 {
+    pub fn allocate_node_data(
+        &mut self,
+        after_index: u32,
+        size: u32,
+        maximum_distance: u32,
+    ) -> u32 {
         assert!(size > 0 && size <= 8);
 
         let free_bucket_index = self
@@ -631,7 +640,8 @@ impl VoxelModelESVOAttachmentLookupNode {
     pub fn set_raw_index(&mut self, raw_index: u32) {
         assert!(
             raw_index < (1 << Self::RELATIVE_PTR_BITS),
-            "raw index is too big."
+            "raw index {} is too big.",
+            raw_index
         );
 
         self.0 = (self.0 & 0x0000_00FF) | (raw_index << 8);
@@ -929,9 +939,9 @@ impl std::fmt::Debug for VoxelModelESVO {
 }
 
 pub struct VoxelModelESVOGpu {
-    data_allocation: Option<VoxelDataAllocation>,
-    attachment_lookup_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
-    attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
+    data_allocation: Option<GpuBufferAllocation>,
+    attachment_lookup_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
+    attachment_raw_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
 
     initialized_data: bool,
 }
@@ -976,8 +986,13 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         Some(info)
     }
 
-    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+    fn update_gpu_objects(
+        &mut self,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) -> bool {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
+        let mut did_allocate = false;
 
         if self.data_allocation.is_none() {
             let data_allocation_size = model.node_data.len() as u64 * 4;
@@ -986,6 +1001,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                     .allocate(data_allocation_size)
                     .expect("Failed to allocate ESVO node data."),
             );
+            did_allocate = true;
         }
 
         for (attachment, data) in &model.attachment_lookup_data {
@@ -997,6 +1013,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                         .allocate(lookup_data_allocation_size)
                         .expect("Failed to allocate ESVO attachment lookup data."),
                 );
+                did_allocate = true;
             }
         }
 
@@ -1009,14 +1026,17 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                         .allocate(raw_data_allocation_size)
                         .expect("Failed to allocate ESVO attachment raw data."),
                 );
+                did_allocate = true;
             }
         }
+
+        return did_allocate;
     }
 
     fn write_gpu_updates(
         &mut self,
         device: &DeviceResource,
-        allocator: &mut VoxelAllocator,
+        allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();
@@ -1027,7 +1047,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             debug!("Writing ESVO voxel model initial data");
 
             // debug!("Writing node data {:?}", model.node_data.as_slice());
-            allocator.write_world_data(
+            allocator.write_allocation_data(
                 device,
                 self.data_allocation.as_ref().unwrap(),
                 bytemuck::cast_slice::<VoxelModelESVONode, u8>(model.node_data.as_slice()),
@@ -1044,7 +1064,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                     .get(attachment)
                     .expect("Lookup allocation should exist by now.");
 
-                allocator.write_world_data(
+                allocator.write_allocation_data(
                     device,
                     allocation,
                     bytemuck::cast_slice::<VoxelModelESVOAttachmentLookupNode, u8>(
@@ -1064,7 +1084,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                     .get(attachment)
                     .expect("Raw allocation should exist by now.");
 
-                allocator.write_world_data(
+                allocator.write_allocation_data(
                     device,
                     allocation,
                     bytemuck::cast_slice::<u32, u8>(raw_data.as_slice()),

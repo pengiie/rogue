@@ -13,7 +13,10 @@ use crate::{
         Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
         ColorSpaceTransitionInto,
     },
-    engine::{graphics::device::DeviceResource, physics::transform::Transform},
+    engine::{
+        graphics::{device::DeviceResource, gpu_allocator::GpuBufferAllocator},
+        physics::transform::Transform,
+    },
 };
 
 use super::{
@@ -21,7 +24,6 @@ use super::{
     esvo::VoxelModelESVO,
     flat::VoxelModelFlat,
     unit::VoxelModelUnit,
-    voxel_allocator::VoxelAllocator,
     voxel_transform::VoxelModelTransform,
     voxel_world::VoxelModelId,
 };
@@ -91,12 +93,17 @@ pub trait VoxelModelGpuImpl: Send + Sync {
     // Can encode other model specific data here as well.
     fn aggregate_model_info(&self) -> Option<Vec<u32>>;
 
-    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl);
+    /// Makes any necessary allocations and returns true if the owned allocations have changed.
+    fn update_gpu_objects(
+        &mut self,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) -> bool;
 
     fn write_gpu_updates(
         &mut self,
         device: &DeviceResource,
-        allocator: &mut VoxelAllocator,
+        allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     );
 }
@@ -111,14 +118,18 @@ impl VoxelModelGpuImpl for VoxelModelGpuNone {
         unimplemented!("This gpu model is not renderable.")
     }
 
-    fn update_gpu_objects(&mut self, allocator: &mut VoxelAllocator, model: &dyn VoxelModelImpl) {
+    fn update_gpu_objects(
+        &mut self,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) -> bool {
         unimplemented!("This gpu model is not renderable.")
     }
 
     fn write_gpu_updates(
         &mut self,
         device: &DeviceResource,
-        allocator: &mut VoxelAllocator,
+        allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         unimplemented!("This gpu model is not renderable.")

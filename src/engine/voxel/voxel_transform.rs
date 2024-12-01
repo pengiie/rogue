@@ -35,10 +35,10 @@ impl VoxelModelTransform {
         }
     }
 
-    pub fn as_obb(&self, voxel_model: &dyn VoxelModelImpl) -> OBB {
+    pub fn as_obb(&self, model_dimensions: Vector3<u32>) -> OBB {
         let min = self.position;
         let max = min
-            + voxel_model.length().map(|x| x as f32)
+            + model_dimensions.map(|x| x as f32)
                 * voxel_constants::VOXEL_WORLD_UNIT_LENGTH
                 * self.scale;
 

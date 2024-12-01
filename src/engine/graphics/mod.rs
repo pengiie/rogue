@@ -9,6 +9,7 @@ use super::resource::ResourceBank;
 pub mod bvh;
 pub mod camera;
 pub mod device;
+pub mod gpu_allocator;
 pub mod pass;
 pub mod pipeline_manager;
 pub mod renderer;

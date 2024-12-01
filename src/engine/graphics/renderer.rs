@@ -541,7 +541,7 @@ impl Renderer {
             }
         }
 
-        if update_ray_bind_group || voxel_world_gpu.is_dirty() {
+        if update_ray_bind_group || voxel_world_gpu.did_buffers_update() {
             debug!("Updating ray bind group.");
             renderer.set_ray_bind_group(&device, &voxel_world_gpu);
         }

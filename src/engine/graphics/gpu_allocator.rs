@@ -2,63 +2,61 @@ use log::debug;
 
 use crate::engine::graphics::device::DeviceResource;
 
-const WORLD_DATA_BUFFER_SIZE: u64 = 1 << 31;
-
-/// Handles allocation of contiguous blocks of memory for voxel models. Necessary so data can
-/// easily be replicated with a large gpu voxel "heap" buffer.
-pub struct VoxelAllocator {
-    world_data_buffer: wgpu::Buffer,
+/// Power of 2 allocator operating on gpu-only buffers.
+pub struct GpuBufferAllocator {
+    buffer: wgpu::Buffer,
 
     // TODO: create deallocation reciever so we can cleanup removed models.
     // TODO: track frame bandwidth so we reduce frame staggers when multiple
     // models or a large model uploads.
-    allocations: VoxelAllocatorTree,
+    allocations: AllocatorTree,
     total_allocated_size: u64,
 }
 
-impl VoxelAllocator {
-    pub fn new(device: &wgpu::Device, initial_size: u64) -> Self {
+impl GpuBufferAllocator {
+    pub fn new(
+        device: &wgpu::Device,
+        name: &str,
+        initial_size: u64,
+        usage: wgpu::BufferUsages,
+    ) -> Self {
         assert!(initial_size.is_power_of_two());
-        let world_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("world_buffer"),
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(name),
             size: initial_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage,
             mapped_at_creation: false,
         });
-        debug!(
-            "STARTING WITH VRAM OF {}MB",
-            initial_size as f32 / (1 << 20) as f32
-        );
 
         Self {
-            world_data_buffer,
-            allocations: VoxelAllocatorTree::new(0, 0, initial_size),
+            buffer,
+            allocations: AllocatorTree::new(0, 0, initial_size),
             total_allocated_size: 0,
         }
     }
 
-    pub fn allocate(&mut self, size: u64) -> Option<VoxelDataAllocation> {
+    pub fn allocate(&mut self, bytes: u64) -> Option<GpuBufferAllocation> {
         assert!(
-            size.next_power_of_two() <= self.allocations.size,
+            bytes.next_power_of_two() <= self.allocations.size,
             "Tried to allocate {} bytes but allocator can only hold {}",
-            size.next_power_of_two(),
+            bytes.next_power_of_two(),
             self.allocations.size
         );
-        let allocation_size = size.next_power_of_two();
+        let allocation_size = bytes.next_power_of_two();
         self.total_allocated_size += allocation_size;
         let allocation = self.allocations.allocate(allocation_size);
         debug!(
             "Allocated requested size in bytes: {}, {:?}",
-            size, allocation
+            bytes, allocation
         );
 
         allocation
     }
 
-    pub fn write_world_data(
+    pub fn write_allocation_data(
         &self,
         device: &DeviceResource,
-        allocation: &VoxelDataAllocation,
+        allocation: &GpuBufferAllocation,
         data: &[u8],
     ) {
         // Ensure we do not write out of bounds.
@@ -67,11 +65,11 @@ impl VoxelAllocator {
         let offset = allocation.range.start;
         device
             .queue()
-            .write_buffer(self.world_data_buffer(), allocation.range.start, data)
+            .write_buffer(self.buffer(), allocation.range.start, data)
     }
 
-    pub fn world_data_buffer(&self) -> &wgpu::Buffer {
-        &self.world_data_buffer
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        &self.buffer
     }
 
     pub fn total_allocated_size(&self) -> u64 {
@@ -79,13 +77,13 @@ impl VoxelAllocator {
     }
 }
 
-pub struct VoxelDataAllocation {
+pub struct GpuBufferAllocation {
     /// Currently, used as a unique identifier hash for an allocation.
     traversal: u64,
     range: std::ops::Range<u64>,
 }
 
-impl VoxelDataAllocation {
+impl GpuBufferAllocation {
     /// Interprests the start index if the array is represented as `array<u8>`.
     pub fn start_index_stride_u8(&self) -> u32 {
         self.range.start as u32
@@ -95,9 +93,17 @@ impl VoxelDataAllocation {
     pub fn start_index_stride_u32(&self) -> u32 {
         (self.range.start >> 2) as u32
     }
+
+    pub fn length_u8(&self) -> u32 {
+        (self.range.end - self.range.start) as u32
+    }
+
+    pub fn length_u32(&self) -> u32 {
+        ((self.range.end >> 2) - (self.range.start >> 2)) as u32
+    }
 }
 
-impl std::fmt::Debug for VoxelDataAllocation {
+impl std::fmt::Debug for GpuBufferAllocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut traversal_str = String::new();
         for i in (0..64).rev() {
@@ -114,16 +120,16 @@ impl std::fmt::Debug for VoxelDataAllocation {
     }
 }
 
-struct VoxelAllocatorTree {
+struct AllocatorTree {
     traversal: u64,
     start_index: u64,
     size: u64,
-    left: Option<Box<VoxelAllocatorTree>>,
-    right: Option<Box<VoxelAllocatorTree>>,
+    left: Option<Box<AllocatorTree>>,
+    right: Option<Box<AllocatorTree>>,
     is_allocated: bool,
 }
 
-impl VoxelAllocatorTree {
+impl AllocatorTree {
     fn new(traversal: u64, start_index: u64, size: u64) -> Self {
         Self {
             traversal,
@@ -135,7 +141,7 @@ impl VoxelAllocatorTree {
         }
     }
 
-    fn allocate(&mut self, needed_size: u64) -> Option<VoxelDataAllocation> {
+    fn allocate(&mut self, needed_size: u64) -> Option<GpuBufferAllocation> {
         assert!(needed_size.is_power_of_two());
         // This node is already allocated don't search any further.
         if self.is_allocated {
@@ -155,7 +161,7 @@ impl VoxelAllocatorTree {
 
         let child_size = self.size >> 1;
         let new_child = |dir| {
-            let mut new_child = Box::new(VoxelAllocatorTree::new(
+            let mut new_child = Box::new(AllocatorTree::new(
                 self.traversal | (dir << self.size.trailing_zeros()),
                 self.start_index + child_size * dir,
                 child_size,
@@ -190,11 +196,11 @@ impl VoxelAllocatorTree {
         return None;
     }
 
-    fn make_allocated(&mut self) -> VoxelDataAllocation {
+    fn make_allocated(&mut self) -> GpuBufferAllocation {
         assert!(!self.is_allocated);
         self.is_allocated = true;
 
-        VoxelDataAllocation {
+        GpuBufferAllocation {
             traversal: self.traversal,
             range: self.start_index..(self.start_index + self.size),
         }
