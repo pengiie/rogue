@@ -14,14 +14,16 @@ use rogue_macros::Resource;
 use crate::{
     common::{
         aabb::AABB,
-        archetype::{Archetype, ArchetypeIter, ArchetypeIterMut, TypeInfo},
+        archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
+        dyn_vec::TypeInfo,
     },
     consts::voxel::VOXEL_WORLD_UNIT_LENGTH,
     engine::{
         ecs::ecs_world::ECSWorld,
         graphics::{
+            backend::{Buffer, GfxBufferCreateInfo, ResourceId},
             device::DeviceResource,
-            gpu_allocator::{GpuBufferAllocation, GpuBufferAllocator},
+            gpu_allocator::{Allocation, GpuBufferAllocator},
         },
         physics::transform::Transform,
         resource::{Res, ResMut},
@@ -388,9 +390,9 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
 pub struct VoxelWorldGpu {
     /// The acceleration buffer for rendered entity voxel model bounds interaction, hold the
     /// pointed to voxel model index and the position and rotation matrix data of this entity.
-    acceleration_buffer: Option<wgpu::Buffer>,
+    acceleration_buffer: Option<ResourceId<Buffer>>,
     /// The acceleration buffer for the voxel terrain.
-    terrain_acceleration_buffer: Option<wgpu::Buffer>,
+    terrain_acceleration_buffer: Option<ResourceId<Buffer>>,
     /// The buffer for every unique voxel models info such as its data pointers and length.
     voxel_model_info_allocator: Option<GpuBufferAllocator>,
     voxel_model_info_map: HashMap<VoxelModelId, VoxelWorldModelGpuInfo>,
@@ -405,7 +407,7 @@ pub struct VoxelWorldGpu {
 }
 
 struct VoxelWorldModelGpuInfo {
-    pub info_allocation: GpuBufferAllocation,
+    pub info_allocation: Allocation,
     // The dimensions of this voxel model.
     pub voxel_model_dimensions: Vector3<u32>,
 }
@@ -470,37 +472,31 @@ impl VoxelWorldGpu {
     pub fn update_gpu_objects(
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
-        device: Res<DeviceResource>,
+        mut device: ResMut<DeviceResource>,
     ) {
         let voxel_world_gpu = &mut voxel_world_gpu;
         if voxel_world_gpu.acceleration_buffer.is_none() {
-            voxel_world_gpu.acceleration_buffer =
-                Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("world_entity_acceleration_buffer"),
-                    size: 4 * 1000000, // 1000 voxel models
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
+            voxel_world_gpu.acceleration_buffer = Some(device.create_buffer(GfxBufferCreateInfo {
+                name: "world_entity_acceleration_buffer".to_owned(),
+                size: 4 * 1000000,
+            }));
             voxel_world_gpu.mark_dirty();
         }
 
         if voxel_world_gpu.terrain_acceleration_buffer.is_none() {
             voxel_world_gpu.terrain_acceleration_buffer =
-                Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("world_terrain_acceleration_buffer"),
+                Some(device.create_buffer(GfxBufferCreateInfo {
+                    name: "world_terrain_acceleration_buffer".to_owned(),
                     size: 4 * 1000000, // 1000 voxel models
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
                 }));
             voxel_world_gpu.mark_dirty();
         }
 
         if voxel_world_gpu.voxel_model_info_allocator.is_none() {
             voxel_world_gpu.voxel_model_info_allocator = Some(GpuBufferAllocator::new(
-                &device,
+                &mut device,
                 "voxel_model_info_allocator",
                 1 << 20,
-                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
             ));
             voxel_world_gpu.mark_dirty();
         }
@@ -508,10 +504,9 @@ impl VoxelWorldGpu {
         if voxel_world_gpu.voxel_data_allocator.is_none() {
             // 1 gig
             voxel_world_gpu.voxel_data_allocator = Some(GpuBufferAllocator::new(
-                &device,
+                &mut device,
                 "voxel_data_allocator",
                 1 << 30,
-                wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
             ));
             voxel_world_gpu.mark_dirty();
         }
@@ -536,7 +531,7 @@ impl VoxelWorldGpu {
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         voxel_terrain: Res<VoxelTerrain>,
         ecs_world: Res<ECSWorld>,
-        device: Res<DeviceResource>,
+        mut device: ResMut<DeviceResource>,
     ) {
         let Some(allocator) = &mut voxel_world_gpu.voxel_data_allocator else {
             return;
@@ -548,7 +543,7 @@ impl VoxelWorldGpu {
                 voxel_world.renderable_models_dyn_iter_mut()
             {
                 voxel_model_gpu.deref_mut().write_gpu_updates(
-                    &device,
+                    &mut device,
                     allocator,
                     voxel_model.deref_mut() as &mut dyn VoxelModelImpl,
                 );
@@ -565,13 +560,13 @@ impl VoxelWorldGpu {
             voxel_world_gpu.register_voxel_model_info(&voxel_world, new_renderable_id);
         }
         for voxel_model_info_copy in &voxel_world_gpu.frame_state.voxel_model_info_copies {
-            debug!(
-                "MADE a COPY at {} with len {} {:?}",
-                voxel_model_info_copy.dst_index * 4,
-                voxel_model_info_copy.src_data.len() * 4,
-                voxel_model_info_copy.src_data
-            );
-            device.queue().write_buffer(
+            // debug!(
+            //     "MADE a COPY at {} with len {} {:?}",
+            //     voxel_model_info_copy.dst_index * 4,
+            //     voxel_model_info_copy.src_data.len() * 4,
+            //     voxel_model_info_copy.src_data
+            // );
+            device.write_buffer(
                 voxel_world_gpu.world_voxel_model_info_buffer(),
                 voxel_model_info_copy.dst_index as u64 * 4,
                 bytemuck::cast_slice(voxel_model_info_copy.src_data.as_slice()),
@@ -627,7 +622,7 @@ impl VoxelWorldGpu {
                 voxel_world_gpu
                     .voxel_model_info_map
                     .iter()
-                    .map(|(id, info)| (*id, info.info_allocation.start_index_stride_u32()))
+                    .map(|(id, info)| (*id, info.info_allocation.start_index_stride_dword() as u32))
                     .collect::<HashMap<_, _>>(),
             );
 
@@ -638,12 +633,12 @@ impl VoxelWorldGpu {
                 co.z as u32,
                 chunk_tree.chunk_side_length(),
             ];
-            device.queue().write_buffer(
+            device.write_buffer(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 0,
                 bytemuck::cast_slice(&metadata),
             );
-            device.queue().write_buffer(
+            device.write_buffer(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 (metadata.len() * std::mem::size_of::<u32>()) as u64,
                 bytemuck::cast_slice(&chunk_tree_gpu.data),
@@ -677,11 +672,11 @@ impl VoxelWorldGpu {
                 break 'should_append false;
             };
 
-            if model_info_allocation.start_index_stride_u32() < last_copy.dst_index {
+            if (model_info_allocation.start_index_stride_dword() as u32) < last_copy.dst_index {
                 break 'should_append false;
             }
 
-            model_info_allocation.start_index_stride_u32()
+            model_info_allocation.start_index_stride_dword() as u32
                 == last_copy.dst_index + last_copy.src_data.len() as u32
         };
 
@@ -691,19 +686,19 @@ impl VoxelWorldGpu {
             };
             let mut src_data = &mut last_copy.src_data;
             let original_length = src_data.len();
-            src_data.reserve_exact(model_info_allocation.length_u32() as usize);
+            src_data.reserve_exact(model_info_allocation.length_dword() as usize);
             src_data.push(voxel_model.schema());
             src_data.append(&mut model_gpu_info_ptrs);
             src_data.resize(src_data.capacity(), 0);
         } else {
-            let mut src_data = Vec::with_capacity(model_info_allocation.length_u32() as usize);
+            let mut src_data = Vec::with_capacity(model_info_allocation.length_dword() as usize);
             src_data.push(voxel_model.schema());
             src_data.append(&mut model_gpu_info_ptrs);
             src_data.resize(src_data.capacity(), 0);
 
             let new_copy = VoxelModelInfoCopy {
                 src_data,
-                dst_index: model_info_allocation.start_index_stride_u32(),
+                dst_index: model_info_allocation.start_index_stride_dword() as u32,
             };
             self.frame_state.voxel_model_info_copies.push(new_copy);
         }
@@ -721,26 +716,26 @@ impl VoxelWorldGpu {
         self.rendered_voxel_model_entity_count
     }
 
-    pub fn world_acceleration_buffer(&self) -> &wgpu::Buffer {
+    pub fn world_acceleration_buffer(&self) -> &ResourceId<Buffer> {
         self.acceleration_buffer
             .as_ref()
             .expect("world_acceleration_buffer not initialized when it should have been by now")
     }
 
-    pub fn world_terrain_acceleration_buffer(&self) -> &wgpu::Buffer {
+    pub fn world_terrain_acceleration_buffer(&self) -> &ResourceId<Buffer> {
         self.terrain_acceleration_buffer.as_ref().expect(
             "world_terrain_acceleration_buffer not initialized when it should have been by now",
         )
     }
 
-    pub fn world_voxel_model_info_buffer(&self) -> &wgpu::Buffer {
+    pub fn world_voxel_model_info_buffer(&self) -> &ResourceId<Buffer> {
         self.voxel_model_info_allocator
             .as_ref()
             .expect("world_voxel_model_info_buffer not initialized when it should have been now")
             .buffer()
     }
 
-    pub fn world_data_buffer(&self) -> Option<&wgpu::Buffer> {
+    pub fn world_data_buffer(&self) -> Option<&ResourceId<Buffer>> {
         self.voxel_data_allocator
             .as_ref()
             .map(|allocator| allocator.buffer())

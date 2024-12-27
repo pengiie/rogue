@@ -3,7 +3,7 @@ use rogue_macros::Resource;
 use crate::engine::window::time::{Instant, Time};
 
 #[derive(Resource)]
-pub struct UIState {
+pub struct DebugUIState {
     pub zoom_factor: f32,
     pub player_fov: f32,
     pub fps: u32,
@@ -15,7 +15,7 @@ pub struct UIState {
     pub last_ui_update: Instant,
 }
 
-impl Default for UIState {
+impl Default for DebugUIState {
     fn default() -> Self {
         Self {
             zoom_factor: 1.0,
@@ -30,4 +30,4 @@ impl Default for UIState {
     }
 }
 
-impl UIState {}
+impl DebugUIState {}

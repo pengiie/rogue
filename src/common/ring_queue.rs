@@ -19,7 +19,7 @@ impl<T> RingQueue<T> {
             right: 0,
             size: 0,
             init_size: 0,
-            // TODO: Use Box::new_uninit_slice once I can debug in rust 1.83.0GVGVGVGVB.
+            // TODO: Use Box::new_uninit_slice once I can debug in rust 1.83.0.
             buffer: (0..capacity)
                 .map(|_| MaybeUninit::uninit())
                 .collect::<Vec<_>>()

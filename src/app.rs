@@ -1,6 +1,10 @@
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::{
+    ops::Deref,
+    sync::mpsc::{channel, Receiver, Sender},
+};
 
 use log::{debug, info};
+use nalgebra::Vector2;
 use raw_window_handle::HasWindowHandle;
 use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
@@ -10,20 +14,19 @@ use crate::{
     engine::{
         self,
         asset::asset::Assets,
+        audio::Audio,
         ecs::ecs_world::ECSWorld,
         event::Events,
-        graphics::{
-            device::DeviceResource, pipeline_manager::RenderPipelineManager, renderer::Renderer,
-        },
+        graphics::{backend::GraphicsBackendEvent, device::DeviceResource, renderer::Renderer},
         input::Input,
         physics::physics_world::PhysicsWorld,
-        resource::ResourceBank,
+        resource::{Res, ResMut, Resource, ResourceBank},
         system::System,
-        ui::{gui::Egui, state::UIState},
+        ui::{gui::Egui, state::DebugUIState},
         voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
-    game::{player::player::Player, world::game_world::GameWorld},
+    game::{self, player::player::Player, world::game_world::GameWorld},
     game_loop,
     settings::Settings,
 };
@@ -71,6 +74,21 @@ impl App {
         &mut self.resource_bank
     }
 
+    pub fn get_resource<R: Resource>(&self) -> Res<R> {
+        self.resource_bank.get_resource::<R>()
+    }
+
+    pub fn get_resource_mut<R: Resource>(&self) -> ResMut<R>
+    where
+        R: Resource,
+    {
+        self.resource_bank.get_resource_mut::<R>()
+    }
+
+    pub fn insert_resource<R: Resource>(&mut self, resource: R) {
+        self.resource_bank.insert(resource);
+    }
+
     pub fn run(mut self) {
         let event_loop = self.event_loop.take().unwrap();
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
@@ -87,45 +105,6 @@ impl App {
 
     pub fn run_system<Marker>(&self, mut system: impl System<Marker>) {
         system.run(self.resource_bank());
-    }
-
-    // Initialized after the window resize event, aka. after the window has been created and we
-    // know it's actual size, the graphics context has yet to be created here.
-    fn init_pre_graphics(&mut self) {
-        let events = Events::new();
-        let settings = Settings::default();
-        let ecs = ECSWorld::new();
-        let input = Input::new();
-        let time = Time::new();
-        let assets = Assets::new();
-        let physics = PhysicsWorld::new();
-
-        let rb = self.resource_bank_mut();
-        rb.insert(events);
-        rb.insert(settings);
-        rb.insert(ecs);
-        rb.insert(input);
-        rb.insert(time);
-        rb.insert(assets);
-        rb.insert(physics);
-    }
-
-    fn init_post_graphics(&mut self) {
-        let egui = Egui::new(&self.resource_bank.get_resource::<Window>());
-        let ui_state = UIState::default();
-
-        let rb = self.resource_bank_mut();
-        rb.insert(ui_state);
-        rb.insert(egui);
-
-        engine::graphics::initialize_graphics_resources(rb);
-        engine::voxel::initialize_voxel_world_resources(rb);
-        // Game Stuff
-
-        let game_world = GameWorld::new();
-        rb.insert(game_world);
-
-        self.run_system(Player::spawn_player);
     }
 }
 
@@ -172,19 +151,30 @@ impl winit::application::ApplicationHandler for App {
                     .handle()
                     .request_redraw();
 
-                if let Ok(app_event) = self.event_receiver.try_recv() {
-                    match app_event {
-                        AppEvent::Init { device } => {
-                            self.initialized_graphics = true;
-
-                            self.resource_bank_mut().insert(device);
-                            self.init_post_graphics();
-                        }
-                    }
-                }
+                self.run_system(DeviceResource::pre_init_update);
 
                 if !self.initialized_graphics {
-                    return;
+                    for event in self
+                        .resource_bank
+                        .get_resource::<Events>()
+                        .iter::<GraphicsBackendEvent>()
+                    {
+                        match event {
+                            GraphicsBackendEvent::Initialized => {
+                                self.initialized_graphics = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Graphics backend isn't ready yet.
+                    if !self.initialized_graphics {
+                        return;
+                    }
+
+                    engine::init::init_post_graphics(self);
+                    game::init::init_post_graphics(self);
                 }
 
                 game_loop::game_loop(self);
@@ -192,49 +182,35 @@ impl winit::application::ApplicationHandler for App {
                 self.resource_bank
                     .get_resource_mut::<Window>()
                     .finish_frame();
-                self.resource_bank
-                    .get_resource_mut::<DeviceResource>()
-                    .finish_frame();
             }
             WinitWindowEvent::Resized(new_size) => {
-                debug!("Window resized {:?}", new_size);
+                debug!("Window resize event: {:?}", new_size);
                 if !self.did_first_resize && new_size.width > 0 && new_size.height > 0 {
                     self.did_first_resize = true;
 
-                    self.init_pre_graphics();
+                    engine::init::init_pre_graphics(self);
 
-                    let sender = self.event_sender.clone();
-                    let window = self
-                        .resource_bank()
-                        .get_resource::<Window>()
-                        .handle()
-                        .clone();
-
-                    let gfx_fut = async move {
-                        let device = DeviceResource::init(window).await;
-                        let _ = sender.send(AppEvent::Init { device });
-                    };
-
-                    cfg_if::cfg_if! {
-                        if #[cfg(target_arch = "wasm32")] {
-                            wasm_bindgen_futures::spawn_local(gfx_fut);
-                        } else {
-                            pollster::block_on(gfx_fut);
-                        }
-                    }
+                    let mut gfx_device = DeviceResource::new();
+                    gfx_device.init(
+                        &self.resource_bank.get_resource::<Window>(),
+                        &self.resource_bank.get_resource::<Settings>().graphics,
+                    );
+                    self.resource_bank.insert(gfx_device);
                 }
 
-                if self.initialized_graphics {
+                if self.initialized_graphics
+                    && self.resource_bank().get_resource::<Window>().inner_size() != new_size
+                {
                     self.resource_bank()
                         .get_resource_mut::<DeviceResource>()
-                        .resize_surface(new_size);
+                        .resize_swapchain(new_size);
 
                     debug!("Resized window to {}x{}", new_size.width, new_size.height);
                     // TODO: Option to change between depending on window resize mode.
                     self.resource_bank()
                         .get_resource_mut::<Settings>()
                         .graphics
-                        .render_size = (new_size.width, new_size.height);
+                        .rt_size = Vector2::new(new_size.width, new_size.height);
                 }
             }
             WinitWindowEvent::CloseRequested => {

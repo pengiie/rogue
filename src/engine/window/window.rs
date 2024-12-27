@@ -119,6 +119,10 @@ impl Window {
         self.winit_window.inner_size().height
     }
 
+    pub fn inner_size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.winit_window.inner_size()
+    }
+
     pub fn is_maximized(&self) -> bool {
         self.winit_window.is_maximized()
     }

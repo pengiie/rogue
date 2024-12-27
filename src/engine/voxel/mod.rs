@@ -13,12 +13,12 @@ pub mod voxel_terrain;
 pub mod voxel_transform;
 pub mod voxel_world;
 
-pub fn initialize_voxel_world_resources(rb: &mut ResourceBank) {
+pub fn initialize_voxel_world_resources(app: &mut crate::app::App) {
     let voxel_world = voxel_world::VoxelWorld::new();
     let voxel_world_gpu = voxel_world::VoxelWorldGpu::new();
-    let voxel_terrain = voxel_terrain::VoxelTerrain::new(&rb.get_resource::<Settings>());
+    let voxel_terrain = voxel_terrain::VoxelTerrain::new(&app.get_resource::<Settings>());
 
-    rb.insert(voxel_world);
-    rb.insert(voxel_world_gpu);
-    rb.insert(voxel_terrain);
+    app.insert_resource(voxel_world);
+    app.insert_resource(voxel_world_gpu);
+    app.insert_resource(voxel_terrain);
 }

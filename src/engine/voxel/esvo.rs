@@ -15,8 +15,8 @@ use nalgebra::{ComplexField, Vector3};
 use crate::{
     common::morton::{morton_decode, morton_encode},
     engine::graphics::{
-        device::DeviceResource,
-        gpu_allocator::{GpuBufferAllocation, GpuBufferAllocator},
+        device::{DeviceResource, GfxDevice},
+        gpu_allocator::{Allocation, GpuBufferAllocator},
     },
 };
 
@@ -390,7 +390,6 @@ impl VoxelModelESVO {
     pub fn push_empty_bucket(&mut self, bucket_size: u32) {
         assert!(bucket_size.is_power_of_two());
 
-        debug!("node data is {} long", self.node_data.len());
         let start_offset = self.node_data.len() as u32;
         assert!(
             (start_offset.max(1)).is_power_of_two(),
@@ -939,9 +938,9 @@ impl std::fmt::Debug for VoxelModelESVO {
 }
 
 pub struct VoxelModelESVOGpu {
-    data_allocation: Option<GpuBufferAllocation>,
-    attachment_lookup_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
-    attachment_raw_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
+    data_allocation: Option<Allocation>,
+    attachment_lookup_allocations: HashMap<AttachmentId, Allocation>,
+    attachment_raw_allocations: HashMap<AttachmentId, Allocation>,
 
     initialized_data: bool,
 }
@@ -965,7 +964,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             }
 
             attachment_lookup_indices[*attachment as usize] =
-                lookup_allocation.start_index_stride_u32()
+                lookup_allocation.start_index_stride_dword() as u32
         }
         let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
         for (attachment, raw_allocation) in &self.attachment_raw_allocations {
@@ -973,12 +972,13 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
                 continue;
             }
 
-            attachment_raw_indices[*attachment as usize] = raw_allocation.start_index_stride_u32();
+            attachment_raw_indices[*attachment as usize] =
+                raw_allocation.start_index_stride_dword() as u32;
         }
 
         let mut info = vec![
             // World data ptr (divide by 4 since 4 bytes in a u32)
-            data_allocation.start_index_stride_u32(),
+            data_allocation.start_index_stride_dword() as u32,
         ];
         info.append(&mut attachment_lookup_indices);
         info.append(&mut attachment_raw_indices);
@@ -1035,7 +1035,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
 
     fn write_gpu_updates(
         &mut self,
-        device: &DeviceResource,
+        device: &mut GfxDevice,
         allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {
@@ -1044,7 +1044,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
         if !self.initialized_data && self.data_allocation.is_some() {
-            debug!("Writing ESVO voxel model initial data");
+            // debug!("Writing ESVO voxel model initial data");
 
             // debug!("Writing node data {:?}", model.node_data.as_slice());
             allocator.write_allocation_data(
@@ -1074,11 +1074,11 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             }
 
             for (attachment, raw_data) in &model.attachment_raw_data {
-                debug!(
-                    "Writing attachment raw data [{}] Len: {:?}",
-                    attachment,
-                    raw_data.as_slice().len()
-                );
+                // debug!(
+                //     "Writing attachment raw data [{}] Len: {:?}",
+                //     attachment,
+                //     raw_data.as_slice().len()
+                // );
                 let allocation = self
                     .attachment_raw_allocations
                     .get(attachment)

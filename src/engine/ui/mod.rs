@@ -1,5 +1,5 @@
 use gui::Egui;
-use state::UIState;
+use state::DebugUIState;
 
 use super::{
     graphics::renderer::Renderer,
@@ -14,12 +14,18 @@ use super::{
 pub mod gui;
 pub mod state;
 
+pub fn initialize_debug_ui_resource(app: &mut crate::app::App) {
+    let egui = Egui::new(&app.get_resource::<Window>());
+    app.insert_resource(egui);
+    app.insert_resource(DebugUIState::default());
+}
+
 pub struct UI {}
 
 impl UI {
     pub fn update(
         mut egui: ResMut<Egui>,
-        mut state: ResMut<UIState>,
+        mut state: ResMut<DebugUIState>,
         time: Res<Time>,
         renderer: Res<Renderer>,
     ) {
@@ -30,14 +36,14 @@ impl UI {
 
             state.fps = time.fps();
             state.delta_time_ms = time.delta_time().as_micros() as f32 / 1000.0;
-            state.samples = renderer.sample_count();
+            //state.samples = renderer.sample_count();
         }
     }
 
     pub fn draw(
         window: Res<Window>,
         mut egui: ResMut<Egui>,
-        mut state: ResMut<UIState>,
+        mut state: ResMut<DebugUIState>,
         voxel_world: Res<VoxelWorldGpu>,
     ) {
         egui.resolve_ui(&window, |ctx| {

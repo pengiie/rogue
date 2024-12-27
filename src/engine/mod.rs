@@ -1,7 +1,9 @@
 pub mod asset;
+pub mod audio;
 pub mod ecs;
 pub mod event;
 pub mod graphics;
+pub mod init;
 pub mod input;
 pub mod physics;
 pub mod resource;

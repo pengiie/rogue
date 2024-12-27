@@ -12,6 +12,7 @@ use crate::{
     common::{aabb::AABB, color::Color},
     engine::{
         ecs::ecs_world::ECSWorld,
+        graphics::camera::Camera,
         physics::transform::Transform,
         resource::{Res, ResMut},
         voxel::{
@@ -28,7 +29,7 @@ use crate::{
         },
         window::time::{Instant, Time, Timer},
     },
-    game,
+    game::{self, player::player::Player},
 };
 
 // Updates per second.
@@ -214,5 +215,17 @@ impl GameWorld {
         ////     vox_transform.rotation *=
         ////         UnitQuaternion::from_euler_angles(0.0, -0.5f32.to_radians(), 0.0);
         //// }
+    }
+
+    pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>) {
+        if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
+            panic!("Player already spawned.");
+        }
+
+        ecs_world.spawn((
+            Player::new(),
+            Camera::new(),
+            Transform::with_translation(Translation3::new(0.0, 8.0, 0.0)),
+        ));
     }
 }

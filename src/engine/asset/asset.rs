@@ -1,25 +1,16 @@
 use core::panic;
 use std::{
-    any::Any,
-    cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
-    future::{Future, IntoFuture},
-    hash::{DefaultHasher, Hash, Hasher},
-    io::Read,
-    ops::Deref,
-    pin::Pin,
-    sync::{
+    any::Any, cell::RefCell, collections::{HashMap, HashSet, VecDeque}, future::{Future, IntoFuture}, hash::{DefaultHasher, Hash, Hasher}, io::Read, ops::Deref, path::PathBuf, pin::Pin, sync::{
         atomic::AtomicU64,
         mpsc::{channel, Receiver},
-    },
-    time::Duration,
+    }, time::Duration
 };
 
-use log::debug;
+use log::{debug, info};
 use regex::Regex;
 use rogue_macros::Resource;
 
-use crate::engine::resource::ResMut;
+use crate::engine::{resource::ResMut, window::time::{Instant, Timer}};
 
 #[derive(Resource)]
 pub struct Assets {
@@ -30,6 +21,10 @@ pub struct Assets {
     processing_assets: Vec<ProcessingAsset>,
     currently_loading_assets: HashSet<AssetId>,
     id_counter: AtomicU64,
+
+    assets_dir_touched: bool,
+    assets_dir_modified: Option<Instant>,
+    assets_dir_check_timer: Timer,
 
     #[cfg(not(target_arch = "wasm32"))]
     thread_pool: rayon::ThreadPool,
@@ -44,6 +39,10 @@ impl Assets {
             currently_loading_assets: HashSet::new(),
             id_counter: AtomicU64::new(0),
 
+            assets_dir_touched: false,
+            assets_dir_modified: None,
+            assets_dir_check_timer: Timer::new(Duration::from_millis(100)),
+
             #[cfg(not(target_arch = "wasm32"))]
             thread_pool: rayon::ThreadPoolBuilder::default()
                 .num_threads(1)
@@ -53,6 +52,43 @@ impl Assets {
     }
 
     pub fn update_assets(mut assets: ResMut<Assets>) {
+        assets.assets_dir_touched = false;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if assets.assets_dir_check_timer.try_complete() {
+            let assets_path = PathBuf::from("./assets").canonicalize().unwrap();
+
+            let mut dir_metadata = std::fs::metadata(&assets_path).expect("Failed to read assets dir.");
+            assert!(dir_metadata.is_dir());
+
+            let mut last_modified = None;
+            let mut dirs_to_process = vec![assets_path.clone()];
+            while let Some(curr_dir) = dirs_to_process.pop() {
+                let curr_dir_children = std::fs::read_dir(&curr_dir).expect("Failed to read assets dir.");
+                for child in curr_dir_children {
+                    if let Ok(child) = child {
+                        let metadata = child.metadata().unwrap();
+                        if metadata.is_dir() {
+                            dirs_to_process.push(child.path());
+                        } else if metadata.is_file() {
+                            if last_modified.is_none() || last_modified.unwrap() < metadata.modified().unwrap() {
+                                last_modified = Some(metadata.modified().unwrap());
+                            }
+                        } else {
+                            panic!("Symlinks in the asset dir are not supported.");
+                        }
+                    }
+                }
+            }
+            let last_modified = last_modified.expect("Asset directory should not be empty.").into();
+            if assets.assets_dir_modified.is_none() || assets.assets_dir_modified.unwrap() < last_modified {
+                if assets.assets_dir_modified.is_some() {
+                    assets.assets_dir_touched = true;
+                }
+                assets.assets_dir_modified = Some(last_modified);
+            }
+        }
+
         // Move out the assets which have their futures ready. This mean their asset loader has
         // finished loading the asset.
         let mut processing_assets = Vec::new();
@@ -202,6 +238,10 @@ impl Assets {
 
     pub fn is_asset_loading(&self, handle: &AssetHandle) -> bool {
         self.currently_loading_assets.contains(&handle.id)
+    }
+
+    pub fn is_assets_dir_modified(&self) -> bool {
+        self.assets_dir_touched
     }
 
     /// Only works for assets loaded through files currently, returns true if the asset was updated.

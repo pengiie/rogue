@@ -6,65 +6,42 @@ use std::{
 
 use downcast::Any;
 use log::debug;
+use nalgebra::Vector2;
 use rogue_macros::Resource;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     common::set::{AttributeSet, AttributeSetImpl},
-    engine::graphics::renderer::Antialiasing,
+    engine::graphics::{backend::GfxPresentMode, renderer::Antialiasing},
 };
 
-pub type GraphicsSettingsSet = AttributeSet<GraphicsSettings>;
-
-// TODO: I can derive macro this enum generation and the `AttributeSetImpl` generation. This should
-// be done when this attribute set is more used for cases like UI and more fields are added.
-#[derive(Clone, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
-pub enum GraphicsSettingsAttributes {
-    RenderSize((u32, u32)),
+/// Called/recieved whenever a setting is changed.
+pub enum GraphicsSettingsEvent {
+    RTSize(Vector2<u32>),
     Antialiasing(Antialiasing),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GraphicsSettings {
-    pub render_size: (u32, u32),
+    pub rt_size: Vector2<u32>,
     pub antialiasing: Antialiasing,
+    pub present_mode: GfxPresentMode,
+    pub triple_buffering: bool,
 }
 
 impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
             // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
-            render_size: (1280, 720),
+            rt_size: Vector2::new(1280, 720),
             antialiasing: Antialiasing::None,
+            present_mode: GfxPresentMode::NoVsync,
+            triple_buffering: true,
         }
     }
 }
 
-impl AttributeSetImpl for GraphicsSettings {
-    type E = GraphicsSettingsAttributes;
-
-    fn aggregate_updates(&self, last: &Self) -> HashSet<GraphicsSettingsAttributes> {
-        let mut updates = HashSet::new();
-        if self.render_size != last.render_size {
-            updates.insert(GraphicsSettingsAttributes::RenderSize(self.render_size));
-        }
-        if self.antialiasing != last.antialiasing {
-            updates.insert(GraphicsSettingsAttributes::Antialiasing(self.antialiasing));
-        }
-
-        updates
-    }
-
-    fn aggregate_all_fields(&self) -> HashSet<GraphicsSettingsAttributes> {
-        vec![
-            GraphicsSettingsAttributes::RenderSize(self.render_size),
-            GraphicsSettingsAttributes::Antialiasing(self.antialiasing),
-        ]
-        .into_iter()
-        .collect::<HashSet<_>>()
-    }
-}
-
-#[derive(Resource)]
+#[derive(Resource, Serialize, Deserialize)]
 pub struct Settings {
     /// The field of view in degrees of the camera.
     pub camera_fov: f32,
@@ -87,7 +64,7 @@ impl Default for Settings {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: 0.002,
 
-            chunk_render_distance: 16,
+            chunk_render_distance: 8,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,

@@ -5,7 +5,7 @@ use crate::{
     engine::{
         asset::asset::Assets,
         event::Events,
-        graphics::{pass::ui::UIPass, pipeline_manager::RenderPipelineManager, renderer::Renderer},
+        graphics::{device::DeviceResource, renderer::Renderer},
         input::Input,
         physics::physics_world::PhysicsWorld,
         system::System,
@@ -20,8 +20,15 @@ use crate::{
 };
 
 pub fn game_loop(app: &App) {
+    // This system is called in app.
+    // DeviceResource::update
+
     // ------- FRAME SETUP ---------
+    app.run_system(DeviceResource::begin_frame);
     app.run_system(Time::update);
+
+    // ------- RENDERER SETUP
+    app.run_system(Renderer::begin_frame);
 
     // ------- ASSETS --------
 
@@ -57,21 +64,13 @@ pub fn game_loop(app: &App) {
 
     // ------- GPU RENDERING ---------
 
-    // Update pipelines (loads shaders).
-    app.run_system(RenderPipelineManager::update_pipelines);
+    //app.run_system(VoxelWorldGpu::update_gpu_objects);
+    //app.run_system(VoxelWorldGpu::write_render_data);
 
-    app.run_system(VoxelWorldGpu::update_gpu_objects);
-    app.run_system(VoxelWorldGpu::write_render_data);
-
-    app.run_system(UIPass::write_render_data);
-
-    // Update renderer owned gpu objects, aka all textures and bind groups based on any render
-    // state changes.
-    app.run_system(Renderer::update_gpu_objects);
-    app.run_system(Renderer::write_render_data);
+    // app.run_system(UIPass::write_render_data);
 
     // Render the frame to the swapchain.
-    app.run_system(Renderer::render);
+    app.run_system(Renderer::finish_frame);
 
     // ------- FRAME CLEANUP ---------
 

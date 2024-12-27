@@ -7,7 +7,6 @@ use std::{
     u32,
 };
 
-use bitflags::Flags;
 use bytemuck::Pod;
 use log::debug;
 use nalgebra::Vector3;
@@ -15,8 +14,8 @@ use nalgebra::Vector3;
 use crate::{
     common::{bitset::Bitset, morton::morton_decode},
     engine::graphics::{
-        device::DeviceResource,
-        gpu_allocator::{GpuBufferAllocation, GpuBufferAllocator},
+        device::{DeviceResource, GfxDevice},
+        gpu_allocator::{Allocation, GpuBufferAllocator},
     },
 };
 
@@ -24,7 +23,7 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentMap},
     esvo::{VoxelModelESVO, VoxelModelESVONode},
     voxel::{
-        VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelGpuNone, VoxelModelImpl,
+        VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema,
     },
     voxel_constants,
@@ -598,9 +597,9 @@ impl VoxelModelImpl for VoxelModelFlat {
 
 pub struct VoxelModelFlatGpu {
     flat_length: Vector3<u32>,
-    voxel_presence_allocation: Option<GpuBufferAllocation>,
-    voxel_attachment_presence_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
-    voxel_attachment_data_allocations: HashMap<AttachmentId, GpuBufferAllocation>,
+    voxel_presence_allocation: Option<Allocation>,
+    voxel_attachment_presence_allocations: HashMap<AttachmentId, Allocation>,
+    voxel_attachment_data_allocations: HashMap<AttachmentId, Allocation>,
 
     initialized_data: bool,
 }
@@ -635,7 +634,8 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 continue;
             }
 
-            attachment_presence_indices[*attachment as usize] = allocation.start_index_stride_u32()
+            attachment_presence_indices[*attachment as usize] =
+                allocation.start_index_stride_dword() as u32
         }
         let mut attachment_data_indices =
             vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
@@ -644,7 +644,8 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 continue;
             }
 
-            attachment_data_indices[*attachment as usize] = allocation.start_index_stride_u32();
+            attachment_data_indices[*attachment as usize] =
+                allocation.start_index_stride_dword() as u32;
         }
 
         let mut info = vec![
@@ -653,7 +654,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             self.flat_length.y,
             self.flat_length.z,
             // World data ptr (divide by 4 since 4 bytes in a u32)
-            voxel_presence_allocation.start_index_stride_u32(),
+            voxel_presence_allocation.start_index_stride_dword() as u32,
         ];
         info.append(&mut attachment_presence_indices);
         info.append(&mut attachment_data_indices);
@@ -716,7 +717,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
 
     fn write_gpu_updates(
         &mut self,
-        device: &DeviceResource,
+        device: &mut GfxDevice,
         allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {

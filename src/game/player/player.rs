@@ -10,7 +10,7 @@ use crate::{
         input::{keyboard::Key, Input},
         physics::transform::Transform,
         resource::{Res, ResMut},
-        ui::state::UIState,
+        ui::state::DebugUIState,
         window::{time::Time, window::Window},
     },
     settings::Settings,
@@ -30,17 +30,6 @@ impl Player {
             movement_speed: 4.0,
         }
     }
-    pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>) {
-        if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
-            panic!("Player already spawned.");
-        }
-
-        ecs_world.spawn((
-            Player::new(),
-            Camera::new(),
-            Transform::with_translation(Translation3::new(0.0, 8.0, 0.0)),
-        ));
-    }
 
     pub fn update_player(
         ecs_world: ResMut<ECSWorld>,
@@ -48,7 +37,7 @@ impl Player {
         time: Res<Time>,
         settings: Res<Settings>,
         window: Res<Window>,
-        ui_state: Res<UIState>,
+        ui_state: Res<DebugUIState>,
     ) {
         let mut player_query =
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();

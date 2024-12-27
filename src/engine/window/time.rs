@@ -77,6 +77,12 @@ impl Instant {
     }
 }
 
+impl From<std::time::SystemTime> for Instant {
+    fn from(sys_time: std::time::SystemTime) -> Self {
+        Self(sys_time.duration_since(std::time::UNIX_EPOCH).unwrap())
+    }
+}
+
 impl Add<Duration> for Instant {
     type Output = Instant;
 

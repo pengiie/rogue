@@ -14,7 +14,10 @@ use crate::{
         ColorSpaceTransitionInto,
     },
     engine::{
-        graphics::{device::DeviceResource, gpu_allocator::GpuBufferAllocator},
+        graphics::{
+            device::{DeviceResource, GfxDevice},
+            gpu_allocator::GpuBufferAllocator,
+        },
         physics::transform::Transform,
     },
 };
@@ -102,7 +105,7 @@ pub trait VoxelModelGpuImpl: Send + Sync {
 
     fn write_gpu_updates(
         &mut self,
-        device: &DeviceResource,
+        device: &mut GfxDevice,
         allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     );
@@ -111,30 +114,30 @@ pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
     fn new() -> Self;
 }
 
-pub struct VoxelModelGpuNone;
-
-impl VoxelModelGpuImpl for VoxelModelGpuNone {
-    fn aggregate_model_info(&self) -> Option<Vec<u32>> {
-        unimplemented!("This gpu model is not renderable.")
-    }
-
-    fn update_gpu_objects(
-        &mut self,
-        allocator: &mut GpuBufferAllocator,
-        model: &dyn VoxelModelImpl,
-    ) -> bool {
-        unimplemented!("This gpu model is not renderable.")
-    }
-
-    fn write_gpu_updates(
-        &mut self,
-        device: &DeviceResource,
-        allocator: &mut GpuBufferAllocator,
-        model: &dyn VoxelModelImpl,
-    ) {
-        unimplemented!("This gpu model is not renderable.")
-    }
-}
+// pub struct VoxelModelGpuNone;
+//
+// impl VoxelModelGpuImpl for VoxelModelGpuNone {
+//     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
+//         unimplemented!("This gpu model is not renderable.")
+//     }
+//
+//     fn update_gpu_objects(
+//         &mut self,
+//         allocator: &mut GpuBufferAllocator,
+//         model: &dyn VoxelModelImpl,
+//     ) -> bool {
+//         unimplemented!("This gpu model is not renderable.")
+//     }
+//
+//     fn write_gpu_updates(
+//         &mut self,
+//         device: &mut ,
+//         allocator: &mut GpuBufferAllocator,
+//         model: &dyn VoxelModelImpl,
+//     ) {
+//         unimplemented!("This gpu model is not renderable.")
+//     }
+// }
 
 pub type VoxelModelSchema = u32;
 

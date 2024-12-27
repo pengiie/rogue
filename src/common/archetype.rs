@@ -1,11 +1,14 @@
 use rogue_macros::generate_tuples;
 use std::{mem::offset_of, u64};
 
+use super::dyn_vec::TypeInfo;
+
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.
 /// Useful for storing contiguous heterogenous (X, Y, Z) tuples but being able to iterate over just
 /// a specific type, such as X.
 pub struct Archetype {
     types: Vec<TypeInfo>,
+    // TODO: Replace with DynVec
     data: Vec<Vec<u8>>,
     global_indices: Vec<u64>,
     size: u64,
@@ -51,12 +54,12 @@ impl Archetype {
         src_data
             .as_slice()
             .as_ptr()
-            .offset((type_info.size * index) as isize)
+            .offset((type_info.size() as u64 * index) as isize)
     }
 
     unsafe fn insert_raw(&mut self, data: *const u8, type_info: TypeInfo, dst_byte_index: u64) {
         assert_eq!(
-            dst_byte_index % type_info.alignment(),
+            dst_byte_index % type_info.alignment() as u64,
             0,
             "dst_index is not properly aligned to what the source type should be."
         );
@@ -74,8 +77,10 @@ impl Archetype {
 
     fn resize(&mut self, additional: u64) {
         for (type_info, type_data) in self.types.iter().zip(self.data.iter_mut()) {
-            // TODO: Deal wil alignment but everything is probably 4 byte alignment so we are ok.
-            type_data.resize(type_data.len() + (type_info.size * additional) as usize, 0);
+            type_data.resize(
+                type_data.len() + (type_info.size() as u64 * additional) as usize,
+                0,
+            );
         }
         self.global_indices.resize(
             self.global_indices.len() + additional as usize,
@@ -97,9 +102,8 @@ impl Archetype {
         // Move `data` into our managed arrays.
         let data_info = data.type_info();
         for (ty, data_ptr) in data_info {
-            // TODO: Worry about alignment stuff.
             unsafe {
-                self.insert_raw(data_ptr, ty, index * ty.size);
+                self.insert_raw(data_ptr, ty, index * ty.size() as u64);
             }
         }
         std::mem::forget(data);
@@ -129,7 +133,6 @@ impl Archetype {
 pub trait ArchetypeStorage {
     fn type_info_static() -> Vec<TypeInfo>;
     fn type_info(&self) -> Vec<(TypeInfo, *const u8)>;
-    // unsafe fn from_ptrs_to_ref<'a, F>(ptrs: Vec<*const u8>) -> &'a F;
 }
 
 macro_rules! impl_archetype_storage {
@@ -154,35 +157,6 @@ macro_rules! impl_archetype_storage {
 }
 
 generate_tuples!(impl_archetype_storage, 1, 8);
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
-pub struct TypeInfo {
-    type_id: std::any::TypeId,
-    size: u64,
-    alignment: u64,
-}
-
-impl TypeInfo {
-    pub fn new<T: 'static>() -> Self {
-        Self {
-            type_id: std::any::TypeId::of::<T>(),
-            size: std::mem::size_of::<T>() as u64,
-            alignment: std::mem::align_of::<T>() as u64,
-        }
-    }
-
-    pub fn type_id(&self) -> std::any::TypeId {
-        self.type_id
-    }
-
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-
-    pub fn alignment(&self) -> u64 {
-        self.alignment
-    }
-}
 
 pub struct ArchetypeIter<'a> {
     archetype: &'a Archetype,

@@ -204,7 +204,6 @@ impl ChunkProcessingQueue {
                     self.chunk_handler_count -= 1;
                     if finished_chunk.is_empty() {
                         chunk_tree.set_world_chunk_empty(finished_chunk.chunk_position);
-                        debug!("Recieved empty chunk {:?}", finished_chunk.chunk_position);
                     } else {
                         let chunk_name = format!(
                             "chunk_{}_{}_{}",
@@ -219,10 +218,6 @@ impl ChunkProcessingQueue {
                         chunk_tree.set_world_chunk_data(
                             finished_chunk.chunk_position,
                             ChunkData { voxel_model_id },
-                        );
-                        debug!(
-                            "Recieved finished chunk {:?}",
-                            finished_chunk.chunk_position
                         );
                     }
                 }
@@ -241,7 +236,6 @@ impl ChunkProcessingQueue {
             && self.chunk_handler_count < self.chunk_handler_pool.current_num_threads() as u32
         {
             let ticket = self.chunk_queue.try_pop().unwrap();
-            debug!("Enqueued chunk {:?}", ticket.chunk_position);
             let send = self.finished_chunk_send.clone();
             self.chunk_handler_count += 1;
             self.chunk_handler_pool.spawn(move || {
@@ -554,7 +548,6 @@ impl ChunkLoader {
         }
 
         let face = self.curr_index / curr_area;
-        debug!("face {} {} {}", face, self.curr_index, self.curr_radius);
         let local_index = self.curr_index % curr_area;
         let local_position = Vector2::new(
             (local_index % curr_diameter) as i32,

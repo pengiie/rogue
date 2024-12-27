@@ -1,16 +1,11 @@
-- add esvo editing and allocations
-- add flat array range impl and such
-- implement multiple attributes per voxel
 - add map editing
-- asset system
-- shader system
++ shader system
 - kinematic solver
 - plane and box collider (player with ground)
 - voxel collision solver
 - voxel colliders
 - voxel saving
 - voxel loading
-- Add TAA jittering on pixel pos
 - Add voxel based radiance cache/accumulation
 - Finish GI
 - Add particles

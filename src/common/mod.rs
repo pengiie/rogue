@@ -2,6 +2,7 @@ pub mod aabb;
 pub mod archetype;
 pub mod bitset;
 pub mod color;
+pub mod dyn_vec;
 pub mod id;
 pub mod morton;
 pub mod obb;

@@ -7,12 +7,13 @@ use std::{
 
 use rogue_macros::Resource;
 
-use crate::common::archetype::TypeInfo;
+use crate::common::dyn_vec::TypeInfo;
 
 use super::resource::ResMut;
 
 #[derive(Resource)]
 pub struct Events {
+    // TODO: Reimplement with DynVec
     events: HashMap<TypeId, Vec<u8>>,
     event_type_info: HashMap<TypeId, TypeInfo>,
 }

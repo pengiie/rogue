@@ -14,6 +14,7 @@ use crate::engine::{
     graphics::{
         device::DeviceResource,
         pipeline_manager::{PipelineId, RenderPipelineManager},
+        render_contants,
         renderer::Renderer,
         sampler::{FilterMode, SamplerCache, SamplerId, SamplerInfo},
         shader,
@@ -538,3 +539,21 @@ impl UIPass {
         }
     }
 }
+
+pub struct UITask {}
+
+// impl UITask {}
+//
+// impl Into<FrameTask> for UITask {
+//     fn into(self) -> FrameTask {
+//         FrameTask {
+//             dependencies: vec![],
+//             boxed_run: Box::new(|recorder, ctx| {
+//                 recorder.begin_render_pass(|render_pass| {
+//                     render_pass.set_vertex_buffer(ctx.get_buffer());
+//                     render_pass.set_index_buffer(ctx.get_buffer());
+//                 });
+//             }),
+//         }
+//     }
+// }

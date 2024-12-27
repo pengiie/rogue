@@ -1,10 +1,15 @@
 use log::debug;
 
-use crate::engine::graphics::device::DeviceResource;
+use crate::engine::graphics::{backend::GfxBufferCreateInfo, device::DeviceResource};
+
+use super::{
+    backend::{Buffer, GraphicsBackendDevice, ResourceId},
+    device::GfxDevice,
+};
 
 /// Power of 2 allocator operating on gpu-only buffers.
 pub struct GpuBufferAllocator {
-    buffer: wgpu::Buffer,
+    buffer: ResourceId<Buffer>,
 
     // TODO: create deallocation reciever so we can cleanup removed models.
     // TODO: track frame bandwidth so we reduce frame staggers when multiple
@@ -14,28 +19,21 @@ pub struct GpuBufferAllocator {
 }
 
 impl GpuBufferAllocator {
-    pub fn new(
-        device: &wgpu::Device,
-        name: &str,
-        initial_size: u64,
-        usage: wgpu::BufferUsages,
-    ) -> Self {
-        assert!(initial_size.is_power_of_two());
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(name),
-            size: initial_size,
-            usage,
-            mapped_at_creation: false,
+    pub fn new(device: &mut GfxDevice, name: &str, size: u64) -> Self {
+        assert!(size.is_power_of_two());
+        let buffer = device.create_buffer(GfxBufferCreateInfo {
+            name: name.to_owned(),
+            size,
         });
 
         Self {
             buffer,
-            allocations: AllocatorTree::new(0, 0, initial_size),
+            allocations: AllocatorTree::new(0, 0, size),
             total_allocated_size: 0,
         }
     }
 
-    pub fn allocate(&mut self, bytes: u64) -> Option<GpuBufferAllocation> {
+    pub fn allocate(&mut self, bytes: u64) -> Option<Allocation> {
         assert!(
             bytes.next_power_of_two() <= self.allocations.size,
             "Tried to allocate {} bytes but allocator can only hold {}",
@@ -45,30 +43,24 @@ impl GpuBufferAllocator {
         let allocation_size = bytes.next_power_of_two();
         self.total_allocated_size += allocation_size;
         let allocation = self.allocations.allocate(allocation_size);
-        debug!(
-            "Allocated requested size in bytes: {}, {:?}",
-            bytes, allocation
-        );
 
         allocation
     }
 
     pub fn write_allocation_data(
         &self,
-        device: &DeviceResource,
-        allocation: &GpuBufferAllocation,
+        device: &mut GfxDevice,
+        allocation: &Allocation,
         data: &[u8],
     ) {
         // Ensure we do not write out of bounds.
         assert!(data.len() as u64 <= allocation.range.end - allocation.range.start);
 
         let offset = allocation.range.start;
-        device
-            .queue()
-            .write_buffer(self.buffer(), allocation.range.start, data)
+        device.write_buffer(self.buffer(), allocation.range.start, data)
     }
 
-    pub fn buffer(&self) -> &wgpu::Buffer {
+    pub fn buffer(&self) -> &ResourceId<Buffer> {
         &self.buffer
     }
 
@@ -77,33 +69,33 @@ impl GpuBufferAllocator {
     }
 }
 
-pub struct GpuBufferAllocation {
+pub struct Allocation {
     /// Currently, used as a unique identifier hash for an allocation.
     traversal: u64,
     range: std::ops::Range<u64>,
 }
 
-impl GpuBufferAllocation {
+impl Allocation {
     /// Interprests the start index if the array is represented as `array<u8>`.
-    pub fn start_index_stride_u8(&self) -> u32 {
-        self.range.start as u32
+    pub fn start_index_stride_bytes(&self) -> u64 {
+        self.range.start
     }
 
     /// Interprests the start index if the array is represented as `array<u32>`.
-    pub fn start_index_stride_u32(&self) -> u32 {
-        (self.range.start >> 2) as u32
+    pub fn start_index_stride_dword(&self) -> u64 {
+        (self.range.start >> 2)
     }
 
-    pub fn length_u8(&self) -> u32 {
-        (self.range.end - self.range.start) as u32
+    pub fn length_bytes(&self) -> u64 {
+        (self.range.end - self.range.start)
     }
 
-    pub fn length_u32(&self) -> u32 {
-        ((self.range.end >> 2) - (self.range.start >> 2)) as u32
+    pub fn length_dword(&self) -> u64 {
+        ((self.range.end >> 2) - (self.range.start >> 2))
     }
 }
 
-impl std::fmt::Debug for GpuBufferAllocation {
+impl std::fmt::Debug for Allocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut traversal_str = String::new();
         for i in (0..64).rev() {
@@ -120,7 +112,7 @@ impl std::fmt::Debug for GpuBufferAllocation {
     }
 }
 
-struct AllocatorTree {
+pub struct AllocatorTree {
     traversal: u64,
     start_index: u64,
     size: u64,
@@ -130,7 +122,13 @@ struct AllocatorTree {
 }
 
 impl AllocatorTree {
+    pub fn new_root(size: u64) -> Self {
+        Self::new(0, 0, size)
+    }
+
     fn new(traversal: u64, start_index: u64, size: u64) -> Self {
+        assert!(size.is_power_of_two());
+
         Self {
             traversal,
             start_index,
@@ -141,7 +139,7 @@ impl AllocatorTree {
         }
     }
 
-    fn allocate(&mut self, needed_size: u64) -> Option<GpuBufferAllocation> {
+    pub fn allocate(&mut self, needed_size: u64) -> Option<Allocation> {
         assert!(needed_size.is_power_of_two());
         // This node is already allocated don't search any further.
         if self.is_allocated {
@@ -196,11 +194,11 @@ impl AllocatorTree {
         return None;
     }
 
-    fn make_allocated(&mut self) -> GpuBufferAllocation {
+    fn make_allocated(&mut self) -> Allocation {
         assert!(!self.is_allocated);
         self.is_allocated = true;
 
-        GpuBufferAllocation {
+        Allocation {
             traversal: self.traversal,
             range: self.start_index..(self.start_index + self.size),
         }
