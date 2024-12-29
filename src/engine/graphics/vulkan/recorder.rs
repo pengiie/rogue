@@ -1,8 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
+use epaint::image;
+
 use crate::{
     common::color::{Color, ColorSpaceSrgb},
-    engine::graphics::backend::{GraphicsBackendRecorder, Image, ResourceId},
+    engine::graphics::backend::{GfxFilterMode, GraphicsBackendRecorder, Image, ResourceId},
 };
 
 use super::device::VulkanContext;
@@ -11,6 +13,12 @@ pub struct VulkanRecorder {
     ctx: Arc<VulkanContext>,
     command_buffer: ash::vk::CommandBuffer,
     image_layouts: HashMap<ResourceId<Image>, (ash::vk::ImageLayout, ash::vk::AccessFlags)>,
+}
+
+pub struct VulkanImageTransition {
+    pub image_id: ResourceId<Image>,
+    pub new_layout: ash::vk::ImageLayout,
+    pub new_access_flags: ash::vk::AccessFlags,
 }
 
 impl VulkanRecorder {
@@ -36,46 +44,67 @@ impl VulkanRecorder {
         unsafe { self.ctx.device().end_command_buffer(self.command_buffer) };
     }
 
-    pub fn transition_image(
+    pub fn transition_images(
         &mut self,
-        image_id: ResourceId<Image>,
-        expected_layout: ash::vk::ImageLayout,
-        expected_access_flags: ash::vk::AccessFlags,
+        transitions: &[VulkanImageTransition],
         dst_stage: ash::vk::PipelineStageFlags,
     ) {
         const UNDEFINED_LAYOUT_ACCESS: (ash::vk::ImageLayout, ash::vk::AccessFlags) = (
             ash::vk::ImageLayout::UNDEFINED,
             ash::vk::AccessFlags::empty(),
         );
-        let (image_layout, access_flags) = self
-            .image_layouts
-            .get(&image_id)
-            .unwrap_or(&UNDEFINED_LAYOUT_ACCESS);
-        if *image_layout != expected_layout {
-            let src_stage = match *image_layout {
-                ash::vk::ImageLayout::UNDEFINED => ash::vk::PipelineStageFlags::TOP_OF_PIPE,
-                _ => todo!(),
-            };
-            let image = self.ctx.resource_manager().get_image(image_id);
-            let image_memory_barrier = ash::vk::ImageMemoryBarrier::default()
-                .image(image.image)
-                .subresource_range(image.full_subresource_range())
-                .old_layout(*image_layout)
-                .new_layout(expected_layout)
-                .src_access_mask(*access_flags)
-                .dst_access_mask(expected_access_flags);
-            unsafe {
-                self.ctx.device().cmd_pipeline_barrier(
-                    self.command_buffer,
-                    src_stage,
-                    dst_stage,
-                    ash::vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[image_memory_barrier],
-                )
-            };
+
+        let mut src_stage = ash::vk::PipelineStageFlags::empty();
+
+        let mut image_memory_barriers = vec![];
+        for VulkanImageTransition {
+            image_id,
+            new_layout,
+            new_access_flags,
+        } in transitions
+        {
+            let (old_layout, access_flags) = self
+                .image_layouts
+                .get(&image_id)
+                .unwrap_or(&UNDEFINED_LAYOUT_ACCESS);
+
+            if *old_layout != *new_layout || !access_flags.contains(*new_access_flags) {
+                src_stage = src_stage.max(match *old_layout {
+                    ash::vk::ImageLayout::UNDEFINED => ash::vk::PipelineStageFlags::TOP_OF_PIPE,
+                    ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                    | ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL => {
+                        ash::vk::PipelineStageFlags::TRANSFER
+                    }
+                    _ => todo!(),
+                });
+
+                let image = self.ctx.resource_manager().get_image(*image_id);
+                let image_memory_barrier = ash::vk::ImageMemoryBarrier::default()
+                    .image(image.image)
+                    .subresource_range(image.full_subresource_range())
+                    .old_layout(*old_layout)
+                    .new_layout(*new_layout)
+                    .src_access_mask(*access_flags)
+                    .dst_access_mask(*new_access_flags);
+
+                image_memory_barriers.push(image_memory_barrier);
+
+                self.image_layouts
+                    .insert(*image_id, (*new_layout, *new_access_flags));
+            }
         }
+
+        unsafe {
+            self.ctx.device().cmd_pipeline_barrier(
+                self.command_buffer,
+                src_stage,
+                dst_stage,
+                ash::vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &image_memory_barriers,
+            )
+        };
     }
 
     pub fn command_buffer(&self) -> ash::vk::CommandBuffer {
@@ -89,10 +118,12 @@ impl GraphicsBackendRecorder for VulkanRecorder {
         let mut clear_color_value = ash::vk::ClearColorValue::default();
         clear_color_value.float32 = [color.r(), color.g(), color.b(), 1.0];
         let image_subresource_range = image.full_subresource_range();
-        self.transition_image(
-            image_id,
-            ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            ash::vk::AccessFlags::TRANSFER_WRITE,
+        self.transition_images(
+            &[VulkanImageTransition {
+                image_id,
+                new_layout: ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_access_flags: ash::vk::AccessFlags::TRANSFER_WRITE,
+            }],
             ash::vk::PipelineStageFlags::TRANSFER,
         );
 
@@ -107,8 +138,48 @@ impl GraphicsBackendRecorder for VulkanRecorder {
         };
     }
 
-    fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>) {
-        todo!()
+    fn blit(
+        &mut self,
+        src_id: ResourceId<Image>,
+        dst_id: ResourceId<Image>,
+        filter_mode: GfxFilterMode,
+    ) {
+        let src_image = self.ctx.resource_manager().get_image(src_id);
+        let dst_image = self.ctx.resource_manager().get_image(dst_id);
+
+        self.transition_images(
+            &[
+                VulkanImageTransition {
+                    image_id: src_id,
+                    new_layout: ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    new_access_flags: ash::vk::AccessFlags::TRANSFER_READ,
+                },
+                VulkanImageTransition {
+                    image_id: dst_id,
+                    new_layout: ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_access_flags: ash::vk::AccessFlags::TRANSFER_WRITE,
+                },
+            ],
+            ash::vk::PipelineStageFlags::TRANSFER,
+        );
+
+        const ZERO_IMAGE_OFFSET: ash::vk::Offset3D = ash::vk::Offset3D { x: 0, y: 0, z: 0 };
+        let regions = [ash::vk::ImageBlit::default()
+            .src_offsets([ZERO_IMAGE_OFFSET, src_image.full_offset_3d()])
+            .src_subresource(src_image.full_subresource_layer())
+            .dst_offsets([ZERO_IMAGE_OFFSET, dst_image.full_offset_3d()])
+            .dst_subresource(dst_image.full_subresource_layer())];
+        unsafe {
+            self.ctx.device().cmd_blit_image(
+                self.command_buffer,
+                src_image.image,
+                ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst_image.image,
+                ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &regions,
+                filter_mode.into(),
+            )
+        }
     }
 
     fn begin_compute_pass(

@@ -39,7 +39,7 @@ pub trait GraphicsBackendDevice {
         create_info: RasterPipelineCreateInfo,
     ) -> ResourceId<RasterPipeline>;
 
-    fn create_image(&mut self, create_info: ImageCreateInfo) -> ResourceId<Image>;
+    fn create_image(&mut self, create_info: GfxImageCreateInfo) -> ResourceId<Image>;
     fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo;
 
     fn create_buffer(&mut self, create_info: GfxBufferCreateInfo) -> ResourceId<Buffer>;
@@ -56,7 +56,11 @@ pub trait GraphicsBackendDevice {
 
 pub trait GraphicsBackendRecorder {
     fn clear_color(&mut self, image: ResourceId<Image>, color: Color<ColorSpaceSrgb>);
-    fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>);
+    fn blit_full(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode) {
+        self.blit(src, dst, filter);
+    }
+    // TODO: Support blitting specific image regions.
+    fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode);
     fn begin_compute_pass(&mut self, compute_pipeline: ResourceId<ComputePipeline>) -> ComputePass;
 }
 
@@ -93,6 +97,16 @@ pub struct Memory;
 pub struct ResourceId<T> {
     id: u32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> std::fmt::Display for ResourceId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!(
+            "Resource id: {}, type_id: {}",
+            self.id,
+            std::any::type_name::<T>()
+        ))
+    }
 }
 
 impl<T> ResourceId<T> {
@@ -181,9 +195,6 @@ pub struct ComputePipelineCreateInfo {
 pub struct RasterPipelineCreateInfo {}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ImageCreateInfo {}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GfxBufferCreateInfo {
     pub name: String,
     pub size: u64,
@@ -197,11 +208,17 @@ pub struct GfxImageCreateInfo {
     pub extent: Vector2<u32>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GfxImageType {
     D2,
     DepthD2,
     Cube,
+}
+
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum GfxFilterMode {
+    Nearest,
+    Linear,
 }
 
 pub struct GfxImageInfo {
@@ -214,7 +231,9 @@ impl GfxImageInfo {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum ImageFormat {
+    Rgba32Float,
     Rgba8Unorm,
+    D16Unorm,
 }

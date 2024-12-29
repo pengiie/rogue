@@ -3,6 +3,7 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
+use hecs::Entity;
 use log::{debug, info};
 use nalgebra::Vector2;
 use raw_window_handle::HasWindowHandle;

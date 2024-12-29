@@ -6,7 +6,8 @@ use nalgebra::Vector2;
 use crate::common::dyn_vec::TypeInfo;
 
 use super::backend::{
-    Buffer, ComputePipeline, GraphicsBackendRecorder, Image, ResourceId, Untyped,
+    Buffer, ComputePipeline, GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image,
+    ImageFormat, ResourceId, Untyped,
 };
 
 pub struct Baked;
@@ -16,6 +17,7 @@ pub struct FrameGraphBuilder {
     resource_infos: Vec<FrameGraphResourceInfo>,
     inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     passes: HashMap<FrameGraphResource<Untyped>, FrameGraphPass>,
+    frame_image_infos: HashMap<FrameGraphResource<Untyped>, FrameGraphImageInfo>,
     swapchain_image: Option<FrameGraphResource<Image>>,
 }
 
@@ -32,12 +34,37 @@ pub struct FrameGraphPass {
     pub pass: Box<dyn Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext)>,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct FrameGraphImageInfo {
+    pub image_type: GfxImageType,
+    pub format: ImageFormat,
+    pub extent: Vector2<u32>,
+}
+
+impl FrameGraphImageInfo {
+    pub fn new_rgba32float(extent: Vector2<u32>) -> Self {
+        Self {
+            image_type: GfxImageType::D2,
+            format: ImageFormat::Rgba32Float,
+            extent,
+        }
+    }
+    pub fn new_depth(extent: Vector2<u32>) -> Self {
+        Self {
+            image_type: GfxImageType::DepthD2,
+            format: ImageFormat::D16Unorm,
+            extent,
+        }
+    }
+}
+
 impl FrameGraphBuilder {
     pub fn new() -> Self {
         Self {
             resource_infos: Vec::new(),
             inputs: HashMap::new(),
             passes: HashMap::new(),
+            frame_image_infos: HashMap::new(),
             swapchain_image: None,
         }
     }
@@ -109,8 +136,15 @@ impl FrameGraphBuilder {
         todo!()
     }
 
-    pub fn create_frame_image(&mut self, name: &str) -> FrameGraphResource<Buffer> {
-        todo!()
+    pub fn create_frame_image(
+        &mut self,
+        name: &str,
+        create_info: FrameGraphImageInfo,
+    ) -> FrameGraphResource<Image> {
+        let resource = self.next_id(name.to_string());
+        self.frame_image_infos
+            .insert(resource.as_untyped(), create_info);
+        resource
     }
 
     pub fn create_compute_pipeline(
@@ -147,6 +181,8 @@ pub struct FrameGraph {
     pub resource_name_map: HashMap<String, FrameGraphResourceInfo>,
     pub inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     pub passes: Vec<FrameGraphPass>,
+
+    pub frame_image_infos: HashMap<FrameGraphResource<Untyped>, FrameGraphImageInfo>,
 
     pub swapchain_image: FrameGraphResource<Image>,
 }
@@ -194,6 +230,7 @@ impl FrameGraph {
             resource_name_map,
             inputs: builder.inputs,
             passes: used_passes,
+            frame_image_infos: builder.frame_image_infos,
             swapchain_image,
         })
     }
@@ -221,6 +258,10 @@ impl<T> FrameGraphResource<T> {
             id,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
     }
 }
 
@@ -315,7 +356,7 @@ impl<'a> FrameGraphContext<'a> {
         let fg_resource = resource.handle(self.frame_graph);
         let Some(resource) = self.resource_map.get(&fg_resource.as_untyped()) else {
             panic!(
-                "Frame graph resource `{}` has not been supplied to the executor.",
+                "Frame graph resource `{}` has not been supplied to the executor, or has not been defined as an input to this frame pass.",
                 self.frame_graph
                     .resource_infos
                     .get(fg_resource.id as usize)

@@ -20,11 +20,10 @@ use crate::engine::{
     event::Events,
     graphics::{
         backend::{
-            Buffer, ComputePipeline, ComputePipelineCreateInfo, GfxBufferCreateInfo,
+            Buffer, ComputePipeline, ComputePipelineCreateInfo, GfxBufferCreateInfo, GfxFilterMode,
             GfxImageCreateInfo, GfxImageInfo, GfxImageType, GfxPresentMode, GfxSwapchainInfo,
             GraphicsBackendDevice, GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image,
-            ImageCreateInfo, ImageFormat, Memory, RasterPipeline, RasterPipelineCreateInfo,
-            ResourceId, Untyped,
+            ImageFormat, Memory, RasterPipeline, RasterPipelineCreateInfo, ResourceId, Untyped,
         },
         gpu_allocator::{Allocation, AllocatorTree},
         shader::ShaderCompiler,
@@ -41,6 +40,31 @@ pub struct VulkanContextInner {
     surface: ash::vk::SurfaceKHR,
     physical_device: VulkanPhysicalDevice,
     device: ash::Device,
+}
+
+impl Drop for VulkanContextInner {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+
+            self.device.destroy_device(None);
+        };
+
+        let surface_loader = ash::khr::surface::Instance::new(&self.entry, &self.instance);
+        unsafe { surface_loader.destroy_surface(self.surface, None) };
+
+        if let Some(debug_messenger) = self.debug_messenger {
+            let debug_utils_loader =
+                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance);
+            unsafe {
+                debug_utils_loader.destroy_debug_utils_messenger(debug_messenger, None);
+            }
+        }
+
+        unsafe {
+            self.instance.destroy_instance(None);
+        };
+    }
 }
 
 pub struct VulkanContext {
@@ -107,6 +131,14 @@ impl VulkanContext {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn curr_gpu_frame(&self) -> u64 {
+        unsafe {
+            self.device()
+                .get_semaphore_counter_value(self.gpu_timeline_semaphore())
+        }
+        .expect("Failed to get gpu timeline semaphore.")
+    }
+
     pub fn curr_cpu_frame_index(&self) -> u32 {
         (self.curr_cpu_frame() % self.frames_in_flight() as u64) as u32
     }
@@ -131,14 +163,30 @@ impl VulkanContext {
         self.swapchain_image_index
             .load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    pub fn create_image(
+        &self,
+        create_info: GfxImageCreateInfo,
+    ) -> anyhow::Result<ResourceId<Image>> {
+        let mut memory_allocator = self.memory_allocator.write();
+        self.resource_manager
+            .create_image(&mut memory_allocator, create_info)
+    }
+
+    pub fn create_buffer(
+        &self,
+        create_info: GfxBufferCreateInfo,
+    ) -> anyhow::Result<ResourceId<Buffer>> {
+        let mut memory_allocator = self.memory_allocator.write();
+        self.resource_manager
+            .create_buffer(&mut memory_allocator, create_info)
+    }
 }
 
 pub type VulkanContextHandle = Arc<VulkanContext>;
 pub struct VulkanDevice {
     context: VulkanContextHandle,
     pipeline_manager: VulkanPipelineManager,
-
-    current_resource_id: u32,
 
     // Size is # of frames in flight (swapchain images).
     destroy_frame_queue: Vec<Vec<ResourceId<Untyped>>>,
@@ -459,15 +507,11 @@ impl VulkanDevice {
             device,
         });
         let resource_manager = VulkanResourceManager::new(&context_inner);
-        let mut current_resource_id = 0;
         let swapchain_images = swapchain_images
             .into_iter()
             .map(|image| {
-                let resource_id = ResourceId::new(current_resource_id);
-                current_resource_id += 1;
-                resource_manager.create_image_borrowed(
-                    &resource_id,
-                    VulkanBorrowedImageCreateInfo {
+                resource_manager
+                    .create_image_borrowed(VulkanBorrowedImageCreateInfo {
                         image,
                         usage: swapchain_image_usage,
                         info: VulkanImageInfo {
@@ -475,9 +519,8 @@ impl VulkanDevice {
                             format: swapchain_format.format,
                             extent: swapchain_extent,
                         },
-                    },
-                );
-                resource_id
+                    })
+                    .expect("Failed to create swapchain image")
             })
             .collect::<Vec<_>>();
         let swapchain = Arc::new(VulkanSwapchain {
@@ -495,7 +538,8 @@ impl VulkanDevice {
             swapchain_image_index: AtomicU32::new(0),
 
             frames_in_flight,
-            current_cpu_frame: AtomicU64::new(0),
+            // One since `gpu_timeline_semaphore` starts signalling 0.
+            current_cpu_frame: AtomicU64::new(1),
             gpu_timeline_semaphore: timeline_semaphore,
 
             image_acquire_semaphores,
@@ -510,16 +554,9 @@ impl VulkanDevice {
             context,
 
             pipeline_manager,
-            current_resource_id,
 
             destroy_frame_queue: (0..frames_in_flight).map(|_| Vec::new()).collect(),
         })
-    }
-
-    fn next_resource_id<T: 'static>(&mut self) -> ResourceId<T> {
-        let resource_id = ResourceId::new(self.current_resource_id);
-        self.current_resource_id += 1;
-        resource_id
     }
 
     fn get_required_layer_names() -> Vec<CString> {
@@ -604,7 +641,6 @@ impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
             self.device().device_wait_idle().unwrap();
-
             for semaphore in self
                 .image_ready_semaphores
                 .iter()
@@ -613,22 +649,7 @@ impl Drop for VulkanContext {
             {
                 self.device().destroy_semaphore(*semaphore, None);
             }
-            self.device().destroy_device(None);
-        };
-
-        let surface_loader = self.surface_loader();
-        unsafe { surface_loader.destroy_surface(self.inner.surface, None) };
-
-        if let Some(debug_messenger) = self.inner.debug_messenger {
-            let debug_utils_loader = self.debug_utils_loader();
-            unsafe {
-                debug_utils_loader.destroy_debug_utils_messenger(debug_messenger, None);
-            }
         }
-
-        unsafe {
-            self.inner.instance.destroy_instance(None);
-        };
     }
 }
 
@@ -678,24 +699,16 @@ impl GraphicsBackendDevice for VulkanDevice {
         todo!()
     }
 
-    fn create_image(&mut self, create_info: ImageCreateInfo) -> ResourceId<Image> {
-        todo!()
+    fn create_image(&mut self, create_info: GfxImageCreateInfo) -> ResourceId<Image> {
+        self.context.create_image(create_info).unwrap()
     }
 
     fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo {
-        todo!()
+        todo!("get image info")
     }
 
     fn create_buffer(&mut self, create_info: GfxBufferCreateInfo) -> ResourceId<Buffer> {
-        let resource_id = self.next_resource_id::<Buffer>();
-        let mut allocator = self.context.memory_allocator.write();
-        self.context.resource_manager.create_buffer(
-            allocator.borrow_mut(),
-            &resource_id,
-            create_info,
-        );
-
-        resource_id
+        self.context.create_buffer(create_info).unwrap()
     }
 
     fn write_buffer(&mut self, buffer: &ResourceId<Buffer>, offset: u64, bytes: &[u8]) {
@@ -985,6 +998,8 @@ impl Drop for VulkanAllocator {
 pub struct VulkanResourceManager {
     ctx: Arc<VulkanContextInner>,
 
+    current_resource_id: AtomicU32,
+
     // Just the swapchain images.
     borrowed_images: parking_lot::RwLock<HashMap<ResourceId<Image>, VulkanBorrowedImage>>,
     owned_images: parking_lot::RwLock<HashMap<ResourceId<Image>, VulkanImage>>,
@@ -1012,6 +1027,22 @@ impl VulkanImageRef {
             .level_count(1)
             .aspect_mask(self.info.image_type.into())
     }
+
+    pub fn full_subresource_layer(&self) -> ash::vk::ImageSubresourceLayers {
+        ash::vk::ImageSubresourceLayers::default()
+            .base_array_layer(0)
+            .layer_count(1)
+            .mip_level(0)
+            .aspect_mask(self.info.image_type.into())
+    }
+
+    pub fn full_offset_3d(&self) -> ash::vk::Offset3D {
+        ash::vk::Offset3D {
+            x: self.info.extent.width as i32,
+            y: self.info.extent.height as i32,
+            z: 1,
+        }
+    }
 }
 
 struct VulkanImage {
@@ -1034,11 +1065,30 @@ struct VulkanImageInfo {
     pub extent: ash::vk::Extent2D,
 }
 
+impl From<GfxFilterMode> for ash::vk::Filter {
+    fn from(value: GfxFilterMode) -> Self {
+        match value {
+            GfxFilterMode::Nearest => ash::vk::Filter::NEAREST,
+            GfxFilterMode::Linear => ash::vk::Filter::LINEAR,
+        }
+    }
+}
+
 impl From<GfxImageType> for ash::vk::ImageAspectFlags {
     fn from(value: GfxImageType) -> Self {
         match value {
             GfxImageType::D2 | GfxImageType::Cube => ash::vk::ImageAspectFlags::COLOR,
             GfxImageType::DepthD2 => ash::vk::ImageAspectFlags::DEPTH,
+        }
+    }
+}
+
+impl From<GfxImageType> for ash::vk::ImageType {
+    fn from(value: GfxImageType) -> Self {
+        match value {
+            GfxImageType::D2 | GfxImageType::DepthD2 | GfxImageType::Cube => {
+                ash::vk::ImageType::TYPE_2D
+            }
         }
     }
 }
@@ -1056,6 +1106,8 @@ impl From<ImageFormat> for ash::vk::Format {
     fn from(value: ImageFormat) -> Self {
         match value {
             ImageFormat::Rgba8Unorm => ash::vk::Format::R8G8B8A8_UNORM,
+            ImageFormat::D16Unorm => ash::vk::Format::D16_UNORM,
+            ImageFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
         }
     }
 }
@@ -1071,17 +1123,27 @@ impl VulkanResourceManager {
         Self {
             ctx: ctx.clone(),
 
+            current_resource_id: AtomicU32::new(0),
+
             borrowed_images: parking_lot::RwLock::new(HashMap::new()),
             owned_images: parking_lot::RwLock::new(HashMap::new()),
             owned_buffers: parking_lot::RwLock::new(HashMap::new()),
         }
     }
 
+    fn next_resource_id<T: 'static>(&self) -> ResourceId<T> {
+        let resource_id = ResourceId::new(
+            self.current_resource_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        resource_id
+    }
+
     fn create_image_borrowed(
         &self,
-        resource_id: &ResourceId<Image>,
         image_info: VulkanBorrowedImageCreateInfo,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ResourceId<Image>> {
+        let resource_id = self.next_resource_id();
         let view = if image_info.usage.intersects(
             ash::vk::ImageUsageFlags::SAMPLED
                 | ash::vk::ImageUsageFlags::COLOR_ATTACHMENT
@@ -1093,7 +1155,7 @@ impl VulkanResourceManager {
         };
 
         self.borrowed_images.write().insert(
-            *resource_id,
+            resource_id,
             VulkanBorrowedImage {
                 image: image_info.image,
                 view,
@@ -1101,15 +1163,15 @@ impl VulkanResourceManager {
             },
         );
 
-        Ok(())
+        Ok(resource_id)
     }
 
     fn create_buffer(
         &self,
         allocator: &mut VulkanAllocator,
-        buffer_id: &ResourceId<Buffer>,
         create_info: GfxBufferCreateInfo,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ResourceId<Buffer>> {
+        anyhow::ensure!(create_info.size > 0);
         let create_info = ash::vk::BufferCreateInfo::default()
             .size(create_info.size)
             .usage(
@@ -1131,20 +1193,21 @@ impl VulkanResourceManager {
             )
         }?;
 
+        let resource_id = self.next_resource_id();
         self.owned_buffers
             .write()
-            .insert(*buffer_id, VulkanBuffer { buffer, allocation });
+            .insert(resource_id, VulkanBuffer { buffer, allocation });
 
-        Ok(())
+        Ok(resource_id)
     }
 
     /// Images have dedicated memory allocations by default.
     fn create_image(
         &self,
         allocator: &mut VulkanAllocator,
-        resource_id: &ResourceId<Image>,
         create_info: GfxImageCreateInfo,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ResourceId<Image>> {
+        anyhow::ensure!(create_info.extent.x > 0 && create_info.extent.y > 0);
         let image_info = VulkanImageInfo {
             image_type: create_info.image_type,
             format: create_info.format.into(),
@@ -1154,13 +1217,33 @@ impl VulkanResourceManager {
             },
         };
 
-        let create_info = ash::vk::ImageCreateInfo::default();
+        let type_specific_usages = match image_info.image_type {
+            GfxImageType::DepthD2 => ash::vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            _ => ash::vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        };
+
+        let create_info = ash::vk::ImageCreateInfo::default()
+            .image_type(image_info.image_type.into())
+            .format(image_info.format.into())
+            .usage(
+                ash::vk::ImageUsageFlags::STORAGE
+                    | ash::vk::ImageUsageFlags::TRANSFER_SRC
+                    | ash::vk::ImageUsageFlags::TRANSFER_DST
+                    | type_specific_usages,
+            )
+            .extent(
+                ash::vk::Extent3D::default()
+                    .width(image_info.extent.width)
+                    .height(image_info.extent.height)
+                    .depth(1),
+            )
+            .samples(ash::vk::SampleCountFlags::TYPE_1)
+            .array_layers(1)
+            .mip_levels(1);
         let image = unsafe { self.ctx.device.create_image(&create_info, None) }?;
-        let image_view = self.create_image_view(image, &image_info)?;
 
         let image_memory_requirements =
             unsafe { self.ctx.device.get_image_memory_requirements(image) };
-
         let allocation = allocator.allocate_memory(
             image_memory_requirements.size,
             VulkanAllocationType::GpuLocalDedicated,
@@ -1174,8 +1257,11 @@ impl VulkanResourceManager {
             )
         }?;
 
+        let image_view = self.create_image_view(image, &image_info)?;
+
+        let resource_id = self.next_resource_id();
         self.owned_images.write().insert(
-            *resource_id,
+            resource_id,
             VulkanImage {
                 image,
                 allocation,
@@ -1184,7 +1270,7 @@ impl VulkanResourceManager {
             },
         );
 
-        Ok(())
+        Ok(resource_id)
     }
 
     fn create_image_view(
@@ -1201,6 +1287,7 @@ impl VulkanResourceManager {
                 ash::vk::ImageSubresourceRange::default()
                     .aspect_mask(image_info.image_type.into())
                     .base_mip_level(0)
+                    .level_count(1)
                     .base_array_layer(0)
                     .layer_count(1),
             );
