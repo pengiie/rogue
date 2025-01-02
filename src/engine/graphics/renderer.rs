@@ -34,27 +34,35 @@ pub struct Renderer {
     frame_graph: Option<FrameGraph>,
 }
 
+struct GraphConstantsRT {
+    image_albedo: &'static str,
+    image_depth: &'static str,
+
+    compute_prepass: &'static str,
+    compute_prepass_info: FrameGraphComputeInfo<'static>,
+    pass_prepass: &'static str,
+}
+
+struct GraphConstants {
+    rt: GraphConstantsRT,
+
+    swapchain: &'static str,
+}
+
 impl Renderer {
-    // Graph variable inputs
-    pub const GRAPH_RT_RESOLUTION_NAME: &str = "rt_resolution";
-
-    // Image references
-    pub const GRAPH_SWAPCHAIN_NAME: &str = "swapchain";
-    // Frame images
-    pub const GRAPH_RT_TARGET_ALBEDO_NAME: &str = "rt_target_albedo";
-    pub const GRAPH_RT_TARGET_DEPTH_NAME: &str = "rt_target_depth";
-
-    // Buffer references
-    // Frame buffers
-    pub const GRAPH_FRAME_INFO_NAME: &str = "frame_info_buffer";
-
-    // Pass references
-    pub const GRAPH_TERRAIN_PREPASS_COMPUTE_INFO: FrameGraphComputeInfo<'static> =
-        FrameGraphComputeInfo {
-            shader_path: "terrain_prepass",
-            entry_point_fn: "main",
-        };
-    pub const GRAPH_TERRAIN_PREPASS_NAME: &str = "terrain_prepass";
+    pub const GRAPH: GraphConstants = GraphConstants {
+        rt: GraphConstantsRT {
+            image_albedo: "rt_image_albedo",
+            image_depth: "rt_image_depth",
+            compute_prepass: "rt_compute_prepass",
+            compute_prepass_info: FrameGraphComputeInfo {
+                shader_path: "terrain_prepass",
+                entry_point_fn: "main",
+            },
+            pass_prepass: "rt_pass_prepass",
+        },
+        swapchain: "swapchain",
+    };
 
     pub fn new(device: &mut DeviceResource) -> Self {
         let frame_graph_executor = device.create_frame_graph_executor();
@@ -132,24 +140,21 @@ impl Renderer {
 
     fn construct_fallback_frame_graph(gfx_settings: &GraphicsSettings) -> FrameGraph {
         let mut builder = FrameGraph::builder();
-        let graph_swapchain_image = builder.create_input_image(Self::GRAPH_SWAPCHAIN_NAME);
+        let graph_swapchain_image = builder.create_input_image(Self::GRAPH.swapchain);
 
         let rt_albedo_image = builder.create_frame_image(
-            Self::GRAPH_RT_TARGET_ALBEDO_NAME,
+            Self::GRAPH.rt.image_albedo,
             FrameGraphImageInfo::new_rgba32float(gfx_settings.rt_size),
         );
         let rt_depth_image = builder.create_frame_image(
-            Self::GRAPH_RT_TARGET_DEPTH_NAME,
+            Self::GRAPH.rt.image_depth,
             FrameGraphImageInfo::new_depth(gfx_settings.rt_size),
         );
 
         // Compute n' blit.
         let pass_compute_pipeline = builder.create_compute_pipeline(
-            Self::GRAPH_TERRAIN_PREPASS_NAME,
-            FrameGraphComputeInfo {
-                shader_path: "terrain_prepass",
-                entry_point_fn: "main",
-            },
+            Self::GRAPH.rt.compute_prepass,
+            Self::GRAPH.rt.compute_prepass_info,
         );
         let pass_rt_size = gfx_settings.rt_size;
         builder.create_pass(
@@ -157,14 +162,14 @@ impl Renderer {
             &[&graph_swapchain_image, &rt_albedo_image],
             &[&graph_swapchain_image],
             move |recorder, ctx| {
-                let rt_image = ctx.get_image(Self::GRAPH_RT_TARGET_ALBEDO_NAME);
+                let rt_image = ctx.get_image(Self::GRAPH.rt.image_albedo);
                 let compute_pipeline = ctx.get_compute_pipeline(pass_compute_pipeline);
 
                 {
                     let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
                     compute_pass.bind_uniforms({
                         let mut uniforms = UniformData::new();
-                        uniforms.load("u_shader.backbuffer", rt_image.as_binding());
+                        uniforms.load("u_shader.backbuffer", rt_image.as_storage_binding());
                         uniforms
                     });
                     let wg_size = compute_pass.workgroup_size();
@@ -175,9 +180,15 @@ impl Renderer {
                     );
                 }
 
-                let swapchain_image = ctx.get_image(Self::GRAPH_SWAPCHAIN_NAME);
+                let swapchain_image = ctx.get_image(Self::GRAPH.swapchain);
                 recorder.blit(rt_image, swapchain_image, GfxFilterMode::Nearest);
             },
+        );
+
+        builder.create_input_pass(
+            Self::GRAPH.rt.pass_prepass,
+            &[],
+            &[&Self::GRAPH.rt.image_albedo],
         );
 
         // Present.
@@ -219,7 +230,7 @@ impl Renderer {
         };
         renderer
             .frame_graph_executor
-            .supply_image_ref(Self::GRAPH_SWAPCHAIN_NAME, &swapchain_image);
+            .supply_image_ref(Self::GRAPH.swapchain, &swapchain_image);
 
         renderer.frame_graph = Some(renderer.frame_graph_executor.end_frame());
     }

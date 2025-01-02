@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    frame_graph::FrameGraph,
+    frame_graph::{FrameGraph, FrameGraphContextImpl},
     shader::{ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
 
@@ -87,6 +87,11 @@ pub trait GraphicsBackendFrameGraphExecutor {
     fn end_frame(&mut self) -> FrameGraph;
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
+    fn supply_pass_ref(&mut self, name: &str, pass: Box<dyn GfxPassOnceImpl>);
+}
+
+pub trait GfxPassOnceImpl {
+    fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &dyn FrameGraphContextImpl);
 }
 
 pub struct BindGroup;
@@ -180,7 +185,7 @@ pub enum GfxPresentMode {
 }
 
 impl ResourceId<Image> {
-    pub fn as_binding(&self) -> Binding {
+    pub fn as_storage_binding(&self) -> Binding {
         Binding::Image {
             image: self.clone(),
         }

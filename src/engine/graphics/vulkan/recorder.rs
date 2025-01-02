@@ -47,6 +47,30 @@ impl VulkanRecorder {
         unsafe { self.ctx.device().end_command_buffer(self.command_buffer) };
     }
 
+    pub fn wait_event(&self, event: ash::vk::Event) {
+        unsafe {
+            self.ctx.device().cmd_wait_events(
+                self.command_buffer,
+                &[event],
+                ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                ash::vk::PipelineStageFlags::TOP_OF_PIPE,
+                &[],
+                &[],
+                &[],
+            )
+        }
+    }
+
+    pub fn set_event(&self, event: ash::vk::Event) {
+        unsafe {
+            self.ctx.device().cmd_set_event(
+                self.command_buffer,
+                event,
+                ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            )
+        }
+    }
+
     pub fn transition_images(
         &mut self,
         transitions: &[VulkanImageTransition],

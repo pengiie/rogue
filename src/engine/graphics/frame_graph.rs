@@ -1,5 +1,8 @@
 use core::panic;
-use std::collections::{HashMap, HashSet};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+};
 
 use nalgebra::Vector2;
 
@@ -19,6 +22,7 @@ pub struct Unbaked;
 pub struct Pass;
 pub struct FrameGraphBuilder {
     resource_infos: Vec<FrameGraphResourceInfo>,
+    resource_name_map: HashMap<String, FrameGraphResource<Untyped>>,
     inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     passes: HashMap<FrameGraphResource<Untyped>, FrameGraphPass>,
     frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
@@ -34,9 +38,10 @@ pub struct FrameGraphResourceInfo {
 }
 
 pub struct FrameGraphPass {
+    pub id: FrameGraphResource<Pass>,
     pub inputs: Vec<FrameGraphResource<Untyped>>,
     pub outputs: Vec<FrameGraphResource<Untyped>>,
-    pub pass: Box<dyn Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext)>,
+    pub pass: Option<Box<dyn Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext)>>,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -67,6 +72,7 @@ impl FrameGraphBuilder {
     pub fn new() -> Self {
         Self {
             resource_infos: Vec::new(),
+            resource_name_map: HashMap::new(),
             inputs: HashMap::new(),
             passes: HashMap::new(),
             frame_image_infos: HashMap::new(),
@@ -79,21 +85,49 @@ impl FrameGraphBuilder {
         let id = self.resource_infos.len() as u32;
         self.resource_infos.push(FrameGraphResourceInfo {
             id,
-            name,
+            name: name.clone(),
             type_id: std::any::TypeId::of::<T>(),
         });
 
-        FrameGraphResource {
+        let resource = FrameGraphResource {
             id,
             _marker: std::marker::PhantomData,
-        }
+        };
+        self.resource_name_map.insert(name, resource.as_untyped());
+
+        resource
+    }
+
+    pub fn create_input_pass(
+        &mut self,
+        name: impl ToString,
+        inputs: &[&dyn IntoFrameGraphResourceUntyped],
+        outputs: &[&dyn IntoFrameGraphResourceUntyped],
+    ) -> FrameGraphResource<Pass> {
+        let resource_handle = self.next_id(name.to_string());
+        self.passes.insert(
+            resource_handle.as_untyped(),
+            FrameGraphPass {
+                id: resource_handle,
+                inputs: inputs
+                    .into_iter()
+                    .map(|resource| resource.handle_untyped(self))
+                    .collect(),
+                outputs: outputs
+                    .into_iter()
+                    .map(|resource| resource.handle_untyped(self))
+                    .collect(),
+                pass: None,
+            },
+        );
+        resource_handle
     }
 
     pub fn create_pass<F>(
         &mut self,
         name: impl ToString,
-        inputs: &[&dyn FrameGraphResourceImpl],
-        outputs: &[&dyn FrameGraphResourceImpl],
+        inputs: &[&dyn IntoFrameGraphResourceUntyped],
+        outputs: &[&dyn IntoFrameGraphResourceUntyped],
         pass: F,
     ) -> FrameGraphResource<Pass>
     where
@@ -103,15 +137,16 @@ impl FrameGraphBuilder {
         self.passes.insert(
             resource_handle.as_untyped(),
             FrameGraphPass {
+                id: resource_handle,
                 inputs: inputs
                     .into_iter()
-                    .map(|resource| resource.as_untyped())
+                    .map(|resource| resource.handle_untyped(self))
                     .collect(),
                 outputs: outputs
                     .into_iter()
-                    .map(|resource| resource.as_untyped())
+                    .map(|resource| resource.handle_untyped(self))
                     .collect(),
-                pass: Box::new(pass),
+                pass: Some(Box::new(pass)),
             },
         );
 
@@ -121,8 +156,8 @@ impl FrameGraphBuilder {
     pub fn create_pass_ref(
         &mut self,
         name: impl ToString,
-        inputs: &[&dyn FrameGraphResourceImpl],
-        outputs: &[&dyn FrameGraphResourceImpl],
+        inputs: &[&dyn IntoFrameGraphResourceUntyped],
+        outputs: &[&dyn IntoFrameGraphResourceUntyped],
     ) -> FrameGraphResource<Pass> {
         let resource_handle = self.next_id(name.to_string());
         todo!("register");
@@ -213,12 +248,6 @@ impl FrameGraph {
             anyhow::bail!("Swapchain image was not presented or specified.");
         };
 
-        let resource_name_map = builder
-            .resource_infos
-            .iter()
-            .map(|info| (info.name.clone(), info.clone()))
-            .collect::<HashMap<_, _>>();
-
         let mut required_resources = HashSet::new();
         required_resources.insert(swapchain_image.as_untyped());
 
@@ -241,6 +270,12 @@ impl FrameGraph {
 
         // TODO: Warn about unreachable resources in the pass graph.
 
+        let resource_name_map = builder
+            .resource_name_map
+            .into_iter()
+            .map(|(name, id)| (name, builder.resource_infos[id.id() as usize].clone()))
+            .collect();
+
         Ok(Self {
             resource_infos: builder.resource_infos,
             resource_name_map,
@@ -254,11 +289,22 @@ impl FrameGraph {
 }
 
 impl FrameGraphContextImpl for FrameGraph {
-    fn get_handle<T: 'static>(&self, name: impl AsRef<str>) -> FrameGraphResource<T> {
-        let Some(resource_info) = self.resource_name_map.get(name.as_ref()) else {
+    fn get_handle_untyped(&self, name: &str) -> FrameGraphResource<Untyped> {
+        let Some(resource_info) = self.resource_name_map.get(name) else {
             panic!("Resource does not exist in frame graph.")
         };
-        assert_eq!(resource_info.type_id, std::any::TypeId::of::<T>());
+        FrameGraphResource::new(resource_info.id)
+    }
+
+    fn get_handle(
+        &self,
+        name: &str,
+        expected_type: std::any::TypeId,
+    ) -> FrameGraphResource<Untyped> {
+        let Some(resource_info) = self.resource_name_map.get(name) else {
+            panic!("Resource does not exist in frame graph.")
+        };
+        assert_eq!(resource_info.type_id, expected_type);
         FrameGraphResource::new(resource_info.id)
     }
 }
@@ -278,6 +324,13 @@ impl<T> FrameGraphResource<T> {
     }
 
     pub fn as_typed<S>(&self) -> FrameGraphResource<S> {
+        FrameGraphResource {
+            id: self.id,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_untyped(&self) -> FrameGraphResource<Untyped> {
         FrameGraphResource {
             id: self.id,
             _marker: std::marker::PhantomData,
@@ -314,12 +367,8 @@ impl<T> Clone for FrameGraphResource<T> {
     }
 }
 
-pub trait FrameGraphResourceImpl {
-    fn as_untyped(&self) -> FrameGraphResource<Untyped>;
-}
-
-impl<T> FrameGraphResourceImpl for FrameGraphResource<T> {
-    fn as_untyped(&self) -> FrameGraphResource<Untyped> {
+impl<T> IntoFrameGraphResourceUntyped for FrameGraphResource<T> {
+    fn handle_untyped(&self, _ctx: &dyn FrameGraphContextImpl) -> FrameGraphResource<Untyped> {
         FrameGraphResource {
             id: self.id,
             _marker: std::marker::PhantomData,
@@ -331,12 +380,23 @@ pub trait IntoFrameGraphResource<T> {
     fn handle(self, ctx: &impl FrameGraphContextImpl) -> FrameGraphResource<T>;
 }
 
+pub trait IntoFrameGraphResourceUntyped {
+    fn handle_untyped(&self, ctx: &dyn FrameGraphContextImpl) -> FrameGraphResource<Untyped>;
+}
+
+impl IntoFrameGraphResourceUntyped for &'static str {
+    fn handle_untyped(&self, ctx: &dyn FrameGraphContextImpl) -> FrameGraphResource<Untyped> {
+        ctx.get_handle_untyped(self)
+    }
+}
+
 impl<T: 'static, S> IntoFrameGraphResource<T> for S
 where
     S: AsRef<str>,
 {
     fn handle(self, ctx: &impl FrameGraphContextImpl) -> FrameGraphResource<T> {
-        ctx.get_handle::<T>(self)
+        ctx.get_handle(self.as_ref(), std::any::TypeId::of::<T>())
+            .as_typed()
     }
 }
 
@@ -353,7 +413,35 @@ impl<T> IntoFrameGraphResource<T> for &FrameGraphResource<T> {
 }
 
 pub trait FrameGraphContextImpl {
-    fn get_handle<T: 'static>(&self, name: impl AsRef<str>) -> FrameGraphResource<T>;
+    fn get_handle_untyped(&self, name: &str) -> FrameGraphResource<Untyped>;
+
+    fn get_handle(
+        &self,
+        name: &str,
+        expected_type: std::any::TypeId,
+    ) -> FrameGraphResource<Untyped>;
+}
+
+impl FrameGraphContextImpl for FrameGraphBuilder {
+    fn get_handle_untyped(&self, name: &str) -> FrameGraphResource<Untyped> {
+        *self.resource_name_map.get(name).expect(&format!(
+            "Resource of name `{}` has not been inserted into the frame graph builder yet.",
+            name
+        ))
+    }
+
+    fn get_handle(
+        &self,
+        name: &str,
+        expected_type: std::any::TypeId,
+    ) -> FrameGraphResource<Untyped> {
+        let handle = self.get_handle_untyped(name);
+        assert_eq!(
+            self.resource_infos[handle.id() as usize].type_id(),
+            expected_type
+        );
+        handle
+    }
 }
 
 pub struct FGResourceBackendId {
@@ -367,8 +455,16 @@ pub struct FrameGraphContext<'a> {
 }
 
 impl<'a> FrameGraphContextImpl for FrameGraphContext<'a> {
-    fn get_handle<T: 'static>(&self, name: impl AsRef<str>) -> FrameGraphResource<T> {
-        self.frame_graph.get_handle(name)
+    fn get_handle_untyped(&self, name: &str) -> FrameGraphResource<Untyped> {
+        self.frame_graph.get_handle_untyped(name)
+    }
+
+    fn get_handle(
+        &self,
+        name: &str,
+        expected_type: std::any::TypeId,
+    ) -> FrameGraphResource<Untyped> {
+        self.frame_graph.get_handle(name, expected_type)
     }
 }
 

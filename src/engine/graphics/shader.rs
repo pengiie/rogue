@@ -129,7 +129,10 @@ impl ShaderCompiler {
         options: ShaderCompilationOptions,
     ) -> anyhow::Result<&'a Shader> {
         match self.cached_shaders.entry(options) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Occupied(e) => {
+                //todo!("Check modified date of file");
+                Ok(e.into_mut())
+            }
             Entry::Vacant(e) => {
                 let options = e.key();
 

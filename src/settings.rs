@@ -35,7 +35,7 @@ impl Default for GraphicsSettings {
             // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
             rt_size: Vector2::new(1280, 720),
             antialiasing: Antialiasing::None,
-            present_mode: GfxPresentMode::NoVsync,
+            present_mode: GfxPresentMode::Vsync,
             triple_buffering: true,
         }
     }

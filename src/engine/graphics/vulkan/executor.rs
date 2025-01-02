@@ -5,11 +5,12 @@ use log::{debug, warn};
 use crate::engine::graphics::{
     backend::{
         Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
-        GfxImageCreateInfo, GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
+        GfxImageCreateInfo, GfxPassOnceImpl, GraphicsBackendFrameGraphExecutor, Image, ResourceId,
+        Untyped,
     },
     frame_graph::{
         self, FGResourceBackendId, FrameGraph, FrameGraphContext, FrameGraphContextImpl,
-        FrameGraphImageInfo, FrameGraphResource, FrameGraphResourceImpl, IntoFrameGraphResource,
+        FrameGraphImageInfo, FrameGraphPass, FrameGraphResource, IntoFrameGraphResource, Pass,
     },
     shader::ShaderCompiler,
 };
@@ -73,6 +74,7 @@ impl VulkanExecutorResourceManager {
             if curr_gpu_frame < i {
                 continue;
             }
+            let frame_index = i % self.ctx.frames_in_flight() as u64;
 
             for resource in self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].drain(..)
             {
@@ -192,14 +194,20 @@ struct FrameSession {
     frame_graph: FrameGraph,
     resource_map: HashMap<FrameGraphResource<Untyped>, FGResourceBackendId>,
     recorded_command_buffers: Vec<VulkanRecorder>,
+    recorded_pass_refs: HashMap<FrameGraphResource<Pass>, VulkanRecorder>,
+    /// Same length as `frame_graph.passes.len() - 1`.
+    pass_set_events: Vec<Option<ash::vk::Event>>,
 }
 
 impl FrameSession {
     fn new(frame_graph: FrameGraph) -> Self {
+        let pass_len = frame_graph.passes.len();
         Self {
             frame_graph,
             resource_map: HashMap::new(),
             recorded_command_buffers: Vec::new(),
+            recorded_pass_refs: HashMap::new(),
+            pass_set_events: vec![None; pass_len - 1],
         }
     }
 }
@@ -247,68 +255,106 @@ impl VulkanFrameGraphExecutor {
     }
 
     fn acquire_command_buffers(
-        &mut self,
+        ctx: &VulkanContextHandle,
+        command_pools: &mut Vec<ash::vk::CommandPool>,
         count: u32,
     ) -> anyhow::Result<Vec<ash::vk::CommandBuffer>> {
         let allocate_info = ash::vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.command_pools[self.ctx.curr_cpu_frame_index() as usize])
+            .command_pool(command_pools[ctx.curr_cpu_frame_index() as usize])
             .level(ash::vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(count);
-        Ok(unsafe { self.ctx.device().allocate_command_buffers(&allocate_info) }?)
+        Ok(unsafe { ctx.device().allocate_command_buffers(&allocate_info) }?)
+    }
+
+    fn prep_pass_inputs(
+        frame_graph: &FrameGraph,
+        resource_map: &mut HashMap<FrameGraphResource<Untyped>, FGResourceBackendId>,
+        resource_manager: &mut VulkanExecutorResourceManager,
+        pass: &FrameGraphPass,
+    ) {
+        for input in &pass.inputs {
+            if resource_map.contains_key(input) {
+                // Resource has already been populated.
+                continue;
+            }
+
+            let input_info = &frame_graph.resource_infos[input.id() as usize];
+            if input_info.type_id == std::any::TypeId::of::<Image>()
+                && frame_graph
+                    .frame_image_infos
+                    .contains_key(&input.as_typed())
+            {
+                let frame_image_info = frame_graph
+                    .frame_image_infos
+                    .get(&input.as_typed())
+                    .unwrap()
+                    .clone();
+                let frame_image =
+                    resource_manager.get_or_create_frame_image(&input_info.name, frame_image_info);
+
+                resource_map.insert(
+                    *input,
+                    FGResourceBackendId {
+                        resource_id: frame_image.as_untyped(),
+                        expected_type: std::any::TypeId::of::<Image>(),
+                    },
+                );
+            }
+        }
     }
 
     fn flush(&mut self) {
-        let command_buffer = self
-            .acquire_command_buffers(1)
-            .expect("Failed to acquire command buffers.")
-            .into_iter()
-            .next()
-            .unwrap();
-        let mut recorder = VulkanRecorder::new(&self.ctx, command_buffer);
-        recorder.begin();
-
         let mut session = self.session.as_mut().unwrap();
-        for pass in &session.frame_graph.passes {
-            for input in &pass.inputs {
-                if session.resource_map.contains_key(input) {
-                    // Resource has already been populated.
-                    continue;
+        for (pass_idx, pass) in session.frame_graph.passes.iter().enumerate() {
+            Self::prep_pass_inputs(
+                &session.frame_graph,
+                &mut session.resource_map,
+                &mut self.resource_manager,
+                pass,
+            );
+
+            let recorder = if let Some(pass_fn) = &pass.pass {
+                let command_buffer =
+                    Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
+                        .expect("Failed to acquire command buffers.")
+                        .into_iter()
+                        .next()
+                        .unwrap();
+                let mut recorder = VulkanRecorder::new(&self.ctx, command_buffer);
+                recorder.begin();
+
+                if pass_idx > 0 {
+                    let prev_pass_event = session.pass_set_events[pass_idx - 1]
+                        .get_or_insert_with(|| self.ctx.create_frame_event());
+                    recorder.wait_event(*prev_pass_event)
                 }
 
-                let input_info = &session.frame_graph.resource_infos[input.id() as usize];
-                if input_info.type_id == std::any::TypeId::of::<Image>()
-                    && session
-                        .frame_graph
-                        .frame_image_infos
-                        .contains_key(&input.as_typed())
-                {
-                    let frame_image_info = session
-                        .frame_graph
-                        .frame_image_infos
-                        .get(&input.as_typed())
-                        .unwrap()
-                        .clone();
-                    let frame_image = self
-                        .resource_manager
-                        .get_or_create_frame_image(&input_info.name, frame_image_info);
+                let ctx = FrameGraphContext {
+                    frame_graph: &session.frame_graph,
+                    resource_map: &session.resource_map,
+                };
 
-                    session.resource_map.insert(
-                        *input,
-                        FGResourceBackendId {
-                            resource_id: frame_image.as_untyped(),
-                            expected_type: std::any::TypeId::of::<Image>(),
-                        },
-                    );
+                pass_fn(&mut recorder, &ctx);
+
+                // True for all but the last pass.
+                if pass_idx < session.pass_set_events.len() {
+                    let curr_pass_event = session.pass_set_events[pass_idx]
+                        .get_or_insert_with(|| self.ctx.create_frame_event());
+
+                    recorder.set_event(*curr_pass_event);
                 }
-            }
 
-            let ctx = FrameGraphContext {
-                frame_graph: &session.frame_graph,
-                resource_map: &session.resource_map,
+                recorder
+            } else {
+                // TODO: Delay this until end_frame so flush can amortize building passes.
+                session.recorded_pass_refs.remove(&pass.id).expect(&format!(
+                    "Pass reference for pass {} was not provided before the end of the frame.",
+                    session.frame_graph.resource_infos[pass.id.id() as usize].name
+                ))
             };
-            (&pass.pass)(&mut recorder, &ctx);
+
+            session.recorded_command_buffers.push(recorder);
         }
-        session.recorded_command_buffers.push(recorder);
     }
 }
 
@@ -351,7 +397,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             .unwrap();
         let recorder_count = session.recorded_command_buffers.len();
         for (i, recorder) in session.recorded_command_buffers.iter_mut().enumerate() {
-            if i == recorder_count - 1 {
+            let is_last = i == recorder_count - 1;
+            if is_last {
                 recorder.transition_images(
                     &[VulkanImageTransition {
                         image_id: ResourceId::new(swapchain_image_id.resource_id.id()),
@@ -434,5 +481,67 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         if prev.is_some() {
             panic!("Can't supply a frame graph input twice in one frame.");
         }
+    }
+
+    fn supply_pass_ref(&mut self, name: &str, mut pass: Box<dyn GfxPassOnceImpl>) {
+        let command_buffer = Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
+            .expect("Failed to acquire command buffers.")
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let session = self.session.as_mut().unwrap();
+        let pass_resource_id = session
+            .frame_graph
+            .resource_name_map
+            .get(name)
+            .expect(&format!(
+                "Resource pass reference of name `{}` doesn't exist in frame graph.",
+                name
+            ));
+        let (pass_idx, pass_info) = session
+            .frame_graph
+            .passes
+            .iter()
+            .enumerate()
+            .find(|(i, info)| info.id.id() == pass_resource_id.id)
+            .expect("Tried to supply a pass input to an pass with unnecessary outputs.");
+
+        Self::prep_pass_inputs(
+            &session.frame_graph,
+            &mut session.resource_map,
+            &mut self.resource_manager,
+            pass_info,
+        );
+
+        let mut recorder = VulkanRecorder::new(&self.ctx, command_buffer);
+        let ctx = FrameGraphContext {
+            frame_graph: &session.frame_graph,
+            resource_map: &session.resource_map,
+        };
+
+        if pass_idx > 0 {
+            let prev_pass_event = session.pass_set_events[pass_idx - 1]
+                .get_or_insert_with(|| self.ctx.create_frame_event());
+            recorder.wait_event(*prev_pass_event)
+        }
+
+        pass.run(&mut recorder, &ctx);
+
+        // True for all but the last pass.
+        if pass_idx < session.pass_set_events.len() {
+            let curr_pass_event = session.pass_set_events[pass_idx]
+                .get_or_insert_with(|| self.ctx.create_frame_event());
+
+            recorder.set_event(*curr_pass_event);
+        }
+
+        let old = session
+            .recorded_pass_refs
+            .insert(FrameGraphResource::new(pass_resource_id.id), recorder);
+        assert!(
+            old.is_none(),
+            "Pass reference was already inserted prior in this frame."
+        );
     }
 }

@@ -65,6 +65,14 @@ impl VulkanContextInner {
     pub fn curr_cpu_frame_index(&self) -> u32 {
         (self.curr_cpu_frame() % self.frames_in_flight as u64) as u32
     }
+
+    pub fn curr_gpu_frame(&self) -> u64 {
+        unsafe {
+            self.device
+                .get_semaphore_counter_value(self.gpu_timeline_semaphore)
+        }
+        .expect("Failed to get gpu timeline semaphore.")
+    }
 }
 
 impl Drop for VulkanContextInner {
@@ -151,11 +159,7 @@ impl VulkanContext {
     }
 
     pub fn curr_gpu_frame(&self) -> u64 {
-        unsafe {
-            self.device()
-                .get_semaphore_counter_value(self.gpu_timeline_semaphore())
-        }
-        .expect("Failed to get gpu timeline semaphore.")
+        self.inner.curr_gpu_frame()
     }
 
     pub fn curr_cpu_frame_index(&self) -> u32 {
@@ -190,6 +194,10 @@ impl VulkanContext {
         let mut memory_allocator = self.memory_allocator.write();
         self.resource_manager
             .create_image(&mut memory_allocator, create_info)
+    }
+
+    pub fn create_frame_event(&self) -> ash::vk::Event {
+        self.resource_manager.get_frame_vk_event()
     }
 
     pub fn create_buffer(
@@ -731,6 +739,9 @@ impl GraphicsBackendDevice for VulkanDevice {
             // TODO: Worry about timeout.
             unsafe { self.context.device().wait_semaphores(&wait_info, u64::MAX) };
         }
+
+        // Free previously used events.
+        self.context.resource_manager.retire_resources();
     }
 
     fn create_frame_graph_executor(&mut self) -> Box<dyn GraphicsBackendFrameGraphExecutor> {
@@ -1068,6 +1079,15 @@ pub struct VulkanResourceManager {
 
     descriptor_pool: ash::vk::DescriptorPool,
     descriptor_sets: parking_lot::RwLock<HashMap<ShaderSetBinding, VulkanDescriptorSet>>,
+
+    // Events are only valid when using them, for one gpu frame. After that gpu frame the event is
+    // available to use again.
+    event_pools: Vec<parking_lot::RwLock<VulkanEventPool>>,
+}
+
+struct VulkanEventPool {
+    free_events: Vec<u32>,
+    event_pool: Vec<ash::vk::Event>,
 }
 
 struct VulkanDescriptorSet {
@@ -1263,6 +1283,15 @@ impl VulkanResourceManager {
 
             descriptor_pool,
             descriptor_sets: parking_lot::RwLock::new(HashMap::new()),
+
+            event_pools: (0..ctx.frames_in_flight)
+                .map(|_| {
+                    parking_lot::RwLock::new(VulkanEventPool {
+                        free_events: Vec::new(),
+                        event_pool: Vec::new(),
+                    })
+                })
+                .collect(),
         }
     }
 
@@ -1272,6 +1301,42 @@ impl VulkanResourceManager {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         );
         resource_id
+    }
+
+    fn retire_resources(&self) {
+        let curr_gpu_frame = self.ctx.curr_gpu_frame();
+        let curr_cpu_frame = self.ctx.curr_cpu_frame();
+        // This is called after we wait for our gpu timeline semaphore n - 2 so
+        // we know this is our minimum.
+        let minimum_gpu_frame = (curr_cpu_frame.saturating_sub(self.ctx.frames_in_flight as u64));
+        for i in minimum_gpu_frame..curr_cpu_frame {
+            if curr_gpu_frame < i {
+                continue;
+            }
+            let frame_index = i % self.ctx.frames_in_flight as u64;
+
+            let mut event_pool = self.event_pools[frame_index as usize].write();
+            for i in 0..event_pool.event_pool.len() {
+                event_pool.free_events.push(i as u32);
+            }
+        }
+    }
+
+    /// Returns a vkEvent that is valid for the current cpu recording next gpu frame.
+    /// Used only for command buffer synchronization within a queue submit.
+    fn get_frame_vk_event(&self) -> ash::vk::Event {
+        let mut event_pool = self.event_pools[self.ctx.curr_cpu_frame_index() as usize].write();
+        if let Some(free_event_idx) = event_pool.free_events.pop() {
+            return event_pool.event_pool[free_event_idx as usize];
+        }
+
+        let create_info =
+            ash::vk::EventCreateInfo::default().flags(ash::vk::EventCreateFlags::DEVICE_ONLY);
+        let vk_event = unsafe { self.ctx.device.create_event(&create_info, None) }
+            .expect("Failed to create vulkan event.");
+        event_pool.event_pool.push(vk_event);
+
+        vk_event
     }
 
     fn create_shader_module(&self, shader: &Shader) -> anyhow::Result<ash::vk::ShaderModule> {
@@ -1754,7 +1819,12 @@ impl Drop for VulkanResourceManager {
     // Don't worry about freeing memory allocations since the `VulkanAllocator` will be dropped
     // as well, destroying any gpu memory allocation.
     fn drop(&mut self) {
-        unsafe { self.ctx.device.device_wait_idle() };
+        unsafe {
+            self.ctx.device.device_wait_idle();
+            self.ctx
+                .device
+                .destroy_descriptor_pool(self.descriptor_pool, None)
+        }
 
         for (_, borrowed_image) in self.borrowed_images.write().iter() {
             if let Some(image_view) = borrowed_image.view {
