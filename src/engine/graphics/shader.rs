@@ -235,7 +235,17 @@ impl ShaderCompiler {
                             continue;
                         }
                         let binding_type = match field_type.resource_shape() {
-                            slang::ResourceShape::SlangTexture2d => ShaderBindingType::StorageImage,
+                            slang::ResourceShape::SlangTexture2d => {
+                                let has_write = field_type.resource_access()
+                                    == slang::ResourceAccess::Write
+                                    || field_type.resource_access()
+                                        == slang::ResourceAccess::ReadWrite;
+                                if has_write {
+                                    ShaderBindingType::StorageImage
+                                } else {
+                                    ShaderBindingType::SampledImage
+                                }
+                            }
                             ty => todo!("Support reflection for shader resource type {:?}", ty),
                         };
                         let binding_name = field

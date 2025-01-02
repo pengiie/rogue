@@ -1,4 +1,5 @@
 use gui::Egui;
+use log::debug;
 use state::DebugUIState;
 
 use super::{

@@ -23,10 +23,10 @@ use crate::engine::{
         backend::{
             BindGroup, Binding, Buffer, ComputePipeline, GfxBufferCreateInfo,
             GfxComputePipelineCreateInfo, GfxComputePipelineInfo, GfxFilterMode,
-            GfxImageCreateInfo, GfxImageInfo, GfxImageType, GfxPresentMode, GfxSwapchainInfo,
-            GraphicsBackendDevice, GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image,
-            ImageFormat, Memory, RasterPipeline, RasterPipelineCreateInfo, ResourceId, UniformData,
-            UniformSetData, Untyped,
+            GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxPresentMode,
+            GfxSwapchainInfo, GraphicsBackendDevice, GraphicsBackendEvent,
+            GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline,
+            RasterPipelineCreateInfo, ResourceId, UniformData, UniformSetData, Untyped,
         },
         gpu_allocator::{Allocation, AllocatorTree},
         shader::{
@@ -194,6 +194,15 @@ impl VulkanContext {
         let mut memory_allocator = self.memory_allocator.write();
         self.resource_manager
             .create_image(&mut memory_allocator, create_info)
+    }
+
+    pub fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo {
+        let image = self.resource_manager.get_image(*image);
+        let info = &image.info;
+
+        GfxImageInfo {
+            resolution: Vector3::new(info.extent.width, info.extent.height, 1),
+        }
     }
 
     pub fn create_frame_event(&self) -> ash::vk::Event {
@@ -767,7 +776,7 @@ impl GraphicsBackendDevice for VulkanDevice {
     }
 
     fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo {
-        todo!("get image info")
+        self.context.get_image_info(image)
     }
 
     fn create_buffer(&mut self, create_info: GfxBufferCreateInfo) -> ResourceId<Buffer> {
@@ -1171,7 +1180,7 @@ struct VulkanBorrowedImage {
 }
 
 #[derive(Clone)]
-struct VulkanImageInfo {
+pub struct VulkanImageInfo {
     pub image_type: GfxImageType,
     pub format: ash::vk::Format,
     pub extent: ash::vk::Extent2D,
@@ -1214,12 +1223,12 @@ impl From<GfxImageType> for ash::vk::ImageViewType {
     }
 }
 
-impl From<ImageFormat> for ash::vk::Format {
-    fn from(value: ImageFormat) -> Self {
+impl From<GfxImageFormat> for ash::vk::Format {
+    fn from(value: GfxImageFormat) -> Self {
         match value {
-            ImageFormat::Rgba8Unorm => ash::vk::Format::R8G8B8A8_UNORM,
-            ImageFormat::D16Unorm => ash::vk::Format::D16_UNORM,
-            ImageFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
+            GfxImageFormat::Rgba8Unorm => ash::vk::Format::R8G8B8A8_UNORM,
+            GfxImageFormat::D16Unorm => ash::vk::Format::D16_UNORM,
+            GfxImageFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
         }
     }
 }
@@ -1562,14 +1571,14 @@ impl VulkanResourceManager {
                         // indexes to the image info and populate that in the vulkan write struct
                         // once we are no longer pushing writes.
                         match binding {
-                            Binding::Image { image } => {
+                            Binding::StorageImage { image } => {
                                 let vk_image_info = self.get_image(*image);
                                 vk_image_infos.push(
                                     ash::vk::DescriptorImageInfo::default()
                                         .image_view(
                                             vk_image_info
                                                 .view
-                                                .expect("Storage image but have an image view."),
+                                                .expect("Storage image should have an image view."),
                                         )
                                         .image_layout(ash::vk::ImageLayout::GENERAL),
                                 );
@@ -1577,6 +1586,24 @@ impl VulkanResourceManager {
                                     Some(VulkanSetWriteIndex::ImageInfo(vk_image_infos.len() - 1));
                                 write =
                                     write.descriptor_type(ash::vk::DescriptorType::STORAGE_IMAGE);
+                            }
+                            Binding::SampledImage { image } => {
+                                let vk_image_info = self.get_image(*image);
+                                vk_image_infos.push(
+                                    ash::vk::DescriptorImageInfo::default()
+                                        .image_view(
+                                            vk_image_info
+                                                .view
+                                                .expect("Sampled image should have an image view."),
+                                        )
+                                        .image_layout(
+                                            ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                        ),
+                                );
+                                info =
+                                    Some(VulkanSetWriteIndex::ImageInfo(vk_image_infos.len() - 1));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::SAMPLED_IMAGE);
                             }
                             Binding::Sampler {} => todo!(),
                             Binding::Buffer {} => todo!(),
@@ -1710,6 +1737,7 @@ impl VulkanResourceManager {
                 ash::vk::ImageUsageFlags::STORAGE
                     | ash::vk::ImageUsageFlags::TRANSFER_SRC
                     | ash::vk::ImageUsageFlags::TRANSFER_DST
+                    | ash::vk::ImageUsageFlags::SAMPLED
                     | type_specific_usages,
             )
             .extent(

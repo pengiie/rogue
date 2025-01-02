@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    frame_graph::{FrameGraph, FrameGraphContextImpl},
+    frame_graph::{FrameGraph, FrameGraphContext, FrameGraphContextImpl},
     shader::{ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
 
@@ -62,6 +62,8 @@ pub trait GraphicsBackendRecorder {
     // TODO: Support blitting specific image regions.
     fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode);
     fn begin_compute_pass(&mut self, compute_pipeline: ResourceId<ComputePipeline>) -> ComputePass;
+
+    fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo;
 }
 
 pub trait GraphicsBackendComputePass {
@@ -88,10 +90,21 @@ pub trait GraphicsBackendFrameGraphExecutor {
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
     fn supply_pass_ref(&mut self, name: &str, pass: Box<dyn GfxPassOnceImpl>);
+
+    fn supply_input(&mut self, name: &str, input_data: Box<dyn std::any::Any>);
 }
 
 pub trait GfxPassOnceImpl {
-    fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &dyn FrameGraphContextImpl);
+    fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>);
+}
+
+impl<F> GfxPassOnceImpl for F
+where
+    F: FnMut(&mut dyn GraphicsBackendRecorder, &FrameGraphContext),
+{
+    fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext) {
+        self(recorder, ctx);
+    }
 }
 
 pub struct BindGroup;
@@ -186,7 +199,13 @@ pub enum GfxPresentMode {
 
 impl ResourceId<Image> {
     pub fn as_storage_binding(&self) -> Binding {
-        Binding::Image {
+        Binding::StorageImage {
+            image: self.clone(),
+        }
+    }
+
+    pub fn as_sampled_binding(&self) -> Binding {
+        Binding::SampledImage {
             image: self.clone(),
         }
     }
@@ -287,7 +306,8 @@ pub struct UniformSetData {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Binding {
-    Image { image: ResourceId<Image> },
+    StorageImage { image: ResourceId<Image> },
+    SampledImage { image: ResourceId<Image> },
     Sampler {},
     Buffer {},
 }
@@ -310,7 +330,7 @@ pub struct GfxBufferCreateInfo {
 pub struct GfxImageCreateInfo {
     pub name: String,
     pub image_type: GfxImageType,
-    pub format: ImageFormat,
+    pub format: GfxImageFormat,
     pub extent: Vector2<u32>,
 }
 
@@ -328,7 +348,7 @@ pub enum GfxFilterMode {
 }
 
 pub struct GfxImageInfo {
-    resolution: Vector3<u32>,
+    pub resolution: Vector3<u32>,
 }
 
 impl GfxImageInfo {
@@ -338,7 +358,7 @@ impl GfxImageInfo {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum ImageFormat {
+pub enum GfxImageFormat {
     Rgba32Float,
     Rgba8Unorm,
     D16Unorm,

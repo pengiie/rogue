@@ -1,12 +1,13 @@
 use std::{collections::HashMap, sync::Arc};
 
 use epaint::image;
+use nalgebra::Vector3;
 
 use crate::{
     common::color::{Color, ColorSpaceSrgb},
     engine::graphics::backend::{
-        Binding, ComputePass, ComputePipeline, GfxFilterMode, GraphicsBackendComputePass,
-        GraphicsBackendRecorder, Image, ResourceId, UniformData,
+        Binding, ComputePass, ComputePipeline, GfxFilterMode, GfxImageInfo,
+        GraphicsBackendComputePass, GraphicsBackendRecorder, Image, ResourceId, UniformData,
     },
 };
 
@@ -230,6 +231,10 @@ impl GraphicsBackendRecorder for VulkanRecorder {
             uniforms_bound: false,
         })
     }
+
+    fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo {
+        self.ctx.get_image_info(image)
+    }
 }
 
 pub struct VulkanComputePass<'a> {
@@ -246,9 +251,15 @@ impl GraphicsBackendComputePass for VulkanComputePass<'_> {
         let mut image_transitions = Vec::new();
         for binding in uniform_data.bindings() {
             match binding {
-                Binding::Image { image } => image_transitions.push(VulkanImageTransition {
+                Binding::StorageImage { image } => image_transitions.push(VulkanImageTransition {
                     image_id: *image,
                     new_layout: ash::vk::ImageLayout::GENERAL,
+                    new_access_flags: ash::vk::AccessFlags::SHADER_READ
+                        | ash::vk::AccessFlags::SHADER_WRITE,
+                }),
+                Binding::SampledImage { image } => image_transitions.push(VulkanImageTransition {
+                    image_id: *image,
+                    new_layout: ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     new_access_flags: ash::vk::AccessFlags::SHADER_READ,
                 }),
                 Binding::Sampler {} => todo!(),

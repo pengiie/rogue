@@ -1,3 +1,4 @@
+use core::panic;
 use std::{any::Any, collections::HashMap, ops::Deref, sync::Arc};
 
 use log::{debug, warn};
@@ -197,6 +198,8 @@ struct FrameSession {
     recorded_pass_refs: HashMap<FrameGraphResource<Pass>, VulkanRecorder>,
     /// Same length as `frame_graph.passes.len() - 1`.
     pass_set_events: Vec<Option<ash::vk::Event>>,
+
+    supplied_inputs: HashMap<FrameGraphResource<Untyped>, Box<dyn Any>>,
 }
 
 impl FrameSession {
@@ -207,7 +210,8 @@ impl FrameSession {
             resource_map: HashMap::new(),
             recorded_command_buffers: Vec::new(),
             recorded_pass_refs: HashMap::new(),
-            pass_set_events: vec![None; pass_len - 1],
+            pass_set_events: vec![None; pass_len.saturating_sub(1)],
+            supplied_inputs: HashMap::new(),
         }
     }
 }
@@ -269,36 +273,51 @@ impl VulkanFrameGraphExecutor {
     fn prep_pass_inputs(
         frame_graph: &FrameGraph,
         resource_map: &mut HashMap<FrameGraphResource<Untyped>, FGResourceBackendId>,
+        supplied_inputs: &HashMap<FrameGraphResource<Untyped>, Box<dyn std::any::Any>>,
         resource_manager: &mut VulkanExecutorResourceManager,
         pass: &FrameGraphPass,
     ) {
-        for input in &pass.inputs {
+        // Iterate over outputs and inputs since we outputs implicity define inputs.
+        for input in pass.inputs.iter().chain(pass.outputs.iter()) {
             if resource_map.contains_key(input) {
                 // Resource has already been populated.
                 continue;
             }
 
             let input_info = &frame_graph.resource_infos[input.id() as usize];
-            if input_info.type_id == std::any::TypeId::of::<Image>()
-                && frame_graph
-                    .frame_image_infos
-                    .contains_key(&input.as_typed())
-            {
-                let frame_image_info = frame_graph
-                    .frame_image_infos
-                    .get(&input.as_typed())
-                    .unwrap()
-                    .clone();
-                let frame_image =
-                    resource_manager.get_or_create_frame_image(&input_info.name, frame_image_info);
+            if input_info.type_id == std::any::TypeId::of::<Image>() {
+                let image_info = if let Some(frame_image_info) =
+                    frame_graph.frame_image_infos.get(&input.as_typed())
+                {
+                    Some(frame_image_info.clone())
+                } else if let Some(info_create_fn) =
+                    frame_graph.frame_image_infos_delayed.get(&input.as_typed())
+                {
+                    let ctx = FrameGraphContext {
+                        frame_graph,
+                        resource_map,
+                        supplied_inputs,
+                    };
+                    let image_info = info_create_fn(&ctx);
+                    Some(image_info)
+                } else {
+                    None
+                };
 
-                resource_map.insert(
-                    *input,
-                    FGResourceBackendId {
-                        resource_id: frame_image.as_untyped(),
-                        expected_type: std::any::TypeId::of::<Image>(),
-                    },
-                );
+                if let Some(image_info) = image_info {
+                    let frame_image =
+                        resource_manager.get_or_create_frame_image(&input_info.name, image_info);
+
+                    resource_map.insert(
+                        *input,
+                        FGResourceBackendId {
+                            resource_id: frame_image.as_untyped(),
+                            expected_type: std::any::TypeId::of::<Image>(),
+                        },
+                    );
+                } else {
+                    panic!("Resource should be populated if its an image we are here.");
+                }
             }
         }
     }
@@ -309,6 +328,7 @@ impl VulkanFrameGraphExecutor {
             Self::prep_pass_inputs(
                 &session.frame_graph,
                 &mut session.resource_map,
+                &session.supplied_inputs,
                 &mut self.resource_manager,
                 pass,
             );
@@ -332,6 +352,7 @@ impl VulkanFrameGraphExecutor {
                 let ctx = FrameGraphContext {
                     frame_graph: &session.frame_graph,
                     resource_map: &session.resource_map,
+                    supplied_inputs: &session.supplied_inputs,
                 };
 
                 pass_fn(&mut recorder, &ctx);
@@ -505,11 +526,12 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             .iter()
             .enumerate()
             .find(|(i, info)| info.id.id() == pass_resource_id.id)
-            .expect("Tried to supply a pass input to an pass with unnecessary outputs.");
+            .expect("Tried to supply a pass input to a pass with unnecessary outputs.");
 
         Self::prep_pass_inputs(
             &session.frame_graph,
             &mut session.resource_map,
+            &session.supplied_inputs,
             &mut self.resource_manager,
             pass_info,
         );
@@ -518,7 +540,10 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         let ctx = FrameGraphContext {
             frame_graph: &session.frame_graph,
             resource_map: &session.resource_map,
+            supplied_inputs: &session.supplied_inputs,
         };
+
+        recorder.begin();
 
         if pass_idx > 0 {
             let prev_pass_event = session.pass_set_events[pass_idx - 1]
@@ -543,5 +568,12 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             old.is_none(),
             "Pass reference was already inserted prior in this frame."
         );
+    }
+
+    fn supply_input(&mut self, name: &str, input_data: Box<dyn std::any::Any>) {
+        let session = self.session_mut();
+        let resource = session.frame_graph.get_handle_untyped(name);
+
+        session.supplied_inputs.insert(resource, input_data);
     }
 }

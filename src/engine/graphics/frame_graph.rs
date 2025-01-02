@@ -2,8 +2,10 @@ use core::panic;
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
+    ops::Deref,
 };
 
+use log::debug;
 use nalgebra::Vector2;
 
 use crate::common::dyn_vec::TypeInfo;
@@ -11,7 +13,7 @@ use crate::common::dyn_vec::TypeInfo;
 use super::{
     backend::{
         Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
-        GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image, ImageFormat,
+        GfxImageFormat, GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image,
         ResourceId, Untyped,
     },
     shader::ShaderPath,
@@ -25,7 +27,12 @@ pub struct FrameGraphBuilder {
     resource_name_map: HashMap<String, FrameGraphResource<Untyped>>,
     inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     passes: HashMap<FrameGraphResource<Untyped>, FrameGraphPass>,
+    pass_order: Vec<FrameGraphResource<Untyped>>,
     frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
+    // Frame images that are created lazily right when they are required, evaluated by user-defined
+    // function with gpu frame context.
+    frame_image_infos_delayed:
+        HashMap<FrameGraphResource<Image>, Box<dyn Fn(&FrameGraphContext) -> FrameGraphImageInfo>>,
     compute_pipelines: HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
     swapchain_image: Option<FrameGraphResource<Image>>,
 }
@@ -47,7 +54,7 @@ pub struct FrameGraphPass {
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct FrameGraphImageInfo {
     pub image_type: GfxImageType,
-    pub format: ImageFormat,
+    pub format: GfxImageFormat,
     pub extent: Vector2<u32>,
 }
 
@@ -55,14 +62,23 @@ impl FrameGraphImageInfo {
     pub fn new_rgba32float(extent: Vector2<u32>) -> Self {
         Self {
             image_type: GfxImageType::D2,
-            format: ImageFormat::Rgba32Float,
+            format: GfxImageFormat::Rgba32Float,
             extent,
         }
     }
+
+    pub fn new_rgba8(extent: Vector2<u32>) -> Self {
+        Self {
+            image_type: GfxImageType::D2,
+            format: GfxImageFormat::Rgba8Unorm,
+            extent,
+        }
+    }
+
     pub fn new_depth(extent: Vector2<u32>) -> Self {
         Self {
             image_type: GfxImageType::DepthD2,
-            format: ImageFormat::D16Unorm,
+            format: GfxImageFormat::D16Unorm,
             extent,
         }
     }
@@ -75,7 +91,9 @@ impl FrameGraphBuilder {
             resource_name_map: HashMap::new(),
             inputs: HashMap::new(),
             passes: HashMap::new(),
+            pass_order: Vec::new(),
             frame_image_infos: HashMap::new(),
+            frame_image_infos_delayed: HashMap::new(),
             compute_pipelines: HashMap::new(),
             swapchain_image: None,
         }
@@ -105,6 +123,7 @@ impl FrameGraphBuilder {
         outputs: &[&dyn IntoFrameGraphResourceUntyped],
     ) -> FrameGraphResource<Pass> {
         let resource_handle = self.next_id(name.to_string());
+        debug!("Creating input pass with name `{}`.", name.to_string());
         self.passes.insert(
             resource_handle.as_untyped(),
             FrameGraphPass {
@@ -120,6 +139,8 @@ impl FrameGraphBuilder {
                 pass: None,
             },
         );
+        self.pass_order.push(resource_handle.as_untyped());
+
         resource_handle
     }
 
@@ -134,6 +155,7 @@ impl FrameGraphBuilder {
         F: Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext) + 'static,
     {
         let resource_handle = self.next_id(name.to_string());
+        debug!("Creating pass with name `{}`.", name.to_string());
         self.passes.insert(
             resource_handle.as_untyped(),
             FrameGraphPass {
@@ -149,18 +171,7 @@ impl FrameGraphBuilder {
                 pass: Some(Box::new(pass)),
             },
         );
-
-        resource_handle
-    }
-
-    pub fn create_pass_ref(
-        &mut self,
-        name: impl ToString,
-        inputs: &[&dyn IntoFrameGraphResourceUntyped],
-        outputs: &[&dyn IntoFrameGraphResourceUntyped],
-    ) -> FrameGraphResource<Pass> {
-        let resource_handle = self.next_id(name.to_string());
-        todo!("register");
+        self.pass_order.push(resource_handle.as_untyped());
 
         resource_handle
     }
@@ -184,6 +195,17 @@ impl FrameGraphBuilder {
     ) -> FrameGraphResource<Image> {
         let resource = self.next_id(name.to_string());
         self.frame_image_infos.insert(resource, create_info);
+        resource
+    }
+
+    pub fn create_frame_image_with_ctx(
+        &mut self,
+        name: &str,
+        create_fn: impl Fn(&FrameGraphContext) -> FrameGraphImageInfo + 'static,
+    ) -> FrameGraphResource<Image> {
+        let resource = self.next_id(name.to_string());
+        self.frame_image_infos_delayed
+            .insert(resource, Box::new(create_fn));
         resource
     }
 
@@ -233,7 +255,10 @@ pub struct FrameGraph {
 
     pub compute_pipelines:
         HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
+
     pub frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
+    pub frame_image_infos_delayed:
+        HashMap<FrameGraphResource<Image>, Box<dyn Fn(&FrameGraphContext) -> FrameGraphImageInfo>>,
 
     pub swapchain_image: FrameGraphResource<Image>,
 }
@@ -252,7 +277,8 @@ impl FrameGraph {
         required_resources.insert(swapchain_image.as_untyped());
 
         let mut used_passes = vec![];
-        for (pass_handle, pass_info) in builder.passes {
+        for pass_handle in builder.pass_order.iter().rev() {
+            let pass_info = builder.passes.remove(&pass_handle).unwrap();
             if pass_info
                 .outputs
                 .iter()
@@ -262,6 +288,10 @@ impl FrameGraph {
                 for pass_input in &pass_info.inputs {
                     required_resources.insert(*pass_input);
                 }
+                debug!(
+                    "Using pass `{}`.",
+                    builder.resource_infos[pass_info.id.id as usize].name
+                );
                 used_passes.push(pass_info);
             }
         }
@@ -283,6 +313,7 @@ impl FrameGraph {
             passes: used_passes,
             compute_pipelines: builder.compute_pipelines,
             frame_image_infos: builder.frame_image_infos,
+            frame_image_infos_delayed: builder.frame_image_infos_delayed,
             swapchain_image,
         })
     }
@@ -452,6 +483,7 @@ pub struct FGResourceBackendId {
 pub struct FrameGraphContext<'a> {
     pub frame_graph: &'a FrameGraph,
     pub resource_map: &'a HashMap<FrameGraphResource<Untyped>, FGResourceBackendId>,
+    pub supplied_inputs: &'a HashMap<FrameGraphResource<Untyped>, Box<dyn std::any::Any>>,
 }
 
 impl<'a> FrameGraphContextImpl for FrameGraphContext<'a> {
@@ -499,8 +531,15 @@ impl<'a> FrameGraphContext<'a> {
         self.get_resource_id(resource)
     }
 
-    pub fn get_vec2<T>(&self, resource: impl IntoFrameGraphResource<Vector2<T>>) -> Vector2<T> {
-        todo!()
+    pub fn get_vec2<T: Clone + 'static>(
+        &self,
+        resource: impl IntoFrameGraphResource<Vector2<T>>,
+    ) -> Vector2<T> {
+        let val = self
+            .supplied_inputs
+            .get(&resource.handle(self.frame_graph).as_untyped())
+            .expect("Input hasn't been supplied.");
+        val.downcast_ref::<Vector2<T>>().unwrap().clone()
     }
 }
 
