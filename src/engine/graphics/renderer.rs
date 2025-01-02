@@ -61,6 +61,8 @@ struct GraphConstants {
     rt: GraphConstantsRT,
     post_process: GraphConstantsPostProcess,
 
+    frame_info: &'static str,
+
     swapchain: &'static str,
     swapchain_size: &'static str,
 }
@@ -86,6 +88,7 @@ impl Renderer {
             },
             pass_post_process: "post_process_pass_post_process",
         },
+        frame_info: "frame_info_buffer",
         swapchain: "swapchain",
         swapchain_size: "swapchain_size",
     };
@@ -101,8 +104,12 @@ impl Renderer {
 
     fn construct_frame_graph(gfx_settings: &GraphicsSettings) -> FrameGraph {
         let mut builder = FrameGraph::builder();
+        // General frame resources.
+
         let swapchain_image = builder.create_input_image(Self::GRAPH.swapchain);
         let swapchain_size_input = builder.create_input(Self::GRAPH.swapchain_size);
+
+        let frame_info_buffer = builder.create_frame_buffer(Self::GRAPH.frame_info);
 
         // RT passes
         let rt_albedo_image = builder.create_frame_image(

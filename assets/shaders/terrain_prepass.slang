@@ -6,7 +6,7 @@ struct WorldInfo {
   Camera camera;
 }
 
-struct Uniforms {
+struct ShaderUniforms {
   [format("rgba32f")]
   WTexture2D<float4> backbuffer;
 //  [format("r32ui")]
@@ -17,7 +17,8 @@ struct Uniforms {
 //  ByteAddressBuffer model_voxel_data;
 }
 
-extern ParameterBlock<Uniforms> u_shader;
+extern ParameterBlock<uniforms::FrameUniforms> u_frame;
+extern ParameterBlock<ShaderUniforms> u_shader;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]

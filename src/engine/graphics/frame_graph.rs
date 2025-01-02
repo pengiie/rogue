@@ -33,6 +33,7 @@ pub struct FrameGraphBuilder {
     // function with gpu frame context.
     frame_image_infos_delayed:
         HashMap<FrameGraphResource<Image>, Box<dyn Fn(&FrameGraphContext) -> FrameGraphImageInfo>>,
+    frame_buffers: HashSet<FrameGraphResource<Buffer>>,
     compute_pipelines: HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
     swapchain_image: Option<FrameGraphResource<Image>>,
 }
@@ -94,6 +95,7 @@ impl FrameGraphBuilder {
             pass_order: Vec::new(),
             frame_image_infos: HashMap::new(),
             frame_image_infos_delayed: HashMap::new(),
+            frame_buffers: HashSet::new(),
             compute_pipelines: HashMap::new(),
             swapchain_image: None,
         }
@@ -184,8 +186,11 @@ impl FrameGraphBuilder {
         self.swapchain_image = Some(image);
     }
 
+    /// Frame buffers are automatically sized on write and cached for re-use.
     pub fn create_frame_buffer(&mut self, name: &str) -> FrameGraphResource<Buffer> {
-        todo!()
+        let resource = self.next_id(name.to_string());
+        self.frame_buffers.insert(resource);
+        resource
     }
 
     pub fn create_frame_image(

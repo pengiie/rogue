@@ -231,8 +231,7 @@ impl ShaderCompiler {
                     for field in field_type.element_type_layout().fields() {
                         let field_type = field.type_layout();
                         if field_type.kind() != slang::TypeKind::Resource {
-                            log::warn!("Encountered non-resource ParameterBlock field when reflecting shader.");
-                            continue;
+                            panic!("Encountered non-resource ParameterBlock field when reflecting shader.");
                         }
                         let binding_type = match field_type.resource_shape() {
                             slang::ResourceShape::SlangTexture2d => {
@@ -245,6 +244,9 @@ impl ShaderCompiler {
                                 } else {
                                     ShaderBindingType::SampledImage
                                 }
+                            }
+                            slang::ResourceShape::SlangStructuredBuffer => {
+                                ShaderBindingType::UniformBuffer
                             }
                             ty => todo!("Support reflection for shader resource type {:?}", ty),
                         };
