@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, num::NonZeroU32, sync::Arc};
+use std::{collections::HashMap, future::Future, mem::MaybeUninit, num::NonZeroU32, sync::Arc};
 
 use nalgebra::{Vector2, Vector3};
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     frame_graph::FrameGraph,
-    shader::{ShaderCompiler, ShaderPath},
+    shader::{ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
 
 pub enum GraphicsBackendEvent {
@@ -32,7 +32,7 @@ pub trait GraphicsBackendDevice {
 
     fn register_compute_pipeline(
         &mut self,
-        create_info: ComputePipelineCreateInfo,
+        create_info: GfxComputePipelineCreateInfo,
     ) -> ResourceId<ComputePipeline>;
     fn register_raster_pipeline(
         &mut self,
@@ -65,11 +65,14 @@ pub trait GraphicsBackendRecorder {
 }
 
 pub trait GraphicsBackendComputePass {
-    fn bind_uniforms(&mut self, bindings: HashMap<&str, Binding>);
+    /// Expects all uniforms listed in the shader to be present in UniformData, however that
+    /// doesn't mean the backend will constantly rebind the same descriptor set.
+    fn bind_uniforms(&mut self, uniform_data: UniformData);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn workgroup_size(&self) -> Vector3<u32>;
 }
 
-pub type ComputePass = Box<dyn GraphicsBackendComputePass>;
+pub type ComputePass<'a> = Box<dyn GraphicsBackendComputePass + 'a>;
 
 pub trait GraphicsBackendSwapchain {
     /// Gets the next available image in the swapchain.
@@ -80,12 +83,13 @@ pub trait GraphicsBackendSwapchain {
 pub trait GraphicsBackendPipelineManager {}
 
 pub trait GraphicsBackendFrameGraphExecutor {
-    fn begin_frame(&mut self, frame_graph: FrameGraph);
+    fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph);
     fn end_frame(&mut self) -> FrameGraph;
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
 }
 
+pub struct BindGroup;
 pub struct ComputePipeline;
 pub struct RasterPipeline;
 pub struct Untyped;
@@ -93,10 +97,18 @@ pub struct Image;
 pub struct Buffer;
 pub struct Memory;
 
-#[derive(Debug)]
 pub struct ResourceId<T> {
     id: u32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> std::fmt::Debug for ResourceId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceId")
+            .field("id", &self.id)
+            .field("type", &std::any::type_name::<T>())
+            .finish()
+    }
 }
 
 impl<T> std::fmt::Display for ResourceId<T> {
@@ -179,17 +191,106 @@ impl ResourceId<Image> {
     }
 }
 
-pub trait HasDeviceContext {}
+#[derive(Clone, PartialEq, Eq)]
+pub struct GfxComputePipelineInfo {
+    pub workgroup_size: Vector3<u32>,
+    pub set_bindings: Vec<ShaderSetBinding>,
+}
 
+#[derive(PartialEq, Eq)]
+pub struct UniformData {
+    data: HashMap<String, Binding>,
+}
+
+impl UniformData {
+    pub fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+        }
+    }
+
+    pub fn load(&mut self, full_uniform_name: impl ToString, binding: Binding) {
+        self.data.insert(full_uniform_name.to_string(), binding);
+    }
+
+    pub fn bindings(&self) -> impl Iterator<Item = &Binding> {
+        self.data.values()
+    }
+
+    /// Requires the passed in set bindings to be sorted by set index, and returns a vec sorted by
+    /// set index with the set bindings also sorted by binding index.
+    pub fn as_sets(&self, shader_set_bindings: &Vec<ShaderSetBinding>) -> Vec<UniformSetData> {
+        assert!(shader_set_bindings.is_sorted_by_key(|set| set.set_index));
+        let mut buckets = shader_set_bindings
+            .iter()
+            .map(|set| (0..set.bindings.len()).map(|_| None).collect())
+            .collect::<Vec<Vec<Option<Binding>>>>();
+
+        for (full_uniform_name, binding) in &self.data {
+            let parts = full_uniform_name.split(".").collect::<Vec<_>>();
+            let Some((set_index, binding_index)) =
+                shader_set_bindings
+                    .iter()
+                    .enumerate()
+                    .find_map(|(set_idx, set)| {
+                        if set.name != parts[0] {
+                            return None;
+                        }
+
+                        let binding_idx =
+                            set.bindings
+                                .iter()
+                                .enumerate()
+                                .find_map(|(i, shader_binding)| {
+                                    (shader_binding.binding_name == parts[1]).then_some(i)
+                                });
+
+                        binding_idx.map(|binding_idx| (set_idx, binding_idx))
+                    })
+            else {
+                panic!("Loaded uniform `{}` but a uniform with that qualified name does not exist in the target shader.", full_uniform_name);
+            };
+
+            buckets[set_index][binding_index] = Some(binding.clone());
+        }
+
+        // Safety: We ensure each uniforms data has been provided for the given sets.
+        buckets
+            .into_iter()
+            .enumerate()
+            .map(|(set_idx, bucket)| UniformSetData {
+                data: bucket
+                    .into_iter()
+                    .enumerate()
+                    .map(|(binding_idx, binding)| {
+                        binding.expect(&format!(
+                            "Uniform for set {}, binding {} was not set.",
+                            set_idx, binding_idx
+                        ))
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct UniformSetData {
+    /// Set bindings ordered by backend binding index.
+    pub data: Vec<Binding>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Binding {
     Image { image: ResourceId<Image> },
     Sampler {},
     Buffer {},
 }
 
-pub struct ComputePipelineCreateInfo {
-    shader_path: ShaderPath,
-    entry_point_fn: String,
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct GfxComputePipelineCreateInfo {
+    pub shader_path: ShaderPath,
+    pub entry_point_fn: String,
 }
 
 pub struct RasterPipelineCreateInfo {}

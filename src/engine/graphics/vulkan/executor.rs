@@ -1,15 +1,17 @@
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap, ops::Deref, sync::Arc};
 
 use log::{debug, warn};
 
 use crate::engine::graphics::{
     backend::{
-        Buffer, GfxImageCreateInfo, GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
+        Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
+        GfxImageCreateInfo, GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
     },
     frame_graph::{
         self, FGResourceBackendId, FrameGraph, FrameGraphContext, FrameGraphContextImpl,
         FrameGraphImageInfo, FrameGraphResource, FrameGraphResourceImpl, IntoFrameGraphResource,
     },
+    shader::ShaderCompiler,
 };
 
 use super::{
@@ -28,6 +30,7 @@ pub struct VulkanFrameGraphExecutor {
 struct VulkanExecutorResourceManager {
     ctx: Arc<VulkanContext>,
     cached_frame_images: HashMap<FrameGraphImageInfo, ResourceId<Image>>,
+    cached_compute_pipelines: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
     // if we can move resources to the cache for reuse.
@@ -42,6 +45,10 @@ enum VulkanExecutorCachedResource {
     Buffer {
         id: ResourceId<Buffer>,
     },
+    ComputePipeline {
+        id: ResourceId<ComputePipeline>,
+        info: GfxComputePipelineCreateInfo,
+    },
 }
 
 impl VulkanExecutorResourceManager {
@@ -49,6 +56,7 @@ impl VulkanExecutorResourceManager {
         Self {
             ctx: ctx.clone(),
             cached_frame_images: HashMap::new(),
+            cached_compute_pipelines: HashMap::new(),
             cache_timeline: (0..ctx.frames_in_flight())
                 .map(|_| Vec::new())
                 .collect::<Vec<_>>(),
@@ -73,9 +81,48 @@ impl VulkanExecutorResourceManager {
                         self.cached_frame_images.insert(image_info, id);
                     }
                     VulkanExecutorCachedResource::Buffer { id } => todo!(),
+                    VulkanExecutorCachedResource::ComputePipeline { id, info } => {
+                        self.cached_compute_pipelines.insert(info, id);
+                    }
                 }
             }
         }
+    }
+
+    /// Gets an image which is only valid for the context of the
+    /// current cpu frame, and the next gpu frame to be submitted.
+    fn get_or_create_frame_image(
+        &mut self,
+        resource_name: &str,
+        create_info: FrameGraphImageInfo,
+    ) -> ResourceId<Image> {
+        let (create_info, image_id) = self
+            .cached_frame_images
+            .remove_entry(&create_info)
+            .take()
+            .unwrap_or_else(|| {
+                let gfx_create_info = GfxImageCreateInfo {
+                    name: format!("frame_image_{}", resource_name),
+                    image_type: create_info.image_type,
+                    format: create_info.format,
+                    extent: create_info.extent,
+                };
+                let new_image = self.ctx.create_image(gfx_create_info).expect(&format!(
+                    "Failed to create frame image for resource {}.",
+                    resource_name
+                ));
+
+                (create_info, new_image)
+            });
+
+        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
+            VulkanExecutorCachedResource::Image {
+                id: image_id,
+                image_info: create_info,
+            },
+        );
+
+        image_id
     }
 
     fn get_or_create_image(
@@ -110,6 +157,34 @@ impl VulkanExecutorResourceManager {
         );
 
         image_id
+    }
+
+    fn get_or_create_compute_pipeline(
+        &mut self,
+        shader_compiler: &mut ShaderCompiler,
+        create_info: &GfxComputePipelineCreateInfo,
+    ) -> ResourceId<ComputePipeline> {
+        let (create_info, compute_pipeline) = self
+            .cached_compute_pipelines
+            .remove_entry(&create_info)
+            .take()
+            .unwrap_or_else(|| {
+                let compute_pipeline = self
+                    .ctx
+                    .create_compute_pipeline(shader_compiler, create_info.clone())
+                    .expect("Failed to create graphics compute pipeline.");
+
+                (create_info.clone(), compute_pipeline)
+            });
+
+        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
+            VulkanExecutorCachedResource::ComputePipeline {
+                id: compute_pipeline,
+                info: create_info,
+            },
+        );
+
+        compute_pipeline
     }
 }
 
@@ -154,6 +229,23 @@ impl VulkanFrameGraphExecutor {
             .expect("Tried to access frame session but no session exists currently.")
     }
 
+    fn initialize_session_pipelines(&mut self, shader_compiler: &mut ShaderCompiler) {
+        let session = self.session.as_mut().unwrap();
+        for (frame_resource, compute_pipeline_info) in &session.frame_graph.compute_pipelines {
+            let compute_pipeline = self
+                .ctx
+                .create_compute_pipeline(shader_compiler, compute_pipeline_info.clone())
+                .expect("Failed to create graphics compute pipeline.");
+            session.resource_map.insert(
+                frame_resource.as_untyped(),
+                FGResourceBackendId {
+                    resource_id: compute_pipeline.as_untyped(),
+                    expected_type: std::any::TypeId::of::<ComputePipeline>(),
+                },
+            );
+        }
+    }
+
     fn acquire_command_buffers(
         &mut self,
         count: u32,
@@ -185,17 +277,20 @@ impl VulkanFrameGraphExecutor {
 
                 let input_info = &session.frame_graph.resource_infos[input.id() as usize];
                 if input_info.type_id == std::any::TypeId::of::<Image>()
-                    && session.frame_graph.frame_image_infos.contains_key(input)
+                    && session
+                        .frame_graph
+                        .frame_image_infos
+                        .contains_key(&input.as_typed())
                 {
                     let frame_image_info = session
                         .frame_graph
                         .frame_image_infos
-                        .get(input)
+                        .get(&input.as_typed())
                         .unwrap()
                         .clone();
                     let frame_image = self
                         .resource_manager
-                        .get_or_create_image(&input_info.name, frame_image_info);
+                        .get_or_create_frame_image(&input_info.name, frame_image_info);
 
                     session.resource_map.insert(
                         *input,
@@ -228,7 +323,7 @@ impl Drop for VulkanFrameGraphExecutor {
 }
 
 impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
-    fn begin_frame(&mut self, frame_graph: FrameGraph) {
+    fn begin_frame(&mut self, shader_comiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
         let curr_cmd_pool = self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
         unsafe {
             self.ctx.device().reset_command_pool(
@@ -238,8 +333,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         };
 
         self.session = Some(FrameSession::new(frame_graph));
-
         self.resource_manager.retire_resources();
+        self.initialize_session_pipelines(shader_comiler);
     }
 
     fn end_frame(&mut self) -> FrameGraph {

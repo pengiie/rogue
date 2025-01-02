@@ -5,9 +5,13 @@ use nalgebra::Vector2;
 
 use crate::common::dyn_vec::TypeInfo;
 
-use super::backend::{
-    Buffer, ComputePipeline, GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image,
-    ImageFormat, ResourceId, Untyped,
+use super::{
+    backend::{
+        Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
+        GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image, ImageFormat,
+        ResourceId, Untyped,
+    },
+    shader::ShaderPath,
 };
 
 pub struct Baked;
@@ -17,7 +21,8 @@ pub struct FrameGraphBuilder {
     resource_infos: Vec<FrameGraphResourceInfo>,
     inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     passes: HashMap<FrameGraphResource<Untyped>, FrameGraphPass>,
-    frame_image_infos: HashMap<FrameGraphResource<Untyped>, FrameGraphImageInfo>,
+    frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
+    compute_pipelines: HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
     swapchain_image: Option<FrameGraphResource<Image>>,
 }
 
@@ -65,6 +70,7 @@ impl FrameGraphBuilder {
             inputs: HashMap::new(),
             passes: HashMap::new(),
             frame_image_infos: HashMap::new(),
+            compute_pipelines: HashMap::new(),
             swapchain_image: None,
         }
     }
@@ -142,17 +148,25 @@ impl FrameGraphBuilder {
         create_info: FrameGraphImageInfo,
     ) -> FrameGraphResource<Image> {
         let resource = self.next_id(name.to_string());
-        self.frame_image_infos
-            .insert(resource.as_untyped(), create_info);
+        self.frame_image_infos.insert(resource, create_info);
         resource
     }
 
     pub fn create_compute_pipeline(
         &mut self,
         name: &str,
-        create_info: FGComputeInfo<'_>,
+        create_info: FrameGraphComputeInfo<'_>,
     ) -> FrameGraphResource<ComputePipeline> {
-        todo!()
+        let resource_handle = self.next_id(name.to_string());
+        let create_info = GfxComputePipelineCreateInfo {
+            shader_path: ShaderPath::new(create_info.shader_path.to_owned()).expect(&format!(
+                "Invalid shader path `{}`.",
+                create_info.shader_path
+            )),
+            entry_point_fn: create_info.entry_point_fn.to_owned(),
+        };
+        self.compute_pipelines.insert(resource_handle, create_info);
+        resource_handle
     }
 
     pub fn create_input_image(&mut self, name: impl ToString) -> FrameGraphResource<Image> {
@@ -182,7 +196,9 @@ pub struct FrameGraph {
     pub inputs: HashMap<FrameGraphResource<Untyped>, TypeInfo>,
     pub passes: Vec<FrameGraphPass>,
 
-    pub frame_image_infos: HashMap<FrameGraphResource<Untyped>, FrameGraphImageInfo>,
+    pub compute_pipelines:
+        HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
+    pub frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
 
     pub swapchain_image: FrameGraphResource<Image>,
 }
@@ -230,6 +246,7 @@ impl FrameGraph {
             resource_name_map,
             inputs: builder.inputs,
             passes: used_passes,
+            compute_pipelines: builder.compute_pipelines,
             frame_image_infos: builder.frame_image_infos,
             swapchain_image,
         })
@@ -256,6 +273,13 @@ impl<T> FrameGraphResource<T> {
     pub fn new(id: u32) -> Self {
         Self {
             id,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_typed<S>(&self) -> FrameGraphResource<S> {
+        FrameGraphResource {
+            id: self.id,
             _marker: std::marker::PhantomData,
         }
     }
@@ -384,176 +408,10 @@ impl<'a> FrameGraphContext<'a> {
     }
 }
 
-pub struct FGComputeInfo<'a> {
+pub struct FrameGraphComputeInfo<'a> {
     /// Shader path starting from the assets/shader directory, with the separator being :: and
     /// excluding the file extension since Slang is expected.
     /// So a valid path would be `pass::blit`.
     pub shader_path: &'a str,
     pub entry_point_fn: &'a str,
 }
-
-// TODO: Isn't a graph much right now, but that's ok since we are not using Vulkan right now.
-// pub struct FrameGraph {}
-//
-// pub struct ComputePipeline;
-// pub struct Image;
-// pub struct Buffer;
-// pub struct FrameResource<T> {
-//     _marker: std::marker::PhantomData<T>,
-// }
-//
-// pub struct FrameResourceRef<T> {
-//     _marker: std::marker::PhantomData<T>,
-// }
-//
-// impl<T> FrameResource<T> {
-//     pub fn new() -> Self {
-//         Self {
-//             _marker: std::marker::PhantomData,
-//         }
-//     }
-// }
-//
-// impl FrameResource<ComputePipeline> {}
-//
-// impl FrameGraph {
-//     fn new() -> Self {
-//         Self {}
-//     }
-//
-//     pub fn run_tasks(&mut self) {}
-//
-//     pub fn cached_builder(self) -> FrameGraphBuilder {
-//         FrameGraphBuilder::new(Some(self))
-//     }
-//
-//     pub fn builder() -> FrameGraphBuilder {
-//         FrameGraphBuilder::new(None)
-//     }
-// }
-//
-// pub struct FrameContext {}
-//
-// pub struct WgpuFrameRecorderImpl<'a> {
-//     encoder: wgpu::CommandEncoder,
-//
-//     last_compute_pass: Option<wgpu::ComputePass<'a>>,
-// }
-//
-// impl<'a> FrameRecorderImpl for WgpuFrameRecorderImpl<'a> {
-//     fn begin_compute_pass(&mut self) {
-//         self.last_compute_pass = Some(self.encoder.begin_compute_pass(
-//             &wgpu::ComputePassDescriptor {
-//                 label: Some("compute_pass"),
-//                 timestamp_writes: todo!(),
-//             },
-//         ));
-//     }
-//
-//     fn end_compute_pass(&mut self) {
-//         let _dropped = self.last_compute_pass.take();
-//     }
-//
-//     fn set_compute_pipeline(&mut self, compute_pipeline: &wgpu::ComputePipeline) {
-//         let Some(compute_pass) = &mut self.last_compute_pass else {
-//             panic!("Dispatch must be called from within a compute pass");
-//         };
-//         compute_pass.set_pipeline(compute_pipeline);
-//     }
-//
-//     fn dispatch(&mut self, x: u32, y: u32, z: u32) {
-//         let Some(compute_pass) = &mut self.last_compute_pass else {
-//             panic!("Dispatch must be called from within a compute pass");
-//         };
-//         compute_pass.dispatch_workgroups(x, y, z);
-//     }
-// }
-//
-// trait FrameRecorderImpl {
-//     fn begin_compute_pass(&mut self);
-//     fn end_compute_pass(&mut self);
-//     fn set_compute_pipeline(&mut self, compute_pipeline: &wgpu::ComputePipeline);
-//     fn dispatch(&mut self, x: u32, y: u32, z: u32);
-// }
-//
-// pub struct FrameRecorder {
-//     recorder: Box<dyn FrameRecorderImpl>,
-// }
-//
-// impl FrameRecorder {
-//     pub fn begin_compute_pass(&self) {}
-//     pub fn begin_render_pass(&self) {}
-//     pub fn blit(&self) {}
-// }
-//
-// pub struct RecordComputePass<'a> {
-//     recorder: &'a mut FrameRecorder,
-// }
-//
-// impl RecordComputePass<'_> {
-//     pub fn dispatch(&mut self, x: u32, y: u32, z: u32) {
-//         self.recorder.recorder.dispatch(x, y, z);
-//     }
-// }
-//
-// impl Drop for RecordComputePass<'_> {
-//     fn drop(&mut self) {
-//         self.recorder.recorder.end_compute_pass();
-//     }
-// }
-//
-// pub struct FrameComputePipelineInfo {}
-//
-// impl FrameComputePipelineInfo {
-//     pub fn input(binding: u32, )
-// }
-//
-// pub struct FrameGraphBuilder {
-//     cached_graph: Option<FrameGraph>,
-// }
-//
-// impl FrameGraphBuilder {
-//     fn new(cached_graph: Option<FrameGraph>) -> Self {
-//         Self { cached_graph }
-//     }
-//
-//     pub fn create_image(&mut self, name: &str) -> FrameResource<Image> {}
-//     pub fn create_texture(&mut self, name: &str) -> FrameResourceRef<Image> {}
-//     pub fn create_buffer(&mut self, name: &str) {}
-//     pub fn create_typed_buffer<T>(&mut self, name: &str) {}
-//     pub fn create_buffer_ref(&mut self, name: &str) -> FrameResourceRef<Buffer> {}
-//
-//     pub fn create_raster_pipeline(&mut self, name: &str) {}
-//     pub fn create_compute_pipeline(&mut self, name: &str, info: &FrameComputePipelineInfo) {}
-//
-//     pub fn add_task<F>(&mut self, task_fn: impl Into<FrameTask>) {}
-//
-//     pub fn build(self) -> FrameGraph {
-//         if let Some(cached_graph) = self.cached_graph {
-//             return cached_graph;
-//         } else {
-//             let new_graph = FrameGraph::new();
-//             return new_graph;
-//         }
-//     }
-// }
-//
-// impl<F1, F2> Into<FrameTask> for (F1, F2)
-// where
-//     F1: FnOnce() -> Vec<FrameTaskDependency>,
-//     F2: FnMut(&mut FrameRecorder, &FrameContext) + 'static,
-// {
-//     fn into(self) -> FrameTask {
-//         FrameTask {
-//             dependencies: self.0(),
-//             boxed_run: Box::new(self.1),
-//         }
-//     }
-// }
-//
-// pub struct FrameTask {
-//     pub dependencies: Vec<FrameTaskDependency>,
-//     pub boxed_run: Box<dyn FnMut(&mut FrameRecorder, &FrameContext)>,
-// }
-//
-// pub struct FrameTaskDependency {}

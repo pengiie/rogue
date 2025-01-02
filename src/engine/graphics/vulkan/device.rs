@@ -1,6 +1,6 @@
 use std::{
     borrow::BorrowMut,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::CString,
     num::NonZeroU32,
     sync::{
@@ -10,23 +10,29 @@ use std::{
     u64,
 };
 
-use anyhow::Context;
-use ash::vk::{QueueFlags, SemaphoreType};
+use anyhow::{anyhow, Context};
+use ash::vk::{self, QueueFlags, SemaphoreType};
 use log::{debug, warn};
-use nalgebra::Vector2;
+use nalgebra::{Vector2, Vector3};
+use parking_lot::lock_api::RwLock;
 use raw_window_handle::{HasDisplayHandle, HasRawWindowHandle, HasWindowHandle};
 
 use crate::engine::{
     event::Events,
     graphics::{
         backend::{
-            Buffer, ComputePipeline, ComputePipelineCreateInfo, GfxBufferCreateInfo, GfxFilterMode,
+            BindGroup, Binding, Buffer, ComputePipeline, GfxBufferCreateInfo,
+            GfxComputePipelineCreateInfo, GfxComputePipelineInfo, GfxFilterMode,
             GfxImageCreateInfo, GfxImageInfo, GfxImageType, GfxPresentMode, GfxSwapchainInfo,
             GraphicsBackendDevice, GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image,
-            ImageFormat, Memory, RasterPipeline, RasterPipelineCreateInfo, ResourceId, Untyped,
+            ImageFormat, Memory, RasterPipeline, RasterPipelineCreateInfo, ResourceId, UniformData,
+            UniformSetData, Untyped,
         },
         gpu_allocator::{Allocation, AllocatorTree},
-        shader::ShaderCompiler,
+        shader::{
+            Shader, ShaderBindingType, ShaderCompilationOptions, ShaderCompilationTarget,
+            ShaderCompiler, ShaderSetBinding, ShaderStage,
+        },
     },
     window::window::{Window, WindowHandle},
 };
@@ -40,6 +46,25 @@ pub struct VulkanContextInner {
     surface: ash::vk::SurfaceKHR,
     physical_device: VulkanPhysicalDevice,
     device: ash::Device,
+
+    // The number of frames the cpu and gpu can process before waiting.
+    frames_in_flight: u32,
+
+    /// The current frame the cpu is working on.
+    current_cpu_frame: AtomicU64,
+    /// The current frame the gpu is working on.
+    gpu_timeline_semaphore: ash::vk::Semaphore,
+}
+
+impl VulkanContextInner {
+    pub fn curr_cpu_frame(&self) -> u64 {
+        self.current_cpu_frame
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn curr_cpu_frame_index(&self) -> u32 {
+        (self.curr_cpu_frame() % self.frames_in_flight as u64) as u32
+    }
 }
 
 impl Drop for VulkanContextInner {
@@ -47,6 +72,8 @@ impl Drop for VulkanContextInner {
         unsafe {
             self.device.device_wait_idle().unwrap();
 
+            self.device
+                .destroy_semaphore(self.gpu_timeline_semaphore, None);
             self.device.destroy_device(None);
         };
 
@@ -70,16 +97,9 @@ impl Drop for VulkanContextInner {
 pub struct VulkanContext {
     inner: Arc<VulkanContextInner>,
     swapchain: parking_lot::RwLock<Arc<VulkanSwapchain>>,
+    /// submitted
     main_queue: ash::vk::Queue,
     main_queue_family_index: u32,
-
-    // The number of frames the cpu and gpu can process before waiting.
-    frames_in_flight: u32,
-
-    /// The current frame the cpu is working on.
-    current_cpu_frame: AtomicU64,
-    /// The current frame the gpu is working on.
-    gpu_timeline_semaphore: ash::vk::Semaphore,
 
     // Semaphore when the swapchain image is acquired.
     image_acquire_semaphores: Vec<ash::vk::Semaphore>,
@@ -107,7 +127,7 @@ impl VulkanContext {
     }
 
     pub fn frames_in_flight(&self) -> u32 {
-        self.frames_in_flight
+        self.inner.frames_in_flight
     }
 
     pub fn surface_loader(&self) -> ash::khr::surface::Instance {
@@ -127,8 +147,7 @@ impl VulkanContext {
     }
 
     pub fn curr_cpu_frame(&self) -> u64 {
-        self.current_cpu_frame
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.inner.curr_cpu_frame()
     }
 
     pub fn curr_gpu_frame(&self) -> u64 {
@@ -140,7 +159,7 @@ impl VulkanContext {
     }
 
     pub fn curr_cpu_frame_index(&self) -> u32 {
-        (self.curr_cpu_frame() % self.frames_in_flight() as u64) as u32
+        self.inner.curr_cpu_frame_index()
     }
 
     pub fn curr_image_acquire_semaphore(&self) -> ash::vk::Semaphore {
@@ -152,7 +171,7 @@ impl VulkanContext {
     }
 
     pub fn gpu_timeline_semaphore(&self) -> ash::vk::Semaphore {
-        self.gpu_timeline_semaphore
+        self.inner.gpu_timeline_semaphore
     }
 
     pub fn main_queue(&self) -> ash::vk::Queue {
@@ -180,6 +199,37 @@ impl VulkanContext {
         let mut memory_allocator = self.memory_allocator.write();
         self.resource_manager
             .create_buffer(&mut memory_allocator, create_info)
+    }
+
+    pub fn create_compute_pipeline(
+        &self,
+        shader_compiler: &mut ShaderCompiler,
+        create_info: GfxComputePipelineCreateInfo,
+    ) -> anyhow::Result<ResourceId<ComputePipeline>> {
+        self.resource_manager
+            .create_compute_pipeline(shader_compiler, create_info)
+    }
+
+    pub fn get_compute_pipeline(
+        &self,
+        compute_pipeline: ResourceId<ComputePipeline>,
+    ) -> VulkanComputePipeline {
+        self.resource_manager.get_compute_pipeline(compute_pipeline)
+    }
+
+    pub fn bind_uniforms(
+        &self,
+        command_buffer: ash::vk::CommandBuffer,
+        pipeline: ResourceId<Untyped>,
+        pipeline_bind_point: ash::vk::PipelineBindPoint,
+        uniform_data: UniformData,
+    ) {
+        self.resource_manager.bind_uniforms(
+            command_buffer,
+            pipeline_bind_point,
+            pipeline,
+            uniform_data,
+        );
     }
 }
 
@@ -505,6 +555,11 @@ impl VulkanDevice {
             surface,
             physical_device,
             device,
+
+            frames_in_flight,
+            // One since `gpu_timeline_semaphore` starts signalling 0.
+            current_cpu_frame: AtomicU64::new(1),
+            gpu_timeline_semaphore: timeline_semaphore,
         });
         let resource_manager = VulkanResourceManager::new(&context_inner);
         let swapchain_images = swapchain_images
@@ -536,11 +591,6 @@ impl VulkanDevice {
             main_queue,
 
             swapchain_image_index: AtomicU32::new(0),
-
-            frames_in_flight,
-            // One since `gpu_timeline_semaphore` starts signalling 0.
-            current_cpu_frame: AtomicU64::new(1),
-            gpu_timeline_semaphore: timeline_semaphore,
 
             image_acquire_semaphores,
             image_ready_semaphores,
@@ -645,7 +695,6 @@ impl Drop for VulkanContext {
                 .image_ready_semaphores
                 .iter()
                 .chain(&self.image_acquire_semaphores)
-                .chain(std::slice::from_ref(&self.gpu_timeline_semaphore))
             {
                 self.device().destroy_semaphore(*semaphore, None);
             }
@@ -666,14 +715,17 @@ impl GraphicsBackendDevice for VulkanDevice {
         // Equals n - 1, where n is the current cpu frame.
         let prev_cpu_frame = self
             .context
+            .inner
             .current_cpu_frame
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Wait for gpu timeline semaphore for n - (f - 1), where f is the # of frames in flight.
-        let fif_minus_one = self.context.frames_in_flight as u64 - 1;
+        let fif_minus_one = self.context.inner.frames_in_flight as u64 - 1;
         if prev_cpu_frame >= fif_minus_one {
             let wait_gpu_frame = prev_cpu_frame - fif_minus_one;
             let wait_info = ash::vk::SemaphoreWaitInfo::default()
-                .semaphores(std::slice::from_ref(&self.context.gpu_timeline_semaphore))
+                .semaphores(std::slice::from_ref(
+                    &self.context.inner.gpu_timeline_semaphore,
+                ))
                 .values(std::slice::from_ref(&wait_gpu_frame));
 
             // TODO: Worry about timeout.
@@ -687,7 +739,7 @@ impl GraphicsBackendDevice for VulkanDevice {
 
     fn register_compute_pipeline(
         &mut self,
-        create_info: ComputePipelineCreateInfo,
+        create_info: GfxComputePipelineCreateInfo,
     ) -> ResourceId<ComputePipeline> {
         todo!()
     }
@@ -995,6 +1047,8 @@ impl Drop for VulkanAllocator {
     }
 }
 
+// TODO: Use freelist allocators instead. Especially important for descriptor set layouts since the
+// vec will only grow at the moment.
 pub struct VulkanResourceManager {
     ctx: Arc<VulkanContextInner>,
 
@@ -1004,6 +1058,44 @@ pub struct VulkanResourceManager {
     borrowed_images: parking_lot::RwLock<HashMap<ResourceId<Image>, VulkanBorrowedImage>>,
     owned_images: parking_lot::RwLock<HashMap<ResourceId<Image>, VulkanImage>>,
     owned_buffers: parking_lot::RwLock<HashMap<ResourceId<Buffer>, VulkanBuffer>>,
+
+    pipeline_layouts: parking_lot::RwLock<Vec<VulkanPipelineLayout>>,
+    shader_pipeline_layout_map:
+        parking_lot::RwLock<HashMap<Vec<ShaderSetBinding>, /*pipeline_layout_index=*/ u64>>,
+
+    compute_pipelines:
+        parking_lot::RwLock<HashMap<ResourceId<ComputePipeline>, VulkanComputePipeline>>,
+
+    descriptor_pool: ash::vk::DescriptorPool,
+    descriptor_sets: parking_lot::RwLock<HashMap<ShaderSetBinding, VulkanDescriptorSet>>,
+}
+
+struct VulkanDescriptorSet {
+    layout: ash::vk::DescriptorSetLayout,
+    pipeline_ref_count: u32,
+    // Vec size is # of frames in flight. Meaning one descriptor set used per frame per layout.
+    // TODO: Support multiple descriptor sets with the same layout to allow for multiple queues,
+    // this would require abstracting the descriptor set away from the "frame" due to async contexts.
+    frame_sets: Vec<
+        Option<(
+            ash::vk::DescriptorSet,
+            /*last_bound_uniform_data=*/ UniformSetData,
+        )>,
+    >,
+}
+
+pub struct VulkanPipelineLayout {
+    pub layout: ash::vk::PipelineLayout,
+    pub shader_bindings: Vec<ShaderSetBinding>,
+    // TODO: ref count so we can auto destruct non needed pipeline layouts.
+    // pub ref_count: u32
+}
+
+#[derive(Clone)]
+pub struct VulkanComputePipeline {
+    pub pipeline_layout: u64,
+    pub pipeline: ash::vk::Pipeline,
+    pub workgroup_size: Vector3<u32>,
 }
 
 struct VulkanBuffer {
@@ -1118,8 +1210,44 @@ struct VulkanBorrowedImageCreateInfo {
     info: VulkanImageInfo,
 }
 
+enum VulkanSetWriteIndex {
+    ImageInfo(usize),
+    BufferInfo(usize),
+}
+
 impl VulkanResourceManager {
     fn new(ctx: &Arc<VulkanContextInner>) -> Self {
+        let descriptor_pool = {
+            const DESC_COUNT: u32 = 100;
+            let pool_sizes = [
+                ash::vk::DescriptorPoolSize::default()
+                    .ty(ash::vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(DESC_COUNT),
+                ash::vk::DescriptorPoolSize::default()
+                    .ty(ash::vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(DESC_COUNT),
+                ash::vk::DescriptorPoolSize::default()
+                    .ty(ash::vk::DescriptorType::SAMPLER)
+                    .descriptor_count(DESC_COUNT),
+                ash::vk::DescriptorPoolSize::default()
+                    .ty(ash::vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(DESC_COUNT),
+                ash::vk::DescriptorPoolSize::default()
+                    .ty(ash::vk::DescriptorType::STORAGE_IMAGE)
+                    .descriptor_count(DESC_COUNT),
+            ];
+
+            let create_info = ash::vk::DescriptorPoolCreateInfo::default()
+                .max_sets(DESC_COUNT)
+                .flags(ash::vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+                .pool_sizes(&pool_sizes);
+            unsafe {
+                ctx.device
+                    .create_descriptor_pool(&create_info, None)
+                    .expect("Failed to create descriptor pool")
+            }
+        };
+
         Self {
             ctx: ctx.clone(),
 
@@ -1128,6 +1256,13 @@ impl VulkanResourceManager {
             borrowed_images: parking_lot::RwLock::new(HashMap::new()),
             owned_images: parking_lot::RwLock::new(HashMap::new()),
             owned_buffers: parking_lot::RwLock::new(HashMap::new()),
+
+            pipeline_layouts: parking_lot::RwLock::new(Vec::new()),
+            shader_pipeline_layout_map: parking_lot::RwLock::new(HashMap::new()),
+            compute_pipelines: parking_lot::RwLock::new(HashMap::new()),
+
+            descriptor_pool,
+            descriptor_sets: parking_lot::RwLock::new(HashMap::new()),
         }
     }
 
@@ -1137,6 +1272,287 @@ impl VulkanResourceManager {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         );
         resource_id
+    }
+
+    fn create_shader_module(&self, shader: &Shader) -> anyhow::Result<ash::vk::ShaderModule> {
+        let create_info = ash::vk::ShaderModuleCreateInfo::default().code(shader.as_u32_slice());
+        let shader_module = unsafe { self.ctx.device.create_shader_module(&create_info, None) }?;
+        Ok(shader_module)
+    }
+
+    fn create_descriptor_set_layout(
+        &self,
+        set_binding: &ShaderSetBinding,
+    ) -> anyhow::Result<ash::vk::DescriptorSetLayout> {
+        let layout_bindings = set_binding
+            .bindings
+            .iter()
+            .map(|binding| {
+                let vk_binding_type = match binding.binding_type {
+                    ShaderBindingType::Sampler => ash::vk::DescriptorType::SAMPLER,
+                    ShaderBindingType::SampledImage => ash::vk::DescriptorType::SAMPLED_IMAGE,
+                    ShaderBindingType::StorageImage => ash::vk::DescriptorType::STORAGE_IMAGE,
+                    ShaderBindingType::UniformBuffer => ash::vk::DescriptorType::UNIFORM_BUFFER,
+                    ShaderBindingType::StorageBuffer => ash::vk::DescriptorType::STORAGE_BUFFER,
+                };
+                let vk_binding = ash::vk::DescriptorSetLayoutBinding::default()
+                    .binding(binding.binding_index)
+                    .descriptor_count(1)
+                    .descriptor_type(vk_binding_type)
+                    .stage_flags(ash::vk::ShaderStageFlags::ALL);
+
+                vk_binding
+            })
+            .collect::<Vec<_>>();
+
+        let create_info =
+            ash::vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_bindings);
+        let set_layout = unsafe {
+            self.ctx
+                .device
+                .create_descriptor_set_layout(&create_info, None)
+        }?;
+        Ok(set_layout)
+    }
+
+    fn create_pipeline_layout(&self, shader: &Shader) -> anyhow::Result<u64> {
+        use std::collections::hash_map::Entry;
+
+        let mut shader_pipeline_layout_map = self.shader_pipeline_layout_map.write();
+        if let Some(layout_index) = shader_pipeline_layout_map.get(shader.bindings()) {
+            return Ok(*layout_index);
+        };
+
+        let mut vk_set_layouts = Vec::new();
+        let mut descriptor_set_map = self.descriptor_sets.write();
+
+        for shader_set in shader.bindings() {
+            // Get or create the descriptor set layout that relates to the shader set bindings.
+            let layout = if let Some(layout) = descriptor_set_map.get_mut(&shader_set) {
+                layout.pipeline_ref_count += 1;
+                layout.layout
+            } else {
+                let new_layout = self.create_descriptor_set_layout(shader_set)?;
+                descriptor_set_map.insert(
+                    shader_set.clone(),
+                    VulkanDescriptorSet {
+                        layout: new_layout,
+                        pipeline_ref_count: 1,
+                        frame_sets: (0..self.ctx.frames_in_flight).map(|_| None).collect(),
+                    },
+                );
+
+                new_layout
+            };
+
+            vk_set_layouts.push(layout);
+        }
+
+        // TODO: Use push constants in the future.
+        let create_info = ash::vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&vk_set_layouts)
+            .push_constant_ranges(&[]);
+        let pipeline_layout =
+            unsafe { self.ctx.device.create_pipeline_layout(&create_info, None) }?;
+        let mut pipeline_layouts = self.pipeline_layouts.write();
+        pipeline_layouts.push(VulkanPipelineLayout {
+            layout: pipeline_layout,
+            shader_bindings: shader.bindings().clone(),
+        });
+        let layout_index = pipeline_layouts.len() as u64 - 1;
+
+        Ok(layout_index)
+    }
+
+    fn create_compute_pipeline(
+        &self,
+        shader_compiler: &mut ShaderCompiler,
+        create_info: GfxComputePipelineCreateInfo,
+    ) -> anyhow::Result<ResourceId<ComputePipeline>> {
+        let resource_id = self.next_resource_id();
+
+        let shader = shader_compiler.compile_shader(ShaderCompilationOptions {
+            module: create_info.shader_path.module(),
+            entry_point: create_info.entry_point_fn,
+            stage: ShaderStage::Compute,
+            target: ShaderCompilationTarget::SpirV,
+            macro_defines: HashMap::new(),
+        })?;
+        let shader_module = self.create_shader_module(shader)?;
+
+        let pipeline_layout_index = self.create_pipeline_layout(shader)?;
+        let vk_pipeline_layout = self
+            .pipeline_layouts
+            .read()
+            .get(pipeline_layout_index as usize)
+            .unwrap()
+            .layout;
+
+        let c_entry_point_name = CString::new(shader.entry_point_name()).unwrap();
+        let create_infos = [ash::vk::ComputePipelineCreateInfo::default()
+            .layout(vk_pipeline_layout)
+            .stage(
+                ash::vk::PipelineShaderStageCreateInfo::default()
+                    .module(shader_module)
+                    .name(&c_entry_point_name)
+                    .stage(ash::vk::ShaderStageFlags::COMPUTE),
+            )];
+        let compute_pipeline = unsafe {
+            self.ctx.device.create_compute_pipelines(
+                ash::vk::PipelineCache::null(),
+                &create_infos,
+                None,
+            )
+        }
+        .map_err(|_| anyhow!("Failed to create vulkan compute pipeline."))?
+        .remove(0);
+
+        self.compute_pipelines.write().insert(
+            resource_id,
+            VulkanComputePipeline {
+                pipeline_layout: pipeline_layout_index,
+                pipeline: compute_pipeline,
+                workgroup_size: shader.pipeline_info().workgroup_size.unwrap(),
+            },
+        );
+
+        Ok(resource_id)
+    }
+
+    /// Auto creates a descriptor set in use for this frame stored for reuse by the hashed
+    /// `ShaderSetBinding`. Will be auto freed and available for reuse when this frame is over.
+    /// This is done to avoid relying on the `VulkanFrameGraphExecutor` directly and makes uniform
+    /// uploading a lot easier and renderer agnostic when using the gfx api.
+    fn bind_uniforms(
+        &self,
+        command_buffer: ash::vk::CommandBuffer,
+        pipeline_bind_point: ash::vk::PipelineBindPoint,
+        pipeline: ResourceId<Untyped>,
+        uniform_data: UniformData,
+    ) {
+        let mut pipeline_layout_index = None;
+        if let Some(pipeline) = self
+            .compute_pipelines
+            .read()
+            .get(&ResourceId::new(pipeline.id()))
+        {
+            pipeline_layout_index = Some(pipeline.pipeline_layout);
+        }
+        assert!(
+            pipeline_layout_index.is_some(),
+            "Pipeline id {} is invalid.",
+            pipeline.id()
+        );
+
+        let mut descriptor_set_map = self.descriptor_sets.write();
+        let pipeline_layouts = self.pipeline_layouts.read();
+        let pipeline_layout = pipeline_layouts
+            .get(pipeline_layout_index.unwrap() as usize)
+            .unwrap();
+
+        let uniform_set_datas = uniform_data.as_sets(&pipeline_layout.shader_bindings);
+
+        let mut vk_image_infos = Vec::new();
+        let mut vk_descriptor_set_writes = Vec::new();
+
+        let vk_descriptor_sets = pipeline_layout
+            .shader_bindings
+            .iter()
+            .zip(uniform_set_datas)
+            .map(|(set_binding, new_set_bindings)| {
+                let descriptor_set = descriptor_set_map.get_mut(set_binding).unwrap();
+
+                let mut needs_write = false;
+                let (vk_descriptor_set, prev_set_bindings) = descriptor_set.frame_sets
+                    [self.ctx.curr_cpu_frame_index() as usize]
+                    .get_or_insert_with(|| {
+                        needs_write = true;
+                        let set_layouts = [descriptor_set.layout];
+                        let create_info = ash::vk::DescriptorSetAllocateInfo::default()
+                            .descriptor_pool(self.descriptor_pool)
+                            .set_layouts(&set_layouts);
+                        let new_set =
+                            unsafe { self.ctx.device.allocate_descriptor_sets(&create_info) }
+                                .expect("Failed to create descriptor set")
+                                .remove(0);
+
+                        (new_set, new_set_bindings.clone())
+                    });
+
+                if &new_set_bindings != prev_set_bindings {
+                    *prev_set_bindings = new_set_bindings;
+                    needs_write = true;
+                }
+
+                if needs_write {
+                    // prev_set_bindings is now equal to new_set_bindings here.
+                    for (binding_idx, binding) in prev_set_bindings.data.iter().enumerate() {
+                        let mut write = ash::vk::WriteDescriptorSet::default()
+                            .dst_set(*vk_descriptor_set)
+                            .descriptor_count(1)
+                            .dst_binding(binding_idx as u32);
+                        let mut info = None;
+
+                        // Due to the image infos possibly resizing while pushing, we must store
+                        // indexes to the image info and populate that in the vulkan write struct
+                        // once we are no longer pushing writes.
+                        match binding {
+                            Binding::Image { image } => {
+                                let vk_image_info = self.get_image(*image);
+                                vk_image_infos.push(
+                                    ash::vk::DescriptorImageInfo::default()
+                                        .image_view(
+                                            vk_image_info
+                                                .view
+                                                .expect("Storage image but have an image view."),
+                                        )
+                                        .image_layout(ash::vk::ImageLayout::GENERAL),
+                                );
+                                info =
+                                    Some(VulkanSetWriteIndex::ImageInfo(vk_image_infos.len() - 1));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::STORAGE_IMAGE);
+                            }
+                            Binding::Sampler {} => todo!(),
+                            Binding::Buffer {} => todo!(),
+                        }
+
+                        vk_descriptor_set_writes.push((write, info.unwrap()));
+                    }
+                }
+
+                *vk_descriptor_set
+            })
+            .collect::<Vec<_>>();
+
+        if !vk_descriptor_set_writes.is_empty() {
+            let vk_descriptor_set_writes = vk_descriptor_set_writes
+                .into_iter()
+                .map(|(write, info)| match info {
+                    VulkanSetWriteIndex::ImageInfo(idx) => {
+                        write.image_info(std::slice::from_ref(&vk_image_infos[idx]))
+                    }
+                    VulkanSetWriteIndex::BufferInfo(_) => todo!(),
+                })
+                .collect::<Vec<_>>();
+
+            unsafe {
+                self.ctx
+                    .device
+                    .update_descriptor_sets(&vk_descriptor_set_writes, &[])
+            };
+        }
+
+        unsafe {
+            self.ctx.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                pipeline_bind_point,
+                pipeline_layout.layout,
+                0,
+                &vk_descriptor_sets,
+                &[],
+            )
+        };
     }
 
     fn create_image_borrowed(
@@ -1323,6 +1739,14 @@ impl VulkanResourceManager {
         drop(owned_image_ref);
 
         return image_ref;
+    }
+
+    fn get_compute_pipeline(&self, id: ResourceId<ComputePipeline>) -> VulkanComputePipeline {
+        self.compute_pipelines
+            .read()
+            .get(&id)
+            .expect("Tried to fetch a vulkan compute pipeline doesn't exist.")
+            .clone()
     }
 }
 

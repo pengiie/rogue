@@ -15,9 +15,11 @@ use crate::{
 };
 
 use super::{
-    backend::{GfxFilterMode, GraphicsBackendFrameGraphExecutor, Image},
+    backend::{GfxFilterMode, GraphicsBackendFrameGraphExecutor, Image, UniformData},
     device::DeviceResource,
-    frame_graph::{FGComputeInfo, FrameGraph, FrameGraphImageInfo},
+    frame_graph::{FrameGraph, FrameGraphComputeInfo, FrameGraphImageInfo},
+    pass,
+    shader::ShaderCompiler,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -47,10 +49,11 @@ impl Renderer {
     pub const GRAPH_FRAME_INFO_NAME: &str = "frame_info_buffer";
 
     // Pass references
-    pub const GRAPH_TERRAIN_PREPASS_COMPUTE_INFO: FGComputeInfo<'static> = FGComputeInfo {
-        shader_path: "terrain_prepass",
-        entry_point_fn: "main",
-    };
+    pub const GRAPH_TERRAIN_PREPASS_COMPUTE_INFO: FrameGraphComputeInfo<'static> =
+        FrameGraphComputeInfo {
+            shader_path: "terrain_prepass",
+            entry_point_fn: "main",
+        };
     pub const GRAPH_TERRAIN_PREPASS_NAME: &str = "terrain_prepass";
 
     pub fn new(device: &mut DeviceResource) -> Self {
@@ -140,14 +143,38 @@ impl Renderer {
             FrameGraphImageInfo::new_depth(gfx_settings.rt_size),
         );
 
-        // Blit n' clear color.
+        // Compute n' blit.
+        let pass_compute_pipeline = builder.create_compute_pipeline(
+            Self::GRAPH_TERRAIN_PREPASS_NAME,
+            FrameGraphComputeInfo {
+                shader_path: "terrain_prepass",
+                entry_point_fn: "main",
+            },
+        );
+        let pass_rt_size = gfx_settings.rt_size;
         builder.create_pass(
             "blit_n_clear_color",
             &[&graph_swapchain_image, &rt_albedo_image],
             &[&graph_swapchain_image],
-            |recorder, ctx| {
+            move |recorder, ctx| {
                 let rt_image = ctx.get_image(Self::GRAPH_RT_TARGET_ALBEDO_NAME);
-                recorder.clear_color(rt_image, Color::new(1.0, 0.0, 0.0));
+                let compute_pipeline = ctx.get_compute_pipeline(pass_compute_pipeline);
+
+                {
+                    let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
+                    compute_pass.bind_uniforms({
+                        let mut uniforms = UniformData::new();
+                        uniforms.load("u_shader.backbuffer", rt_image.as_binding());
+                        uniforms
+                    });
+                    let wg_size = compute_pass.workgroup_size();
+                    compute_pass.dispatch(
+                        (pass_rt_size.x as f32 / wg_size.x as f32).ceil() as u32,
+                        (pass_rt_size.x as f32 / wg_size.x as f32).ceil() as u32,
+                        1,
+                    );
+                }
+
                 let swapchain_image = ctx.get_image(Self::GRAPH_SWAPCHAIN_NAME);
                 recorder.blit(rt_image, swapchain_image, GfxFilterMode::Nearest);
             },
@@ -162,6 +189,7 @@ impl Renderer {
     pub fn begin_frame(
         mut renderer: ResMut<Renderer>,
         device: ResMut<DeviceResource>,
+        mut shader_compiler: ResMut<ShaderCompiler>,
         settings: Res<Settings>,
     ) {
         let renderer: &mut Renderer = &mut renderer;
@@ -170,7 +198,9 @@ impl Renderer {
             .frame_graph
             .take()
             .unwrap_or_else(|| Self::construct_fallback_frame_graph(&settings.graphics));
-        renderer.frame_graph_executor.begin_frame(frame_graph);
+        renderer
+            .frame_graph_executor
+            .begin_frame(&mut shader_compiler, frame_graph);
     }
 
     pub fn finish_frame(

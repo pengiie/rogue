@@ -4,10 +4,13 @@ use epaint::image;
 
 use crate::{
     common::color::{Color, ColorSpaceSrgb},
-    engine::graphics::backend::{GfxFilterMode, GraphicsBackendRecorder, Image, ResourceId},
+    engine::graphics::backend::{
+        Binding, ComputePass, ComputePipeline, GfxFilterMode, GraphicsBackendComputePass,
+        GraphicsBackendRecorder, Image, ResourceId, UniformData,
+    },
 };
 
-use super::device::VulkanContext;
+use super::device::{VulkanComputePipeline, VulkanContext};
 
 pub struct VulkanRecorder {
     ctx: Arc<VulkanContext>,
@@ -75,6 +78,8 @@ impl VulkanRecorder {
                     | ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL => {
                         ash::vk::PipelineStageFlags::TRANSFER
                     }
+                    // TODO: Track the previous pipeline stage.
+                    ash::vk::ImageLayout::GENERAL => ash::vk::PipelineStageFlags::ALL_COMMANDS,
                     _ => todo!(),
                 });
 
@@ -182,10 +187,74 @@ impl GraphicsBackendRecorder for VulkanRecorder {
         }
     }
 
-    fn begin_compute_pass(
+    fn begin_compute_pass<'a>(
         &mut self,
-        compute_pipeline: ResourceId<crate::engine::graphics::backend::ComputePipeline>,
-    ) -> crate::engine::graphics::backend::ComputePass {
-        todo!()
+        compute_pipeline_id: ResourceId<ComputePipeline>,
+    ) -> ComputePass {
+        let compute_pipeline = self.ctx.get_compute_pipeline(compute_pipeline_id);
+        unsafe {
+            self.ctx.device().cmd_bind_pipeline(
+                self.command_buffer,
+                ash::vk::PipelineBindPoint::COMPUTE,
+                compute_pipeline.pipeline,
+            )
+        };
+        Box::new(VulkanComputePass {
+            recorder: self,
+            pipeline_id: compute_pipeline_id,
+            pipeline: compute_pipeline,
+            uniforms_bound: false,
+        })
+    }
+}
+
+pub struct VulkanComputePass<'a> {
+    recorder: &'a mut VulkanRecorder,
+    pipeline_id: ResourceId<ComputePipeline>,
+    pipeline: VulkanComputePipeline,
+    uniforms_bound: bool,
+}
+
+impl GraphicsBackendComputePass for VulkanComputePass<'_> {
+    fn bind_uniforms(&mut self, uniform_data: UniformData) {
+        self.uniforms_bound = true;
+
+        let mut image_transitions = Vec::new();
+        for binding in uniform_data.bindings() {
+            match binding {
+                Binding::Image { image } => image_transitions.push(VulkanImageTransition {
+                    image_id: *image,
+                    new_layout: ash::vk::ImageLayout::GENERAL,
+                    new_access_flags: ash::vk::AccessFlags::SHADER_READ,
+                }),
+                Binding::Sampler {} => todo!(),
+                Binding::Buffer {} => todo!(),
+            }
+        }
+        self.recorder.transition_images(
+            &image_transitions,
+            ash::vk::PipelineStageFlags::COMPUTE_SHADER,
+        );
+
+        self.recorder.ctx.bind_uniforms(
+            self.recorder.command_buffer,
+            self.pipeline_id.as_untyped(),
+            ash::vk::PipelineBindPoint::COMPUTE,
+            uniform_data,
+        );
+    }
+
+    fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+        assert!(self.uniforms_bound);
+        unsafe {
+            self.recorder
+                .ctx
+                .device()
+                .cmd_dispatch(self.recorder.command_buffer, x, y, z)
+        };
+    }
+
+    fn workgroup_size(&self) -> nalgebra::Vector3<u32> {
+        self.pipeline.workgroup_size
     }
 }
