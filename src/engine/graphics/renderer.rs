@@ -9,7 +9,7 @@ use crate::{
     common::color::Color,
     engine::{
         resource::{Res, ResMut},
-        window::window::Window,
+        window::{time::Time, window::Window},
     },
     settings::{GraphicsSettings, Settings},
 };
@@ -220,6 +220,7 @@ impl Renderer {
         mut renderer: ResMut<Renderer>,
         mut device: ResMut<DeviceResource>,
         window: Res<Window>,
+        time: Res<Time>,
     ) {
         let swapchain_image = match device.acquire_swapchain_image() {
             Ok(image) => image,
@@ -244,9 +245,10 @@ impl Renderer {
         // -------- RT Pass --------
 
         // Write buffers.
+        let red: f32 = time.start_time().elapsed().as_secs_f32().sin().abs();
         renderer
             .frame_graph_executor
-            .write_buffer_slice(Self::GRAPH.frame_info, bytemuck::bytes_of(&[1.0f32]));
+            .write_buffer_slice(Self::GRAPH.frame_info, bytemuck::bytes_of(&[red]));
 
         // Supply pass logic.
         renderer.frame_graph_executor.supply_pass_ref(

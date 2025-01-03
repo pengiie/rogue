@@ -1837,7 +1837,6 @@ impl VulkanResourceManager {
                                 ));
                                 write =
                                     write.descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER);
-                                debug!("writing uniform buffer");
                             }
                             Binding::StorageBuffer { buffer } => todo!(),
                         }
