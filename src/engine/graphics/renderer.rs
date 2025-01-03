@@ -227,7 +227,7 @@ impl Renderer {
             Err(err) => {
                 let inner_size = window.inner_size();
                 warn!("Tried to acquire swapchain error but got an error, trying to resize swapchain to {}x{}.", inner_size.width, inner_size.height);
-                device.resize_swapchain(inner_size);
+                device.resize_swapchain(inner_size, true);
                 return;
             }
         };

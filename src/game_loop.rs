@@ -14,7 +14,7 @@ use crate::{
             voxel_terrain::VoxelTerrain,
             voxel_world::{VoxelWorld, VoxelWorldGpu},
         },
-        window::time::Time,
+        window::time::{Instant, Time},
     },
     game::{player::player::Player, world::game_world::GameWorld},
 };
@@ -26,6 +26,8 @@ pub fn game_loop(app: &App) {
     // ------- FRAME SETUP ---------
     app.run_system(DeviceResource::begin_frame);
     app.run_system(Time::update);
+
+    let cpu_time = Instant::now();
 
     // ------- RENDERER SETUP
     app.run_system(Renderer::begin_frame);
@@ -78,4 +80,9 @@ pub fn game_loop(app: &App) {
     app.run_system(Input::clear_inputs);
     app.run_system(Events::clear_events);
     app.run_system(VoxelWorldGpu::clear_frame_state);
+
+    debug!(
+        "CPU Frame took {}ms",
+        cpu_time.elapsed().as_micros() as f32 / 1000.0
+    )
 }

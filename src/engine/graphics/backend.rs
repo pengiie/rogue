@@ -63,7 +63,13 @@ pub trait GraphicsBackendDevice {
     fn update_pipelines(&mut self, shader_compiler: &ShaderCompiler) -> anyhow::Result<()>;
 
     fn acquire_swapchain_image(&mut self) -> anyhow::Result<ResourceId<Image>>;
-    fn resize_swapchain(&mut self, new_size: winit::dpi::PhysicalSize<NonZeroU32>);
+    /// `skip_frame` is true if we are skipping rendering the current cpu, aka. next gpu frame.
+    /// This helps the device with synchronization.
+    fn resize_swapchain(
+        &mut self,
+        new_size: winit::dpi::PhysicalSize<NonZeroU32>,
+        skip_frame: bool,
+    );
 }
 
 pub trait GraphicsBackendRecorder {

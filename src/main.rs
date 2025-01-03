@@ -1,7 +1,5 @@
 #![allow(warnings)]
 
-use std::str::FromStr;
-
 mod app;
 mod common;
 mod consts;
@@ -22,7 +20,7 @@ fn main() {
                 .filter_level(
                     std::env::var(env_logger::DEFAULT_FILTER_ENV)
                         .ok()
-                        .map(|filter_str| log::LevelFilter::from_str(&filter_str).unwrap_or(default_level))
+                        .map(|filter_str| <log::LevelFilter as std::str::FromStr>::from_str(&filter_str).unwrap_or(default_level))
                         .unwrap_or(default_level),
                 )
                 .filter(Some("naga"), log::LevelFilter::Info)

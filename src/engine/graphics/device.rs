@@ -70,17 +70,20 @@ impl DeviceResource {
         self.backend_device = Some(Box::new(device));
     }
 
-    pub fn resize_swapchain(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    pub fn resize_swapchain(&mut self, new_size: winit::dpi::PhysicalSize<u32>, skip_frame: bool) {
         if new_size.width > 0 && new_size.height > 0 {
             if let Some(device) = self.backend_device.as_mut() {
                 debug!(
                     "Resizing swapchain to {}x{}",
                     new_size.width, new_size.height
                 );
-                device.resize_swapchain(winit::dpi::PhysicalSize {
-                    width: NonZeroU32::new(new_size.width).unwrap(),
-                    height: NonZeroU32::new(new_size.height).unwrap(),
-                });
+                device.resize_swapchain(
+                    winit::dpi::PhysicalSize {
+                        width: NonZeroU32::new(new_size.width).unwrap(),
+                        height: NonZeroU32::new(new_size.height).unwrap(),
+                    },
+                    skip_frame,
+                );
             }
         }
     }

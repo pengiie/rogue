@@ -185,7 +185,6 @@ impl winit::application::ApplicationHandler for App {
                     .finish_frame();
             }
             WinitWindowEvent::Resized(new_size) => {
-                debug!("Window resize event: {:?}", new_size);
                 if !self.did_first_resize && new_size.width > 0 && new_size.height > 0 {
                     self.did_first_resize = true;
 
@@ -199,12 +198,10 @@ impl winit::application::ApplicationHandler for App {
                     self.resource_bank.insert(gfx_device);
                 }
 
-                if self.initialized_graphics
-                    && self.resource_bank().get_resource::<Window>().inner_size() != new_size
-                {
+                if self.initialized_graphics {
                     self.resource_bank()
                         .get_resource_mut::<DeviceResource>()
-                        .resize_swapchain(new_size);
+                        .resize_swapchain(new_size, false);
 
                     debug!("Resized window to {}x{}", new_size.width, new_size.height);
                     // TODO: Option to change between depending on window resize mode.

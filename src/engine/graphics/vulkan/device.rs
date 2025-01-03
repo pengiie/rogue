@@ -11,7 +11,10 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use ash::vk::{self, QueueFlags, SemaphoreType};
+use ash::{
+    khr::swapchain,
+    vk::{self, QueueFlags, SemaphoreType},
+};
 use log::{debug, warn};
 use nalgebra::{Vector2, Vector3};
 use parking_lot::lock_api::RwLock;
@@ -36,7 +39,10 @@ use crate::{
                 ShaderCompiler, ShaderSetBinding, ShaderStage,
             },
         },
-        window::window::{Window, WindowHandle},
+        window::{
+            time::Instant,
+            window::{Window, WindowHandle},
+        },
     },
 };
 
@@ -54,6 +60,9 @@ pub struct VulkanContextInner {
     surface: ash::vk::SurfaceKHR,
     physical_device: VulkanPhysicalDevice,
     device: ash::Device,
+
+    main_queue: ash::vk::Queue,
+    main_queue_family_index: u32,
 
     // The number of frames the cpu and gpu can process before waiting.
     frames_in_flight: u32,
@@ -87,6 +96,7 @@ impl Drop for VulkanContextInner {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
+            println!("Dropping the device");
 
             self.device
                 .destroy_semaphore(self.gpu_timeline_semaphore, None);
@@ -113,9 +123,6 @@ impl Drop for VulkanContextInner {
 pub struct VulkanContext {
     inner: Arc<VulkanContextInner>,
     swapchain: parking_lot::RwLock<Arc<VulkanSwapchain>>,
-    /// submitted
-    main_queue: ash::vk::Queue,
-    main_queue_family_index: u32,
 
     // Semaphore when the swapchain image is acquired.
     image_acquire_semaphores: Vec<ash::vk::Semaphore>,
@@ -187,7 +194,7 @@ impl VulkanContext {
     }
 
     pub fn main_queue(&self) -> ash::vk::Queue {
-        self.main_queue
+        self.inner.main_queue
     }
 
     pub fn curr_swapchain_image_index(&self) -> u32 {
@@ -291,6 +298,7 @@ pub struct VulkanDevice {
 
     // Size is # of frames in flight (swapchain images).
     destroy_frame_queue: Vec<Vec<ResourceId<Untyped>>>,
+    skipped_gpu_frames: HashSet<u64>,
 }
 
 pub struct VulkanSwapchain {
@@ -331,8 +339,28 @@ impl VulkanDevice {
                 .application_name(&application_name)
                 .api_version(ash::vk::API_VERSION_1_3);
 
-            let enabled_layers_cstrs = Self::get_required_layer_names();
-            let enabled_layers_ptrs = enabled_layers_cstrs
+            let available_layers = unsafe {
+                entry
+                    .enumerate_instance_layer_properties()
+                    .expect("Failed to get vk layers")
+            };
+            let available_layer_names = available_layers
+                .iter()
+                .map(|name| name.layer_name_as_c_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            for layer in available_layers {
+                debug!(
+                    "Avilable vulkan layer {:?}",
+                    layer.layer_name_as_c_str().unwrap()
+                );
+            }
+
+            let enabled_layers = Self::get_required_layer_names()
+                .into_iter()
+                .filter(|str| available_layer_names.contains(&str))
+                .collect::<Vec<_>>();
+            debug!("enabled layers {:?}", &enabled_layers);
+            let enabled_layers_ptrs = enabled_layers
                 .iter()
                 .map(|cstr| cstr.as_ptr())
                 .collect::<Vec<_>>();
@@ -523,12 +551,13 @@ impl VulkanDevice {
             swapchain_extent,
             swapchain_image_usage,
         ) = {
-            let surface_capabilities = unsafe {
+            let mut surface_capabilities = unsafe {
                 surface_loader.get_physical_device_surface_capabilities(
                     physical_device.physical_device,
                     surface,
                 )
             }?;
+            debug!("Surface capabilities: {:?}", surface_capabilities);
             let present_mode = Self::get_optimal_present_mode(
                 &surface_loader,
                 &surface,
@@ -537,6 +566,11 @@ impl VulkanDevice {
             )?;
             let swapchain_format =
                 Self::get_optimal_swapchain_format(&surface_loader, &surface, &physical_device)?;
+
+            // A max image count of 0 means there is no limit, so choose some arbitrary upper limit.
+            if surface_capabilities.max_image_count == 0 {
+                surface_capabilities.max_image_count = surface_capabilities.min_image_count + 1;
+            }
 
             let min_image_count = swapchain_info
                 .triple_buffering
@@ -616,6 +650,9 @@ impl VulkanDevice {
             physical_device,
             device,
 
+            main_queue_family_index,
+            main_queue,
+
             frames_in_flight,
             // One since `gpu_timeline_semaphore` starts signalling 0.
             current_cpu_frame: AtomicU64::new(1),
@@ -648,8 +685,6 @@ impl VulkanDevice {
         let context = Arc::new(VulkanContext {
             inner: context_inner.clone(),
             swapchain: parking_lot::RwLock::new(swapchain),
-            main_queue_family_index,
-            main_queue,
 
             swapchain_image_index: AtomicU32::new(0),
 
@@ -667,11 +702,16 @@ impl VulkanDevice {
             pipeline_manager,
 
             destroy_frame_queue: (0..frames_in_flight).map(|_| Vec::new()).collect(),
+            skipped_gpu_frames: HashSet::new(),
         })
     }
 
     fn get_required_layer_names() -> Vec<CString> {
-        vec![std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap()]
+        vec![
+            #[cfg(debug_assertions)]
+            std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
+            //std::ffi::CString::new("VK_LAYER_LUNARG_api_dump").unwrap(),
+        ]
     }
 
     fn get_optimal_present_mode(
@@ -752,6 +792,10 @@ impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
             self.device().device_wait_idle().unwrap();
+
+            drop(&mut self.resource_manager);
+            drop(self.swapchain.get_mut());
+
             for semaphore in self
                 .image_ready_semaphores
                 .iter()
@@ -765,6 +809,9 @@ impl Drop for VulkanContext {
 
 impl Drop for VulkanSwapchain {
     fn drop(&mut self) {
+        unsafe { self.ctx_ref.device.device_wait_idle() };
+        println!("Dropping the swapchain with handle {:?}", self.swapchain);
+
         let swapchain_loader =
             ash::khr::swapchain::Device::new(&self.ctx_ref.instance, &self.ctx_ref.device);
         unsafe { swapchain_loader.destroy_swapchain(self.swapchain, None) };
@@ -783,14 +830,18 @@ impl GraphicsBackendDevice for VulkanDevice {
         let fif_minus_one = self.context.inner.frames_in_flight as u64 - 1;
         if prev_cpu_frame >= fif_minus_one {
             let wait_gpu_frame = prev_cpu_frame - fif_minus_one;
-            let wait_info = ash::vk::SemaphoreWaitInfo::default()
-                .semaphores(std::slice::from_ref(
-                    &self.context.inner.gpu_timeline_semaphore,
-                ))
-                .values(std::slice::from_ref(&wait_gpu_frame));
 
-            // TODO: Worry about timeout.
-            unsafe { self.context.device().wait_semaphores(&wait_info, u64::MAX) };
+            // Don't wait on the gpu frame if it was skipped due to a bad swapchain image.
+            if !self.skipped_gpu_frames.remove(&wait_gpu_frame) {
+                let wait_info = ash::vk::SemaphoreWaitInfo::default()
+                    .semaphores(std::slice::from_ref(
+                        &self.context.inner.gpu_timeline_semaphore,
+                    ))
+                    .values(std::slice::from_ref(&wait_gpu_frame));
+
+                // TODO: Worry about timeout.
+                unsafe { self.context.device().wait_semaphores(&wait_info, u64::MAX) };
+            }
         }
 
         // Free previously used events.
@@ -851,14 +902,19 @@ impl GraphicsBackendDevice for VulkanDevice {
             &self.context.inner.instance,
             &self.context.inner.device,
         );
+        let acquire_timer = Instant::now();
         let (image_index, out_of_date) = unsafe {
             swapchain_loader.acquire_next_image(
                 self.context.swapchain().swapchain,
-                u64::MAX,
+                10_000,
                 self.context.curr_image_acquire_semaphore(),
                 ash::vk::Fence::null(),
             )
         }?;
+        debug!(
+            "Took {}ms to acquire vk swapchain image.",
+            acquire_timer.elapsed().as_micros() as f32 / 1000.0
+        );
         self.context
             .swapchain_image_index
             .store(image_index, std::sync::atomic::Ordering::Relaxed);
@@ -875,13 +931,11 @@ impl GraphicsBackendDevice for VulkanDevice {
         Ok(image_resource_id)
     }
 
-    fn resize_swapchain(&mut self, new_size: winit::dpi::PhysicalSize<NonZeroU32>) {
-        unsafe {
-            self.context
-                .device()
-                .queue_wait_idle(self.context.main_queue)
-        };
-
+    fn resize_swapchain(
+        &mut self,
+        new_size: winit::dpi::PhysicalSize<NonZeroU32>,
+        skip_frame: bool,
+    ) {
         let mut swapchain = self.context.swapchain.write();
 
         let surface_loader = self.context.surface_loader();
@@ -912,6 +966,7 @@ impl GraphicsBackendDevice for VulkanDevice {
         let new_swapchain =
             unsafe { swapchain_loader.create_swapchain(&new_swapchain_create_info, None) }
                 .expect("Failed to recreate swapchain");
+        debug!("Created new swapchain with handle {:?}", new_swapchain);
 
         let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(new_swapchain) }
             .expect("Failed to get swapchain images");
@@ -933,14 +988,25 @@ impl GraphicsBackendDevice for VulkanDevice {
             })
             .collect::<Vec<_>>();
 
-        let new_swapchain = VulkanSwapchain {
+        let mut new_swapchain = Arc::new(VulkanSwapchain {
             ctx_ref: self.context.inner.clone(),
             swapchain: new_swapchain,
             create_info: new_swapchain_create_info,
             swapchain_images,
-        };
+        });
 
-        *swapchain = Arc::new(new_swapchain);
+        std::mem::swap(&mut new_swapchain, &mut swapchain);
+        for image_id in &new_swapchain.swapchain_images {
+            self.context
+                .resource_manager
+                .destroy_image_borrowed(image_id);
+        }
+        drop(new_swapchain);
+
+        if skip_frame {
+            self.skipped_gpu_frames
+                .insert(self.context.curr_cpu_frame());
+        }
     }
 
     fn pre_init_update(&mut self, events: &mut Events) {
@@ -1697,6 +1763,8 @@ impl VulkanResourceManager {
         .map_err(|_| anyhow!("Failed to create vulkan compute pipeline."))?
         .remove(0);
 
+        unsafe { self.ctx.device.destroy_shader_module(shader_module, None) };
+
         self.compute_pipelines.write().insert(
             resource_id,
             VulkanComputePipeline {
@@ -1907,6 +1975,25 @@ impl VulkanResourceManager {
         );
 
         Ok(resource_id)
+    }
+
+    fn destroy_image_borrowed(&self, image_id: &ResourceId<Image>) {
+        debug!("Destroyed borrowed image.");
+        let old = self.borrowed_images.write().remove(image_id);
+        assert!(
+            old.is_some(),
+            "Tried to destroy image with an invalid image handle.",
+        );
+
+        let Some(borrowed_image_view) = old.unwrap().view else {
+            return;
+        };
+
+        unsafe {
+            self.ctx
+                .device
+                .destroy_image_view(borrowed_image_view, None)
+        };
     }
 
     fn create_buffer(
@@ -2276,11 +2363,30 @@ impl Drop for VulkanResourceManager {
                 .destroy_descriptor_pool(self.descriptor_pool, None)
         }
 
+        for event_pool in &self.event_pools {
+            let event_pool = event_pool.write();
+            for event in &event_pool.event_pool {
+                unsafe { self.ctx.device.destroy_event(*event, None) };
+            }
+        }
+
+        for (_, pipeline) in self.compute_pipelines.write().iter() {
+            unsafe { self.ctx.device.destroy_pipeline(pipeline.pipeline, None) };
+        }
+
         for pipeline_layout in self.pipeline_layouts.write().iter() {
             unsafe {
                 self.ctx
                     .device
                     .destroy_pipeline_layout(pipeline_layout.layout, None)
+            };
+        }
+
+        for (_, set) in self.descriptor_sets.write().iter() {
+            unsafe {
+                self.ctx
+                    .device
+                    .destroy_descriptor_set_layout(set.layout, None)
             };
         }
 

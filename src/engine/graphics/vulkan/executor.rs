@@ -1,20 +1,29 @@
 use core::panic;
-use std::{any::Any, collections::HashMap, ops::Deref, sync::Arc};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+    ops::Deref,
+    sync::Arc,
+};
 
+use ash::vk::CommandBuffer;
 use log::{debug, warn};
 
-use crate::engine::graphics::{
-    backend::{
-        Buffer, ComputePipeline, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
-        GfxComputePipelineInfo, GfxImageCreateInfo, GfxPassOnceImpl,
-        GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
+use crate::engine::{
+    graphics::{
+        backend::{
+            Buffer, ComputePipeline, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
+            GfxComputePipelineInfo, GfxImageCreateInfo, GfxPassOnceImpl,
+            GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
+        },
+        frame_graph::{
+            self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo, FrameGraphContext,
+            FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
+            IntoFrameGraphResource, Pass,
+        },
+        shader::ShaderCompiler,
     },
-    frame_graph::{
-        self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo, FrameGraphContext,
-        FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
-        IntoFrameGraphResource, Pass,
-    },
-    shader::ShaderCompiler,
+    window::time::Instant,
 };
 
 use super::{
@@ -25,7 +34,7 @@ use super::{
 pub struct VulkanFrameGraphExecutor {
     ctx: Arc<VulkanContext>,
     session: Option<FrameSession>,
-    command_pools: Vec<ash::vk::CommandPool>,
+    command_pools: Vec<VulkanCommandPool>,
 
     resource_manager: VulkanExecutorResourceManager,
 }
@@ -269,6 +278,12 @@ impl FrameSession {
     }
 }
 
+pub struct VulkanCommandPool {
+    command_pool: ash::vk::CommandPool,
+    in_use_command_buffers: Vec<ash::vk::CommandBuffer>,
+    free_command_buffers: Vec<ash::vk::CommandBuffer>,
+}
+
 impl VulkanFrameGraphExecutor {
     pub fn new(ctx: &VulkanContextHandle) -> Self {
         Self {
@@ -276,11 +291,17 @@ impl VulkanFrameGraphExecutor {
             session: None,
             command_pools: (0..ctx.frames_in_flight())
                 .map(|_| {
-                    unsafe {
+                    let vk_command_pool = unsafe {
                         ctx.device()
                             .create_command_pool(&ash::vk::CommandPoolCreateInfo::default(), None)
                     }
-                    .expect("Failed to create vk command pool.")
+                    .expect("Failed to create vk command pool.");
+
+                    VulkanCommandPool {
+                        command_pool: vk_command_pool,
+                        in_use_command_buffers: Vec::new(),
+                        free_command_buffers: Vec::new(),
+                    }
                 })
                 .collect::<Vec<_>>(),
 
@@ -314,16 +335,26 @@ impl VulkanFrameGraphExecutor {
         session.buffer_writes_event = Some(self.ctx.create_frame_event());
     }
 
-    fn acquire_command_buffers(
+    fn acquire_command_buffer(
         ctx: &VulkanContextHandle,
-        command_pools: &mut Vec<ash::vk::CommandPool>,
-        count: u32,
-    ) -> anyhow::Result<Vec<ash::vk::CommandBuffer>> {
+        command_pools: &mut Vec<VulkanCommandPool>,
+    ) -> anyhow::Result<ash::vk::CommandBuffer> {
+        let command_pool = &mut command_pools[ctx.curr_cpu_frame_index() as usize];
+
+        if let Some(command_buffer) = command_pool.free_command_buffers.pop() {
+            command_pool.in_use_command_buffers.push(command_buffer);
+            return Ok(command_buffer);
+        }
+
         let allocate_info = ash::vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pools[ctx.curr_cpu_frame_index() as usize])
+            .command_pool(command_pool.command_pool)
             .level(ash::vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(count);
-        Ok(unsafe { ctx.device().allocate_command_buffers(&allocate_info) }?)
+            .command_buffer_count(1);
+        let command_buffer =
+            unsafe { ctx.device().allocate_command_buffers(&allocate_info) }?.remove(0);
+        command_pool.in_use_command_buffers.push(command_buffer);
+
+        Ok(command_buffer)
     }
 
     fn prep_pass_inputs(
@@ -402,11 +433,8 @@ impl VulkanFrameGraphExecutor {
 
             let recorder = if let Some(pass_fn) = &pass.pass {
                 let command_buffer =
-                    Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
-                        .expect("Failed to acquire command buffers.")
-                        .into_iter()
-                        .next()
-                        .unwrap();
+                    Self::acquire_command_buffer(&self.ctx, &mut self.command_pools)
+                        .expect("Failed to acquire a command buffer.");
                 let mut recorder = VulkanRecorder::new(&self.ctx, command_buffer);
                 recorder.begin();
 
@@ -453,20 +481,28 @@ impl Drop for VulkanFrameGraphExecutor {
         // TODO: Resource tracking so we dont block like this.
         unsafe { self.ctx.device().device_wait_idle() };
         for command_pool in &self.command_pools {
-            unsafe { self.ctx.device().destroy_command_pool(*command_pool, None) }
+            unsafe {
+                self.ctx
+                    .device()
+                    .destroy_command_pool(command_pool.command_pool, None)
+            }
         }
     }
 }
 
 impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
     fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
-        let curr_cmd_pool = self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
+        let curr_cmd_pool = &mut self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
+        debug!("Resetting command pool {:?}", curr_cmd_pool.command_pool);
         unsafe {
             self.ctx.device().reset_command_pool(
-                curr_cmd_pool,
-                ash::vk::CommandPoolResetFlags::RELEASE_RESOURCES,
+                curr_cmd_pool.command_pool,
+                ash::vk::CommandPoolResetFlags::empty(),
             )
         };
+        curr_cmd_pool
+            .free_command_buffers
+            .append(&mut curr_cmd_pool.in_use_command_buffers);
 
         self.session = Some(FrameSession::new(frame_graph));
         self.resource_manager.retire_resources();
@@ -483,12 +519,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         // Record staging buffer transfer operations.
         let staging_buffer_copies_vk_command_buffer = {
-            let command_buffer =
-                Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
-                    .expect("Failed to acquire command buffers.")
-                    .into_iter()
-                    .next()
-                    .unwrap();
+            let command_buffer = Self::acquire_command_buffer(&self.ctx, &mut self.command_pools)
+                .expect("Failed to acquire command buffer.");
             let mut transition_recorder = VulkanRecorder::new(&self.ctx, command_buffer);
             transition_recorder.begin();
             self.ctx.record_buffer_writes(&mut transition_recorder);
@@ -558,11 +590,17 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             .swapchains(&swapchains)
             .image_indices(&image_indices)
             .wait_semaphores(&wait_semaphores);
+        let present_timer = Instant::now();
         unsafe {
             self.ctx
                 .swapchain_loader()
                 .queue_present(self.ctx.main_queue(), &present_info)
         };
+        debug!(
+            "Took {}ms to present swapchain image with present_mode {:?}.",
+            present_timer.elapsed().as_micros() as f32 / 1000.0,
+            self.ctx.swapchain().create_info.present_mode
+        );
 
         session.frame_graph
     }
@@ -654,11 +692,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
     }
 
     fn supply_pass_ref(&mut self, name: &str, mut pass: Box<dyn GfxPassOnceImpl>) {
-        let command_buffer = Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
-            .expect("Failed to acquire command buffers.")
-            .into_iter()
-            .next()
-            .unwrap();
+        let command_buffer = Self::acquire_command_buffer(&self.ctx, &mut self.command_pools)
+            .expect("Failed to acquire command buffer.");
 
         let session = self.session.as_mut().unwrap();
         let pass_resource_id = session
