@@ -2,10 +2,6 @@ module terrain_prepass;
 
 import lib;
 
-struct WorldInfo {
-  Camera camera;
-}
-
 struct ShaderUniforms {
   [format("rgba32f")]
   WTexture2D<float4> backbuffer;
@@ -36,5 +32,5 @@ void main(uint3 id: SV_DispatchThreadID) {
 //
 //  var out_color = sample_sky(uniforms.model_voxel_data, camera_ray) * sample_sky(uniforms.model_info_data, camera_ray);
 //
-  u_shader.backbuffer.Store(coord.xy, float4((float) coord.x / (float) dimensions.x, 0.33, 0.77, 1.0));
+  u_shader.backbuffer.Store(coord.xy, float4(u_frame.world_info.red, 0.0, 0.0, 1.0));
 }

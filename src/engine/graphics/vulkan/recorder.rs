@@ -262,8 +262,9 @@ impl GraphicsBackendComputePass for VulkanComputePass<'_> {
                     new_layout: ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     new_access_flags: ash::vk::AccessFlags::SHADER_READ,
                 }),
-                Binding::Sampler {} => todo!(),
-                Binding::Buffer {} => todo!(),
+                Binding::Sampler { sampler } => todo!(),
+                Binding::UniformBuffer { buffer } => {}
+                Binding::StorageBuffer { buffer } => todo!(),
             }
         }
         self.recorder.transition_images(

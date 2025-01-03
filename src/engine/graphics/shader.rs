@@ -230,25 +230,28 @@ impl ShaderCompiler {
 
                     for field in field_type.element_type_layout().fields() {
                         let field_type = field.type_layout();
-                        if field_type.kind() != slang::TypeKind::Resource {
-                            panic!("Encountered non-resource ParameterBlock field when reflecting shader.");
-                        }
-                        let binding_type = match field_type.resource_shape() {
-                            slang::ResourceShape::SlangTexture2d => {
-                                let has_write = field_type.resource_access()
-                                    == slang::ResourceAccess::Write
-                                    || field_type.resource_access()
-                                        == slang::ResourceAccess::ReadWrite;
-                                if has_write {
-                                    ShaderBindingType::StorageImage
-                                } else {
-                                    ShaderBindingType::SampledImage
+                        let binding_type = match field_type.kind() {
+                            slang::TypeKind::Resource => match field_type.resource_shape() {
+                                slang::ResourceShape::SlangTexture2d => {
+                                    let has_write = field_type.resource_access()
+                                        == slang::ResourceAccess::Write
+                                        || field_type.resource_access()
+                                            == slang::ResourceAccess::ReadWrite;
+                                    if has_write {
+                                        ShaderBindingType::StorageImage
+                                    } else {
+                                        ShaderBindingType::SampledImage
+                                    }
                                 }
-                            }
-                            slang::ResourceShape::SlangStructuredBuffer => {
-                                ShaderBindingType::UniformBuffer
-                            }
-                            ty => todo!("Support reflection for shader resource type {:?}", ty),
+                                slang::ResourceShape::SlangStructuredBuffer => {
+                                    ShaderBindingType::StorageBuffer
+                                }
+                                ty => todo!("Support reflection for shader resource type {:?}", ty),
+                            },
+                            slang::TypeKind::Struct => 
+                                ShaderBindingType::UniformBuffer,
+                            _ =>                             panic!("Encountered non-supported non-resource ParameterBlock field when reflecting shader."),
+
                         };
                         let binding_name = field
                             .variable()

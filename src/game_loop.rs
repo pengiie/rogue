@@ -54,7 +54,7 @@ pub fn game_loop(app: &App) {
     app.run_system(PhysicsWorld::do_physics_update);
 
     // ------- TERRAIN -------
-    app.run_system(VoxelTerrain::update_post_physics);
+    //app.run_system(VoxelTerrain::update_post_physics);
 
     // ------- UI ---------
 

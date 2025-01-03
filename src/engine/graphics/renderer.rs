@@ -104,6 +104,7 @@ impl Renderer {
 
     fn construct_frame_graph(gfx_settings: &GraphicsSettings) -> FrameGraph {
         let mut builder = FrameGraph::builder();
+
         // General frame resources.
 
         let swapchain_image = builder.create_input_image(Self::GRAPH.swapchain);
@@ -129,7 +130,7 @@ impl Renderer {
             );
             builder.create_input_pass(
                 Self::GRAPH.rt.pass_prepass,
-                &[],
+                &[&Self::GRAPH.frame_info],
                 &[&Self::GRAPH.rt.image_albedo],
             );
         }
@@ -240,7 +241,14 @@ impl Renderer {
             Box::new(swapchain_image_info.resolution_xy()),
         );
 
-        // RT Pass
+        // -------- RT Pass --------
+
+        // Write buffers.
+        renderer
+            .frame_graph_executor
+            .write_buffer_slice(Self::GRAPH.frame_info, bytemuck::bytes_of(&[1.0f32]));
+
+        // Supply pass logic.
         renderer.frame_graph_executor.supply_pass_ref(
             Self::GRAPH.rt.pass_prepass,
             Box::new(
@@ -253,7 +261,11 @@ impl Renderer {
                     {
                         let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
                         compute_pass.bind_uniforms({
+                            let frame_info_buffer = ctx.get_buffer(Self::GRAPH.frame_info);
+
                             let mut uniforms = UniformData::new();
+                            uniforms
+                                .load("u_frame.world_info", frame_info_buffer.as_uniform_binding());
                             uniforms.load("u_shader.backbuffer", rt_image.as_storage_binding());
                             uniforms
                         });

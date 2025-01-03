@@ -1,5 +1,9 @@
 implementing lib;
 
+public struct FrameWorldInfo {
+  public float red;
+}
+
 public struct Camera {
   matrix4x4 transform;
   matrix3x3 rotation;

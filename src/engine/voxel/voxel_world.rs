@@ -566,7 +566,7 @@ impl VoxelWorldGpu {
             //     voxel_model_info_copy.src_data.len() * 4,
             //     voxel_model_info_copy.src_data
             // );
-            device.write_buffer(
+            device.write_buffer_slice(
                 voxel_world_gpu.world_voxel_model_info_buffer(),
                 voxel_model_info_copy.dst_index as u64 * 4,
                 bytemuck::cast_slice(voxel_model_info_copy.src_data.as_slice()),
@@ -633,12 +633,12 @@ impl VoxelWorldGpu {
                 co.z as u32,
                 chunk_tree.chunk_side_length(),
             ];
-            device.write_buffer(
+            device.write_buffer_slice(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 0,
                 bytemuck::cast_slice(&metadata),
             );
-            device.write_buffer(
+            device.write_buffer_slice(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 (metadata.len() * std::mem::size_of::<u32>()) as u64,
                 bytemuck::cast_slice(&chunk_tree_gpu.data),

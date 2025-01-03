@@ -5,13 +5,14 @@ use log::{debug, warn};
 
 use crate::engine::graphics::{
     backend::{
-        Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
-        GfxImageCreateInfo, GfxPassOnceImpl, GraphicsBackendFrameGraphExecutor, Image, ResourceId,
-        Untyped,
+        Buffer, ComputePipeline, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
+        GfxComputePipelineInfo, GfxImageCreateInfo, GfxPassOnceImpl,
+        GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
     },
     frame_graph::{
-        self, FGResourceBackendId, FrameGraph, FrameGraphContext, FrameGraphContextImpl,
-        FrameGraphImageInfo, FrameGraphPass, FrameGraphResource, IntoFrameGraphResource, Pass,
+        self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo, FrameGraphContext,
+        FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
+        IntoFrameGraphResource, Pass,
     },
     shader::ShaderCompiler,
 };
@@ -32,6 +33,7 @@ pub struct VulkanFrameGraphExecutor {
 struct VulkanExecutorResourceManager {
     ctx: Arc<VulkanContext>,
     cached_frame_images: HashMap<FrameGraphImageInfo, ResourceId<Image>>,
+    cached_frame_buffers: Vec<(FrameGraphBufferInfo, ResourceId<Buffer>)>,
     cached_compute_pipelines: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
@@ -46,6 +48,7 @@ enum VulkanExecutorCachedResource {
     },
     Buffer {
         id: ResourceId<Buffer>,
+        buffer_info: FrameGraphBufferInfo,
     },
     ComputePipeline {
         id: ResourceId<ComputePipeline>,
@@ -58,6 +61,7 @@ impl VulkanExecutorResourceManager {
         Self {
             ctx: ctx.clone(),
             cached_frame_images: HashMap::new(),
+            cached_frame_buffers: Vec::new(),
             cached_compute_pipelines: HashMap::new(),
             cache_timeline: (0..ctx.frames_in_flight())
                 .map(|_| Vec::new())
@@ -83,7 +87,9 @@ impl VulkanExecutorResourceManager {
                     VulkanExecutorCachedResource::Image { id, image_info } => {
                         self.cached_frame_images.insert(image_info, id);
                     }
-                    VulkanExecutorCachedResource::Buffer { id } => todo!(),
+                    VulkanExecutorCachedResource::Buffer { id, buffer_info } => {
+                        self.cached_frame_buffers.push((buffer_info, id));
+                    }
                     VulkanExecutorCachedResource::ComputePipeline { id, info } => {
                         self.cached_compute_pipelines.insert(info, id);
                     }
@@ -126,6 +132,50 @@ impl VulkanExecutorResourceManager {
         );
 
         image_id
+    }
+
+    /// Gets an buffer which is only valid for the context of the
+    /// current cpu frame, and the next gpu frame to be submitted.
+    fn get_or_create_frame_buffer(
+        &mut self,
+        resource_name: &str,
+        create_info: FrameGraphBufferInfo,
+    ) -> ResourceId<Buffer> {
+        let cached_buffer_index = self.cached_frame_buffers.iter().enumerate().find_map(
+            |(index, (frame_buffer_info, frame_buffer))| {
+                if frame_buffer_info.size >= create_info.size
+                    && frame_buffer_info.size <= (create_info.size * 10)
+                {
+                    return Some(index);
+                }
+
+                None
+            },
+        );
+
+        let (buffer_info, buffer_id) = if let Some(cached_buffer_index) = cached_buffer_index {
+            self.cached_frame_buffers.remove(cached_buffer_index)
+        } else {
+            let gfx_create_info = GfxBufferCreateInfo {
+                name: format!("frame_buffer_{}", resource_name),
+                size: create_info.size,
+            };
+            let new_buffer = self.ctx.create_buffer(gfx_create_info).expect(&format!(
+                "Failed to create frame game for resource {}.",
+                resource_name
+            ));
+
+            (create_info, new_buffer)
+        };
+
+        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
+            VulkanExecutorCachedResource::Buffer {
+                id: buffer_id,
+                buffer_info,
+            },
+        );
+
+        buffer_id
     }
 
     fn get_or_create_image(
@@ -200,6 +250,8 @@ struct FrameSession {
     pass_set_events: Vec<Option<ash::vk::Event>>,
 
     supplied_inputs: HashMap<FrameGraphResource<Untyped>, Box<dyn Any>>,
+
+    buffer_writes_event: Option<ash::vk::Event>,
 }
 
 impl FrameSession {
@@ -212,6 +264,7 @@ impl FrameSession {
             recorded_pass_refs: HashMap::new(),
             pass_set_events: vec![None; pass_len.saturating_sub(1)],
             supplied_inputs: HashMap::new(),
+            buffer_writes_event: None,
         }
     }
 }
@@ -241,13 +294,14 @@ impl VulkanFrameGraphExecutor {
             .expect("Tried to access frame session but no session exists currently.")
     }
 
-    fn initialize_session_pipelines(&mut self, shader_compiler: &mut ShaderCompiler) {
+    fn initialize_session_resources(&mut self, shader_compiler: &mut ShaderCompiler) {
         let session = self.session.as_mut().unwrap();
+
+        // Initialize compute pipelines.
         for (frame_resource, compute_pipeline_info) in &session.frame_graph.compute_pipelines {
             let compute_pipeline = self
-                .ctx
-                .create_compute_pipeline(shader_compiler, compute_pipeline_info.clone())
-                .expect("Failed to create graphics compute pipeline.");
+                .resource_manager
+                .get_or_create_compute_pipeline(shader_compiler, compute_pipeline_info);
             session.resource_map.insert(
                 frame_resource.as_untyped(),
                 FGResourceBackendId {
@@ -256,6 +310,8 @@ impl VulkanFrameGraphExecutor {
                 },
             );
         }
+
+        session.buffer_writes_event = Some(self.ctx.create_frame_event());
     }
 
     fn acquire_command_buffers(
@@ -315,10 +371,21 @@ impl VulkanFrameGraphExecutor {
                             expected_type: std::any::TypeId::of::<Image>(),
                         },
                     );
-                } else {
-                    panic!("Resource should be populated if its an image we are here.");
+                    continue;
                 }
+
+                panic!("Resource should be populated if its an image we are here.");
             }
+
+            if input_info.type_id == std::any::TypeId::of::<Buffer>() {
+                let Some(buffer_info) = frame_graph.frame_buffers.get(&input.as_typed()) else {
+                    panic!(
+                        "User defined buffer input hasn't been populated yet, and it is required."
+                    );
+                };
+            }
+
+            panic!("Unknown frame graph input type.")
         }
     }
 
@@ -343,11 +410,13 @@ impl VulkanFrameGraphExecutor {
                 let mut recorder = VulkanRecorder::new(&self.ctx, command_buffer);
                 recorder.begin();
 
-                if pass_idx > 0 {
-                    let prev_pass_event = session.pass_set_events[pass_idx - 1]
-                        .get_or_insert_with(|| self.ctx.create_frame_event());
-                    recorder.wait_event(*prev_pass_event)
-                }
+                let wait_event = if pass_idx == 0 {
+                    session.buffer_writes_event.as_mut().unwrap()
+                } else {
+                    session.pass_set_events[pass_idx - 1]
+                        .get_or_insert_with(|| self.ctx.create_frame_event())
+                };
+                recorder.wait_event(*wait_event);
 
                 let ctx = FrameGraphContext {
                     frame_graph: &session.frame_graph,
@@ -390,7 +459,7 @@ impl Drop for VulkanFrameGraphExecutor {
 }
 
 impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
-    fn begin_frame(&mut self, shader_comiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
+    fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
         let curr_cmd_pool = self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
         unsafe {
             self.ctx.device().reset_command_pool(
@@ -401,7 +470,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         self.session = Some(FrameSession::new(frame_graph));
         self.resource_manager.retire_resources();
-        self.initialize_session_pipelines(shader_comiler);
+        self.initialize_session_resources(shader_compiler);
     }
 
     fn end_frame(&mut self) -> FrameGraph {
@@ -411,6 +480,23 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             warn!("Frame graph was executed but didn't record any command buffers.");
             return session.frame_graph;
         }
+
+        // Record staging buffer transfer operations.
+        let staging_buffer_copies_vk_command_buffer = {
+            let command_buffer =
+                Self::acquire_command_buffers(&self.ctx, &mut self.command_pools, 1)
+                    .expect("Failed to acquire command buffers.")
+                    .into_iter()
+                    .next()
+                    .unwrap();
+            let mut transition_recorder = VulkanRecorder::new(&self.ctx, command_buffer);
+            transition_recorder.begin();
+            self.ctx.record_buffer_writes(&mut transition_recorder);
+            transition_recorder.set_event(session.buffer_writes_event.take().unwrap());
+            transition_recorder.finish();
+
+            command_buffer
+        };
 
         let swapchain_image_id = session
             .resource_map
@@ -432,14 +518,15 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             recorder.finish();
         }
 
-        let command_buffer_infos = session
-            .recorded_command_buffers
-            .iter()
-            .map(|recorder| {
+        let mut command_buffer_infos = vec![ash::vk::CommandBufferSubmitInfo::default()
+            .command_buffer(staging_buffer_copies_vk_command_buffer)];
+        for recorder in session.recorded_command_buffers.iter() {
+            command_buffer_infos.push(
                 ash::vk::CommandBufferSubmitInfo::default()
-                    .command_buffer(recorder.command_buffer())
-            })
-            .collect::<Vec<_>>();
+                    .command_buffer(recorder.command_buffer()),
+            );
+        }
+
         let wait_semaphore_infos = [ash::vk::SemaphoreSubmitInfo::default()
             .semaphore(self.ctx.curr_image_acquire_semaphore())
             .stage_mask(ash::vk::PipelineStageFlags2::TOP_OF_PIPE)];
@@ -480,6 +567,44 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         session.frame_graph
     }
 
+    fn write_buffer(&mut self, name: &str, size: u64, write_fn: &mut dyn FnMut(&mut [u8])) {
+        let session = self.session.as_mut().unwrap();
+        let Some(resource_info) = session.frame_graph.resource_name_map.get(name) else {
+            panic!(
+                "Resource with name `{}` doesn't exists in the frame_graph.",
+                name
+            );
+        };
+        assert_eq!(resource_info.type_id, std::any::TypeId::of::<Buffer>());
+
+        let frame_graph_resource = FrameGraphResource::new(resource_info.id);
+        if !session
+            .frame_graph
+            .frame_buffers
+            .contains(&frame_graph_resource)
+        {
+            panic!("Can only write to frame owned, executor owned buffers from the executor.");
+        }
+
+        if let Some(existing_buffer) = session.resource_map.get(&frame_graph_resource.as_untyped())
+        {
+            panic!("Already wrote to the buffer once this frame, will support multiple writes to the same buffer some times in the future, with custom task ordering.");
+        }
+
+        let frame_buffer_id = self
+            .resource_manager
+            .get_or_create_frame_buffer(name, FrameGraphBufferInfo { size });
+        session.resource_map.insert(
+            frame_graph_resource.as_untyped(),
+            FGResourceBackendId {
+                resource_id: frame_buffer_id.as_untyped(),
+                expected_type: std::any::TypeId::of::<Buffer>(),
+            },
+        );
+
+        self.ctx.write_buffer(&frame_buffer_id, 0, size, write_fn);
+    }
+
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>) {
         let session = self.session_mut();
         let resource = session
@@ -500,7 +625,31 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             },
         );
         if prev.is_some() {
-            panic!("Can't supply a frame graph input twice in one frame.");
+            panic!("Can't supply a frame graph image input twice in one frame.");
+        }
+    }
+
+    fn supply_buffer_ref(&mut self, name: &str, buffer: &ResourceId<Buffer>) {
+        let session = self.session_mut();
+        let resource = session
+            .frame_graph
+            .resource_name_map
+            .get(name)
+            .expect(&format!(
+                "The resource `{}` doesn't exist in the executing frame graph",
+                name
+            ));
+        assert_eq!(resource.type_id, std::any::TypeId::of::<Buffer>());
+
+        let prev = session.resource_map.insert(
+            FrameGraphResource::new(resource.id),
+            FGResourceBackendId {
+                resource_id: buffer.as_untyped(),
+                expected_type: std::any::TypeId::of::<Buffer>(),
+            },
+        );
+        if prev.is_some() {
+            panic!("Can't supply a frame graph buffer input twice in one frame.");
         }
     }
 
@@ -545,11 +694,13 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         recorder.begin();
 
-        if pass_idx > 0 {
-            let prev_pass_event = session.pass_set_events[pass_idx - 1]
-                .get_or_insert_with(|| self.ctx.create_frame_event());
-            recorder.wait_event(*prev_pass_event)
-        }
+        let wait_event = if pass_idx == 0 {
+            session.buffer_writes_event.as_mut().unwrap()
+        } else {
+            session.pass_set_events[pass_idx - 1]
+                .get_or_insert_with(|| self.ctx.create_frame_event())
+        };
+        recorder.wait_event(*wait_event);
 
         pass.run(&mut recorder, &ctx);
 

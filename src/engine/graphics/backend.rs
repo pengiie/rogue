@@ -44,7 +44,19 @@ pub trait GraphicsBackendDevice {
 
     fn create_buffer(&mut self, create_info: GfxBufferCreateInfo) -> ResourceId<Buffer>;
 
-    fn write_buffer(&mut self, buffer: &ResourceId<Buffer>, offset: u64, bytes: &[u8]);
+    fn write_buffer(
+        &mut self,
+        buffer: &ResourceId<Buffer>,
+        offset: u64,
+        write_len: u64,
+        write_fn: &mut dyn FnMut(&mut [u8]),
+    );
+
+    fn write_buffer_slice(&mut self, buffer: &ResourceId<Buffer>, offset: u64, data: &[u8]) {
+        self.write_buffer(buffer, offset, data.len() as u64, &mut |mut write_ptr| {
+            write_ptr.copy_from_slice(data);
+        });
+    }
 
     fn end_frame(&mut self);
 
@@ -88,7 +100,16 @@ pub trait GraphicsBackendFrameGraphExecutor {
     fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph);
     fn end_frame(&mut self) -> FrameGraph;
 
+    fn write_buffer(&mut self, name: &str, size: u64, write_fn: &mut dyn FnMut(&mut [u8]));
+
+    fn write_buffer_slice(&mut self, name: &str, data: &[u8]) {
+        self.write_buffer(name, data.len() as u64, &mut |mut write_ptr| {
+            write_ptr.copy_from_slice(data);
+        });
+    }
+
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
+    fn supply_buffer_ref(&mut self, name: &str, buffer: &ResourceId<Buffer>);
     fn supply_pass_ref(&mut self, name: &str, pass: Box<dyn GfxPassOnceImpl>);
 
     fn supply_input(&mut self, name: &str, input_data: Box<dyn std::any::Any>);
@@ -112,6 +133,7 @@ pub struct ComputePipeline;
 pub struct RasterPipeline;
 pub struct Untyped;
 pub struct Image;
+pub struct Sampler;
 pub struct Buffer;
 pub struct Memory;
 
@@ -215,6 +237,14 @@ impl ResourceId<Image> {
     }
 }
 
+impl ResourceId<Buffer> {
+    pub fn as_uniform_binding(&self) -> Binding {
+        Binding::UniformBuffer {
+            buffer: self.clone(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct GfxComputePipelineInfo {
     pub workgroup_size: Vector3<u32>,
@@ -308,8 +338,9 @@ pub struct UniformSetData {
 pub enum Binding {
     StorageImage { image: ResourceId<Image> },
     SampledImage { image: ResourceId<Image> },
-    Sampler {},
-    Buffer {},
+    Sampler { sampler: ResourceId<Sampler> },
+    UniformBuffer { buffer: ResourceId<Buffer> },
+    StorageBuffer { buffer: ResourceId<Buffer> },
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]

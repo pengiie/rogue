@@ -39,7 +39,7 @@ fn main() {
             .map(|location| location.to_string())
             .unwrap_or("i actually dunno".to_string());
         log::error!(
-            "\x1b[1;31mUh oh, ferris is \u{1F980} angry \u{1F980}, we got an big error at {}, tsk, tsk...\x1b[0m",
+            "\x1b[1;31mUh oh, ferris is angry \u{1F980}, we got an big error at {}, tsk, tsk...\x1b[0m",
             panic_location
         );
 

@@ -17,27 +17,35 @@ use nalgebra::{Vector2, Vector3};
 use parking_lot::lock_api::RwLock;
 use raw_window_handle::{HasDisplayHandle, HasRawWindowHandle, HasWindowHandle};
 
-use crate::engine::{
-    event::Events,
-    graphics::{
-        backend::{
-            BindGroup, Binding, Buffer, ComputePipeline, GfxBufferCreateInfo,
-            GfxComputePipelineCreateInfo, GfxComputePipelineInfo, GfxFilterMode,
-            GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxPresentMode,
-            GfxSwapchainInfo, GraphicsBackendDevice, GraphicsBackendEvent,
-            GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline,
-            RasterPipelineCreateInfo, ResourceId, UniformData, UniformSetData, Untyped,
+use crate::{
+    common::freelist::{FreeList, FreeListHandle},
+    engine::{
+        event::Events,
+        graphics::{
+            backend::{
+                BindGroup, Binding, Buffer, ComputePipeline, GfxBufferCreateInfo,
+                GfxComputePipelineCreateInfo, GfxComputePipelineInfo, GfxFilterMode,
+                GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxPresentMode,
+                GfxSwapchainInfo, GraphicsBackendDevice, GraphicsBackendEvent,
+                GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline,
+                RasterPipelineCreateInfo, ResourceId, UniformData, UniformSetData, Untyped,
+            },
+            gpu_allocator::{Allocation, AllocatorTree},
+            shader::{
+                Shader, ShaderBindingType, ShaderCompilationOptions, ShaderCompilationTarget,
+                ShaderCompiler, ShaderSetBinding, ShaderStage,
+            },
         },
-        gpu_allocator::{Allocation, AllocatorTree},
-        shader::{
-            Shader, ShaderBindingType, ShaderCompilationOptions, ShaderCompilationTarget,
-            ShaderCompiler, ShaderSetBinding, ShaderStage,
-        },
+        window::window::{Window, WindowHandle},
     },
-    window::window::{Window, WindowHandle},
 };
 
-use super::{executor::VulkanFrameGraphExecutor, pipeline_manager::VulkanPipelineManager};
+use super::{
+    executor::VulkanFrameGraphExecutor, pipeline_manager::VulkanPipelineManager,
+    recorder::VulkanRecorder,
+};
+
+pub const VK_STAGING_BUFFER_MIN_SIZE: u64 = 1 << 20;
 
 pub struct VulkanContextInner {
     entry: ash::Entry,
@@ -214,8 +222,34 @@ impl VulkanContext {
         create_info: GfxBufferCreateInfo,
     ) -> anyhow::Result<ResourceId<Buffer>> {
         let mut memory_allocator = self.memory_allocator.write();
-        self.resource_manager
-            .create_buffer(&mut memory_allocator, create_info)
+        self.resource_manager.create_buffer(
+            &mut memory_allocator,
+            create_info,
+            VulkanAllocationType::GpuLocal,
+            false,
+        )
+    }
+
+    pub fn record_buffer_writes(&self, recorder: &mut VulkanRecorder) {
+        self.resource_manager.record_buffer_writes(recorder);
+    }
+
+    /// Guarantees that the buffer write will be available for the next gpu frame.
+    pub fn write_buffer(
+        &self,
+        buffer: &ResourceId<Buffer>,
+        offset: u64,
+        write_len: u64,
+        write_fn: &mut dyn FnMut(&mut [u8]),
+    ) {
+        let mut memory_allocator = self.memory_allocator.write();
+        self.resource_manager.write_buffer(
+            &mut memory_allocator,
+            buffer,
+            offset,
+            write_len,
+            write_fn,
+        );
     }
 
     pub fn create_compute_pipeline(
@@ -262,6 +296,7 @@ pub struct VulkanDevice {
 pub struct VulkanSwapchain {
     ctx_ref: Arc<VulkanContextInner>,
     pub swapchain: ash::vk::SwapchainKHR,
+    pub create_info: ash::vk::SwapchainCreateInfoKHR<'static>,
     swapchain_images: Vec<ResourceId<Image>>,
 }
 
@@ -482,6 +517,7 @@ impl VulkanDevice {
 
         let (
             swapchain,
+            swapchain_create_info,
             swapchain_images,
             swapchain_format,
             swapchain_extent,
@@ -511,8 +547,14 @@ impl VulkanDevice {
                     surface_capabilities.max_image_count,
                 );
             let swapchain_extent = ash::vk::Extent2D {
-                width: window.width(),
-                height: window.height(),
+                width: window.width().clamp(
+                    surface_capabilities.min_image_extent.width,
+                    surface_capabilities.max_image_extent.width,
+                ),
+                height: window.height().clamp(
+                    surface_capabilities.min_image_extent.height,
+                    surface_capabilities.max_image_extent.height,
+                ),
             };
             let swapchain_image_usage = ash::vk::ImageUsageFlags::TRANSFER_DST;
 
@@ -535,6 +577,7 @@ impl VulkanDevice {
             let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain) }?;
             (
                 swapchain,
+                swapchain_create_info,
                 swapchain_images,
                 swapchain_format,
                 swapchain_extent,
@@ -597,6 +640,7 @@ impl VulkanDevice {
             .collect::<Vec<_>>();
         let swapchain = Arc::new(VulkanSwapchain {
             ctx_ref: context_inner.clone(),
+            create_info: swapchain_create_info,
             swapchain,
             swapchain_images,
         });
@@ -783,8 +827,15 @@ impl GraphicsBackendDevice for VulkanDevice {
         self.context.create_buffer(create_info).unwrap()
     }
 
-    fn write_buffer(&mut self, buffer: &ResourceId<Buffer>, offset: u64, bytes: &[u8]) {
-        todo!()
+    fn write_buffer(
+        &mut self,
+        buffer: &ResourceId<Buffer>,
+        offset: u64,
+        write_len: u64,
+        write_fn: &mut dyn FnMut(&mut [u8]),
+    ) {
+        self.context
+            .write_buffer(buffer, offset, write_len, write_fn);
     }
 
     fn end_frame(&mut self) {
@@ -830,7 +881,66 @@ impl GraphicsBackendDevice for VulkanDevice {
                 .device()
                 .queue_wait_idle(self.context.main_queue)
         };
-        todo!("resize swapchain")
+
+        let mut swapchain = self.context.swapchain.write();
+
+        let surface_loader = self.context.surface_loader();
+        let surface_capabilities = unsafe {
+            surface_loader.get_physical_device_surface_capabilities(
+                self.context.inner.physical_device.physical_device,
+                self.context.surface(),
+            )
+        }
+        .expect("Failed to get vulkan surface capabilities.");
+
+        let new_extent = ash::vk::Extent2D::default()
+            .width(Into::<u32>::into(new_size.width).clamp(
+                surface_capabilities.min_image_extent.width,
+                surface_capabilities.max_image_extent.width,
+            ))
+            .height(Into::<u32>::into(new_size.height).clamp(
+                surface_capabilities.min_image_extent.height,
+                surface_capabilities.max_image_extent.height,
+            ));
+
+        let new_swapchain_create_info = swapchain
+            .create_info
+            .image_extent(new_extent)
+            .old_swapchain(swapchain.swapchain);
+
+        let swapchain_loader = self.context.swapchain_loader();
+        let new_swapchain =
+            unsafe { swapchain_loader.create_swapchain(&new_swapchain_create_info, None) }
+                .expect("Failed to recreate swapchain");
+
+        let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(new_swapchain) }
+            .expect("Failed to get swapchain images");
+        let swapchain_images = swapchain_images
+            .into_iter()
+            .map(|image| {
+                self.context
+                    .resource_manager
+                    .create_image_borrowed(VulkanBorrowedImageCreateInfo {
+                        image,
+                        usage: new_swapchain_create_info.image_usage,
+                        info: VulkanImageInfo {
+                            image_type: GfxImageType::D2,
+                            format: new_swapchain_create_info.image_format,
+                            extent: new_extent,
+                        },
+                    })
+                    .expect("Failed to create swapchain image")
+            })
+            .collect::<Vec<_>>();
+
+        let new_swapchain = VulkanSwapchain {
+            ctx_ref: self.context.inner.clone(),
+            swapchain: new_swapchain,
+            create_info: new_swapchain_create_info,
+            swapchain_images,
+        };
+
+        *swapchain = Arc::new(new_swapchain);
     }
 
     fn pre_init_update(&mut self, events: &mut Events) {
@@ -856,12 +966,15 @@ struct VulkanSharedMemory {
 
 #[derive(Clone)]
 struct VulkanMemory {
+    mapped_ptr: Option<*mut u8>,
     device_memory: ash::vk::DeviceMemory,
     /// Size of the entire `ash::vk::DeviceMemory` allocated.
     size: u64,
 }
 
 type VulkanMemoryIndex = u64;
+
+#[derive(Clone)]
 struct VulkanMemoryAllocation {
     memory_index: VulkanMemoryIndex,
     // If this is `Some`, then this points to a shared allocation; else, this points to a dedicated
@@ -870,6 +983,9 @@ struct VulkanMemoryAllocation {
 }
 
 struct VulkanAllocationInfo {
+    /// Mapped pointer relative to the start of this allocation and is only valid for the
+    /// allocation size.
+    mapped_ptr: Option<*mut u8>,
     memory: VulkanMemory,
     offset: u64,
 }
@@ -916,6 +1032,7 @@ impl VulkanAllocator {
             VulkanMemory {
                 device_memory,
                 size,
+                mapped_ptr: None,
             },
             *memory_type,
         ))
@@ -933,6 +1050,10 @@ impl VulkanAllocator {
                 .intersects(memory_property_flags)
                 && shared_memory.free_size_remaining >= allocation_size
             {
+                debug!(
+                    "Using memory type index {} for memory properties {:?}",
+                    memory_index, memory_property_flags
+                );
                 return Ok(memory_index as VulkanMemoryIndex);
             }
         }
@@ -955,7 +1076,9 @@ impl VulkanAllocator {
     fn allocate_memory(
         &mut self,
         size: u64,
+        alignment: u32,
         mut allocation_type: VulkanAllocationType,
+        mapped: bool,
     ) -> anyhow::Result<VulkanMemoryAllocation> {
         // If size is greater than a certain amount, force the allocation to be dedicated.
         if size > Self::SHARED_MEMORY_CHUNK_SIZE {
@@ -978,6 +1101,7 @@ impl VulkanAllocator {
                     VulkanAllocationType::CpuLocal => {
                         ash::vk::MemoryPropertyFlags::HOST_VISIBLE
                             | ash::vk::MemoryPropertyFlags::HOST_CACHED
+                            | ash::vk::MemoryPropertyFlags::HOST_COHERENT
                     }
                     _ => unreachable!(),
                 };
@@ -989,16 +1113,32 @@ impl VulkanAllocator {
                     .unwrap();
                 let shared_memory_traversal = shared_memory
                     .allocator
-                    .allocate(size.next_power_of_two())
+                    .allocate(size.next_power_of_two(), alignment)
                     .unwrap();
                 shared_memory.active_allocations += 1;
                 shared_memory.free_size_remaining -= shared_memory_traversal.length_bytes();
+
+                if mapped && shared_memory.memory.mapped_ptr.is_none() {
+                    shared_memory.memory.mapped_ptr = Some(unsafe {
+                        self.ctx
+                            .device
+                            .map_memory(
+                                shared_memory.memory.device_memory,
+                                0,
+                                shared_memory.memory.size,
+                                ash::vk::MemoryMapFlags::empty(),
+                            )
+                            .expect("Failed to map shared gpu memory")
+                            as *mut u8
+                    });
+                }
 
                 VulkanMemoryAllocation {
                     memory_index: shared_memory_index,
                     traversal: Some(shared_memory_traversal),
                 }
             }
+
             // Dedicated
             VulkanAllocationType::GpuLocalDedicated | VulkanAllocationType::CpuLocalDedicated => {
                 let dedicated_memory_index = self.dedicated_memory.len() as VulkanMemoryIndex;
@@ -1009,11 +1149,28 @@ impl VulkanAllocator {
                     VulkanAllocationType::CpuLocalDedicated => {
                         ash::vk::MemoryPropertyFlags::HOST_VISIBLE
                             | ash::vk::MemoryPropertyFlags::HOST_CACHED
+                            | ash::vk::MemoryPropertyFlags::HOST_COHERENT
                     }
                     _ => unreachable!(),
                 };
-                let (device_memory, _) =
+                let (mut device_memory, _) =
                     self.allocate_device_memory(size, memory_property_flags)?;
+
+                if mapped && device_memory.mapped_ptr.is_none() {
+                    device_memory.mapped_ptr = Some(unsafe {
+                        self.ctx
+                            .device
+                            .map_memory(
+                                device_memory.device_memory,
+                                0,
+                                device_memory.size,
+                                ash::vk::MemoryMapFlags::empty(),
+                            )
+                            .expect("Failed to map dedicated gpu memory")
+                            as *mut u8
+                    });
+                }
+
                 self.dedicated_memory.push(device_memory);
 
                 VulkanMemoryAllocation {
@@ -1035,6 +1192,9 @@ impl VulkanAllocator {
                     .expect("Tried to get allocation info but allocation was freed/invalid.");
 
                 VulkanAllocationInfo {
+                    mapped_ptr: shared_memory.memory.mapped_ptr.map(|ptr| unsafe {
+                        ptr.byte_add(traversal.start_index_stride_bytes() as usize)
+                    }),
                     memory: shared_memory.memory.clone(),
                     offset: traversal.start_index_stride_bytes(),
                 }
@@ -1046,7 +1206,11 @@ impl VulkanAllocator {
                     .expect("Tried to get allocation info but allocation was freed/invalid.")
                     .clone();
 
-                VulkanAllocationInfo { memory, offset: 0 }
+                VulkanAllocationInfo {
+                    mapped_ptr: memory.mapped_ptr,
+                    memory,
+                    offset: 0,
+                }
             }
         }
     }
@@ -1092,6 +1256,23 @@ pub struct VulkanResourceManager {
     // Events are only valid when using them, for one gpu frame. After that gpu frame the event is
     // available to use again.
     event_pools: Vec<parking_lot::RwLock<VulkanEventPool>>,
+
+    staging_buffers: parking_lot::RwLock<FreeList<VulkanStagingBuffer>>,
+    /// Staging buffers that have ownership transferred to the gpu.
+    in_use_staging_buffers: parking_lot::RwLock<HashSet<FreeListHandle<VulkanStagingBuffer>>>,
+    /// Staging buffers associated with the frame index they are used on the gpu, so when we get
+    /// the timeline semaphore for that frame index, we can free time.
+    staging_buffer_gpu_timeline: Vec<parking_lot::RwLock<Vec<FreeListHandle<VulkanStagingBuffer>>>>,
+    copy_tasks: parking_lot::RwLock<HashMap<ResourceId<Buffer>, Vec<VulkanStagingCopyTask>>>,
+}
+
+struct VulkanStagingBuffer {
+    buffer: ResourceId<Buffer>,
+    /// The mapped coherent pointer to the start of the gpu buffer.
+    mapped_pointer: *mut u8,
+    /// The current index into the staging buffer that we can start writing.
+    curr_write_pointer: u64,
+    size: u64,
 }
 
 struct VulkanEventPool {
@@ -1127,8 +1308,10 @@ pub struct VulkanComputePipeline {
     pub workgroup_size: Vector3<u32>,
 }
 
+#[derive(Clone)]
 struct VulkanBuffer {
     buffer: ash::vk::Buffer,
+    size: u64,
     allocation: VulkanMemoryAllocation,
 }
 
@@ -1239,6 +1422,13 @@ struct VulkanBorrowedImageCreateInfo {
     info: VulkanImageInfo,
 }
 
+struct VulkanStagingCopyTask {
+    dst_buffer: ResourceId<Buffer>,
+    src_offset: u64,
+    dst_offset: u64,
+    copy_size: u64,
+}
+
 enum VulkanSetWriteIndex {
     ImageInfo(usize),
     BufferInfo(usize),
@@ -1301,6 +1491,14 @@ impl VulkanResourceManager {
                     })
                 })
                 .collect(),
+
+            staging_buffers: parking_lot::RwLock::new(FreeList::new()),
+            in_use_staging_buffers: parking_lot::RwLock::new(HashSet::new()),
+            staging_buffer_gpu_timeline: (0..ctx.frames_in_flight)
+                .map(|_| parking_lot::RwLock::new(Vec::new()))
+                .collect(),
+
+            copy_tasks: parking_lot::RwLock::new(HashMap::new()),
         }
     }
 
@@ -1328,6 +1526,17 @@ impl VulkanResourceManager {
             for i in 0..event_pool.event_pool.len() {
                 event_pool.free_events.push(i as u32);
             }
+
+            // Free up staging buffers from the finished gpu frame.
+            let mut to_free_staging_buffer_handles =
+                self.staging_buffer_gpu_timeline[frame_index as usize].write();
+            let mut staging_buffers = self.staging_buffers.write();
+            let mut in_use_staging_buffers = self.in_use_staging_buffers.write();
+            for staging_buffer_handle in to_free_staging_buffer_handles.drain(..) {
+                in_use_staging_buffers.remove(&staging_buffer_handle);
+                let staging_buffer = staging_buffers.get_mut(staging_buffer_handle);
+                staging_buffer.curr_write_pointer = 0;
+            }
         }
     }
 
@@ -1344,6 +1553,7 @@ impl VulkanResourceManager {
         let vk_event = unsafe { self.ctx.device.create_event(&create_info, None) }
             .expect("Failed to create vulkan event.");
         event_pool.event_pool.push(vk_event);
+        debug!("Creating vkEvent.");
 
         vk_event
     }
@@ -1358,6 +1568,7 @@ impl VulkanResourceManager {
         &self,
         set_binding: &ShaderSetBinding,
     ) -> anyhow::Result<ash::vk::DescriptorSetLayout> {
+        debug!("Creating descriptor set layout");
         let layout_bindings = set_binding
             .bindings
             .iter()
@@ -1390,6 +1601,7 @@ impl VulkanResourceManager {
     }
 
     fn create_pipeline_layout(&self, shader: &Shader) -> anyhow::Result<u64> {
+        debug!("Creating pipeline layout");
         use std::collections::hash_map::Entry;
 
         let mut shader_pipeline_layout_map = self.shader_pipeline_layout_map.write();
@@ -1443,6 +1655,10 @@ impl VulkanResourceManager {
         shader_compiler: &mut ShaderCompiler,
         create_info: GfxComputePipelineCreateInfo,
     ) -> anyhow::Result<ResourceId<ComputePipeline>> {
+        debug!(
+            "Creating compute pipeline `{:?}`.",
+            create_info.shader_path.file_path()
+        );
         let resource_id = self.next_resource_id();
 
         let shader = shader_compiler.compile_shader(ShaderCompilationOptions {
@@ -1527,6 +1743,7 @@ impl VulkanResourceManager {
         let uniform_set_datas = uniform_data.as_sets(&pipeline_layout.shader_bindings);
 
         let mut vk_image_infos = Vec::new();
+        let mut vk_buffer_infos = Vec::new();
         let mut vk_descriptor_set_writes = Vec::new();
 
         let vk_descriptor_sets = pipeline_layout
@@ -1549,6 +1766,7 @@ impl VulkanResourceManager {
                             unsafe { self.ctx.device.allocate_descriptor_sets(&create_info) }
                                 .expect("Failed to create descriptor set")
                                 .remove(0);
+                        debug!("Creating descriptor set.");
 
                         (new_set, new_set_bindings.clone())
                     });
@@ -1605,8 +1823,23 @@ impl VulkanResourceManager {
                                 write =
                                     write.descriptor_type(ash::vk::DescriptorType::SAMPLED_IMAGE);
                             }
-                            Binding::Sampler {} => todo!(),
-                            Binding::Buffer {} => todo!(),
+                            Binding::Sampler { sampler } => todo!(),
+                            Binding::UniformBuffer { buffer } => {
+                                let vk_buffer_info = self.get_buffer_info(buffer);
+                                vk_buffer_infos.push(
+                                    ash::vk::DescriptorBufferInfo::default()
+                                        .buffer(vk_buffer_info.buffer)
+                                        .offset(0)
+                                        .range(ash::vk::WHOLE_SIZE),
+                                );
+                                info = Some(VulkanSetWriteIndex::BufferInfo(
+                                    vk_buffer_infos.len() - 1,
+                                ));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER);
+                                debug!("writing uniform buffer");
+                            }
+                            Binding::StorageBuffer { buffer } => todo!(),
                         }
 
                         vk_descriptor_set_writes.push((write, info.unwrap()));
@@ -1624,7 +1857,9 @@ impl VulkanResourceManager {
                     VulkanSetWriteIndex::ImageInfo(idx) => {
                         write.image_info(std::slice::from_ref(&vk_image_infos[idx]))
                     }
-                    VulkanSetWriteIndex::BufferInfo(_) => todo!(),
+                    VulkanSetWriteIndex::BufferInfo(idx) => {
+                        write.buffer_info(std::slice::from_ref(&vk_buffer_infos[idx]))
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -1651,6 +1886,7 @@ impl VulkanResourceManager {
         &self,
         image_info: VulkanBorrowedImageCreateInfo,
     ) -> anyhow::Result<ResourceId<Image>> {
+        debug!("Creating borrowed image.");
         let resource_id = self.next_resource_id();
         let view = if image_info.usage.intersects(
             ash::vk::ImageUsageFlags::SAMPLED
@@ -1678,20 +1914,33 @@ impl VulkanResourceManager {
         &self,
         allocator: &mut VulkanAllocator,
         create_info: GfxBufferCreateInfo,
+        allocation_type: VulkanAllocationType,
+        mapped_ptr: bool,
     ) -> anyhow::Result<ResourceId<Buffer>> {
+        debug!(
+            "Creating vulkan buffer `{}`, mapped={}.",
+            create_info.name, mapped_ptr
+        );
         anyhow::ensure!(create_info.size > 0);
         let create_info = ash::vk::BufferCreateInfo::default()
             .size(create_info.size)
             .usage(
                 ash::vk::BufferUsageFlags::STORAGE_BUFFER
                     | ash::vk::BufferUsageFlags::UNIFORM_BUFFER
-                    | ash::vk::BufferUsageFlags::TRANSFER_DST,
+                    | ash::vk::BufferUsageFlags::TRANSFER_DST
+                    | ash::vk::BufferUsageFlags::TRANSFER_SRC,
             )
             .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
         let buffer = unsafe { self.ctx.device.create_buffer(&create_info, None) }?;
 
-        let allocation =
-            allocator.allocate_memory(create_info.size, VulkanAllocationType::GpuLocal)?;
+        let buffer_memory_requirements =
+            unsafe { self.ctx.device.get_buffer_memory_requirements(buffer) };
+        let allocation = allocator.allocate_memory(
+            buffer_memory_requirements.size,
+            buffer_memory_requirements.alignment as u32,
+            allocation_type,
+            mapped_ptr,
+        )?;
         let allocation_info = allocator.get_allocation_info(&allocation);
         unsafe {
             self.ctx.device.bind_buffer_memory(
@@ -1702,11 +1951,182 @@ impl VulkanResourceManager {
         }?;
 
         let resource_id = self.next_resource_id();
-        self.owned_buffers
-            .write()
-            .insert(resource_id, VulkanBuffer { buffer, allocation });
+        self.owned_buffers.write().insert(
+            resource_id,
+            VulkanBuffer {
+                buffer,
+                size: create_info.size,
+                allocation,
+            },
+        );
 
         Ok(resource_id)
+    }
+
+    fn get_or_create_staging_buffer(
+        &self,
+        allocator: &mut VulkanAllocator,
+        min_size: u64,
+    ) -> FreeListHandle<VulkanStagingBuffer> {
+        let mut staging_buffer_free_list = self.staging_buffers.write();
+
+        for (index, staging_buffer) in staging_buffer_free_list.iter().enumerate() {
+            let remaining_size = staging_buffer.size - (staging_buffer.curr_write_pointer + 1);
+            if remaining_size >= min_size {
+                let handle = FreeListHandle::new(index);
+                return handle;
+            }
+        }
+
+        let staging_buffer_handle = staging_buffer_free_list.next_free_handle();
+
+        let new_buffer_size = min_size.max(VK_STAGING_BUFFER_MIN_SIZE);
+        let new_buffer = self
+            .create_buffer(
+                allocator,
+                GfxBufferCreateInfo {
+                    name: format!("staging_buffer_{}", staging_buffer_handle.index()),
+                    size: new_buffer_size,
+                },
+                VulkanAllocationType::CpuLocal,
+                true,
+            )
+            .expect("Failed to create staging buffer.");
+        let new_buffer_info = self.get_buffer_info(&new_buffer);
+        let new_allocation_info = allocator.get_allocation_info(&new_buffer_info.allocation);
+
+        let new_buffer_mapped_pointer = new_allocation_info
+            .mapped_ptr
+            .expect("Should have created staging buffer with mapped pointer");
+        let staging_desc = VulkanStagingBuffer {
+            buffer: new_buffer,
+            mapped_pointer: new_buffer_mapped_pointer as *mut u8,
+            curr_write_pointer: 0,
+            size: new_buffer_size,
+        };
+
+        let new_handle = staging_buffer_free_list.push(staging_desc);
+        assert_eq!(
+            new_handle, staging_buffer_handle,
+            "Pre-emptive free index and actual free index should be the same."
+        );
+
+        new_handle
+    }
+
+    fn write_buffer(
+        &self,
+        allocator: &mut VulkanAllocator,
+        dst_buffer: &ResourceId<Buffer>,
+        dst_offset: u64,
+        write_len: u64,
+        write_fn: &mut dyn FnMut(&mut [u8]),
+    ) {
+        // TODO: only write staging buffers rwlock list here and pass it into
+        // `get_or_create_staging_buffer`.
+        let staging_buffer_index = self.get_or_create_staging_buffer(allocator, write_len);
+
+        let mut staging_buffers = self.staging_buffers.write();
+        let staging_buffer = staging_buffers.get_mut(staging_buffer_index);
+
+        unsafe {
+            let write_ptr = staging_buffer
+                .mapped_pointer
+                .byte_add(staging_buffer.curr_write_pointer as usize);
+            (*write_fn)(std::slice::from_raw_parts_mut(
+                write_ptr,
+                write_len as usize,
+            ));
+        }
+
+        let src_offset = staging_buffer.curr_write_pointer;
+        staging_buffer.curr_write_pointer += write_len;
+        assert!(staging_buffer.curr_write_pointer < staging_buffer.size);
+
+        let mut copy_tasks = self.copy_tasks.write();
+        let mut staging_buffer_copy_tasks = copy_tasks.entry(staging_buffer.buffer).or_default();
+        staging_buffer_copy_tasks.push(VulkanStagingCopyTask {
+            dst_buffer: *dst_buffer,
+            src_offset,
+            dst_offset,
+            copy_size: write_len,
+        });
+    }
+
+    fn get_buffer_info(&self, buffer: &ResourceId<Buffer>) -> VulkanBuffer {
+        let owned_buffers = self.owned_buffers.read();
+        let Some(buffer_info) = owned_buffers.get(buffer) else {
+            panic!("Tried to get buffer info of a buffer that doesn't exist.");
+        };
+
+        // TODO: RAII read guard on the rwlock as long as the returned reference is not dropped.
+        buffer_info.clone()
+    }
+
+    // TODO: buffer write group api with write group handle so we can write buffers on multiple
+    // threads.
+    fn record_buffer_writes(&self, recorder: &mut VulkanRecorder) {
+        let staging_buffers = self.staging_buffers.read();
+        let mut staging_buffer_gpu_timeline =
+            self.staging_buffer_gpu_timeline[self.ctx.curr_cpu_frame_index() as usize].write();
+        let mut in_use_staging_buffers = self.in_use_staging_buffers.write();
+        let mut copy_tasks_guard = self.copy_tasks.write();
+
+        let mut copy_tasks = HashMap::new();
+        std::mem::swap(&mut copy_tasks, &mut copy_tasks_guard);
+
+        let mut buffer_barriers = Vec::new();
+
+        for (staging_buffer, copy_tasks) in copy_tasks.into_iter() {
+            let mut dst_buffer_copy_map: HashMap<ResourceId<Buffer>, Vec<ash::vk::BufferCopy>> =
+                HashMap::new();
+            for task in &copy_tasks {
+                let mut vec = dst_buffer_copy_map.entry(task.dst_buffer).or_default();
+                vec.push(
+                    ash::vk::BufferCopy::default()
+                        .src_offset(task.src_offset)
+                        .dst_offset(task.dst_offset)
+                        .size(task.copy_size),
+                );
+            }
+
+            let src_buffer = self.get_buffer_info(&staging_buffer);
+            for (dst_buffer_id, regions) in dst_buffer_copy_map.into_iter() {
+                let dst_buffer = self.get_buffer_info(&dst_buffer_id);
+
+                for region in &regions {
+                    buffer_barriers.push(
+                        ash::vk::BufferMemoryBarrier::default()
+                            .buffer(dst_buffer.buffer)
+                            .offset(region.dst_offset)
+                            .size(region.size)
+                            .src_access_mask(ash::vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(ash::vk::AccessFlags::SHADER_READ),
+                    );
+                }
+
+                unsafe {
+                    self.ctx.device.cmd_copy_buffer(
+                        recorder.command_buffer(),
+                        src_buffer.buffer,
+                        dst_buffer.buffer,
+                        &regions,
+                    )
+                };
+            }
+        }
+
+        unsafe {
+            self.ctx.device.cmd_pipeline_barrier(
+                recorder.command_buffer(),
+                ash::vk::PipelineStageFlags::TRANSFER,
+                ash::vk::PipelineStageFlags::ALL_COMMANDS,
+                ash::vk::DependencyFlags::empty(),
+                &[],
+                &buffer_barriers,
+                &[],
+            )
+        };
     }
 
     /// Images have dedicated memory allocations by default.
@@ -1715,6 +2135,7 @@ impl VulkanResourceManager {
         allocator: &mut VulkanAllocator,
         create_info: GfxImageCreateInfo,
     ) -> anyhow::Result<ResourceId<Image>> {
+        debug!("creating vulkan image {}.", create_info.name);
         anyhow::ensure!(create_info.extent.x > 0 && create_info.extent.y > 0);
         let image_info = VulkanImageInfo {
             image_type: create_info.image_type,
@@ -1755,7 +2176,9 @@ impl VulkanResourceManager {
             unsafe { self.ctx.device.get_image_memory_requirements(image) };
         let allocation = allocator.allocate_memory(
             image_memory_requirements.size,
+            image_memory_requirements.alignment as u32,
             VulkanAllocationType::GpuLocalDedicated,
+            false,
         )?;
         let allocation_info = allocator.get_allocation_info(&allocation);
         unsafe {
@@ -1852,6 +2275,14 @@ impl Drop for VulkanResourceManager {
             self.ctx
                 .device
                 .destroy_descriptor_pool(self.descriptor_pool, None)
+        }
+
+        for pipeline_layout in self.pipeline_layouts.write().iter() {
+            unsafe {
+                self.ctx
+                    .device
+                    .destroy_pipeline_layout(pipeline_layout.layout, None)
+            };
         }
 
         for (_, borrowed_image) in self.borrowed_images.write().iter() {

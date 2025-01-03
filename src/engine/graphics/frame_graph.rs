@@ -59,6 +59,10 @@ pub struct FrameGraphImageInfo {
     pub extent: Vector2<u32>,
 }
 
+pub struct FrameGraphBufferInfo {
+    pub size: u64,
+}
+
 impl FrameGraphImageInfo {
     pub fn new_rgba32float(extent: Vector2<u32>) -> Self {
         Self {
@@ -265,6 +269,8 @@ pub struct FrameGraph {
     pub frame_image_infos_delayed:
         HashMap<FrameGraphResource<Image>, Box<dyn Fn(&FrameGraphContext) -> FrameGraphImageInfo>>,
 
+    pub frame_buffers: HashSet<FrameGraphResource<Buffer>>,
+
     pub swapchain_image: FrameGraphResource<Image>,
 }
 
@@ -317,6 +323,7 @@ impl FrameGraph {
             inputs: builder.inputs,
             passes: used_passes,
             compute_pipelines: builder.compute_pipelines,
+            frame_buffers: builder.frame_buffers,
             frame_image_infos: builder.frame_image_infos,
             frame_image_infos_delayed: builder.frame_image_infos_delayed,
             swapchain_image,
@@ -526,6 +533,10 @@ impl<'a> FrameGraphContext<'a> {
     }
 
     pub fn get_image(&self, resource: impl IntoFrameGraphResource<Image>) -> ResourceId<Image> {
+        self.get_resource_id(resource)
+    }
+
+    pub fn get_buffer(&self, resource: impl IntoFrameGraphResource<Buffer>) -> ResourceId<Buffer> {
         self.get_resource_id(resource)
     }
 

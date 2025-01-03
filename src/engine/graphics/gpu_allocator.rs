@@ -42,7 +42,7 @@ impl GpuBufferAllocator {
         );
         let allocation_size = bytes.next_power_of_two();
         self.total_allocated_size += allocation_size;
-        let allocation = self.allocations.allocate(allocation_size);
+        let allocation = self.allocations.allocate(allocation_size, 4);
 
         allocation
     }
@@ -57,7 +57,7 @@ impl GpuBufferAllocator {
         assert!(data.len() as u64 <= allocation.range.end - allocation.range.start);
 
         let offset = allocation.range.start;
-        device.write_buffer(self.buffer(), allocation.range.start, data)
+        device.write_buffer_slice(self.buffer(), allocation.range.start, data);
     }
 
     pub fn buffer(&self) -> &ResourceId<Buffer> {
@@ -69,6 +69,7 @@ impl GpuBufferAllocator {
     }
 }
 
+#[derive(Clone)]
 pub struct Allocation {
     /// Currently, used as a unique identifier hash for an allocation.
     traversal: u64,
@@ -139,7 +140,7 @@ impl AllocatorTree {
         }
     }
 
-    pub fn allocate(&mut self, needed_size: u64) -> Option<Allocation> {
+    pub fn allocate(&mut self, needed_size: u64, required_alignment: u32) -> Option<Allocation> {
         assert!(needed_size.is_power_of_two());
         // This node is already allocated don't search any further.
         if self.is_allocated {
@@ -164,14 +165,14 @@ impl AllocatorTree {
                 self.start_index + child_size * dir,
                 child_size,
             ));
-            let allocation = new_child.allocate(needed_size).unwrap();
+            let allocation = new_child.allocate(needed_size, required_alignment).unwrap();
 
             (new_child, allocation)
         };
 
         if let Some(left) = &mut self.left {
             // The left node exists so traverse down to see if there is a free space.
-            if let Some(found) = left.allocate(needed_size) {
+            if let Some(found) = left.allocate(needed_size, required_alignment) {
                 return Some(found);
             }
         } else {
@@ -182,7 +183,7 @@ impl AllocatorTree {
 
         if let Some(right) = &mut self.right {
             // The left node exists so traverse down to see if there is a free space.
-            if let Some(found) = right.allocate(needed_size) {
+            if let Some(found) = right.allocate(needed_size, required_alignment) {
                 return Some(found);
             }
         } else {
