@@ -34,5 +34,5 @@ void main(uint3 id: SV_DispatchThreadID) {
 //
 
   let uv = (float2) coord / (float2) dimensions;
-  u_shader.backbuffer.Store(coord.xy, float4(1.0, uv.xy, 1.0));
+  u_shader.backbuffer.Store(coord.xy, float4(u_frame.world_info.red, uv.xy, 1.0));
 }

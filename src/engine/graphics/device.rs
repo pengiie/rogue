@@ -3,9 +3,11 @@ use std::{
     num::NonZeroU32,
     ops::{Deref, DerefMut},
     rc::Rc,
+    time::Duration,
 };
 
 use log::{debug, info};
+use nalgebra::ComplexField;
 use rogue_macros::Resource;
 use wgpu::{
     Backends, DeviceDescriptor, Features, InstanceDescriptor, Limits, SurfaceConfiguration,
@@ -14,10 +16,13 @@ use wgpu::{
 use crate::{
     engine::{
         event::Events,
-        resource::ResMut,
-        window::window::{Window, WindowHandle},
+        resource::{Res, ResMut},
+        window::{
+            time::Instant,
+            window::{Window, WindowHandle},
+        },
     },
-    settings::GraphicsSettings,
+    settings::{GraphicsSettings, Settings},
 };
 
 use super::{
@@ -30,6 +35,7 @@ pub type GfxDevice = Box<dyn GraphicsBackendDevice>;
 #[derive(Resource)]
 pub struct DeviceResource {
     backend_device: Option<GfxDevice>,
+    last_frame_time: Option<Instant>,
 }
 
 impl Deref for DeviceResource {
@@ -49,6 +55,7 @@ impl DerefMut for DeviceResource {
 impl DeviceResource {
     pub fn new() -> Self {
         Self {
+            last_frame_time: None,
             backend_device: None,
         }
     }
@@ -99,7 +106,24 @@ impl DeviceResource {
         }
     }
 
-    pub fn begin_frame(mut device: ResMut<DeviceResource>, mut events: ResMut<Events>) {
+    pub fn begin_frame(
+        mut device: ResMut<DeviceResource>,
+        mut events: ResMut<Events>,
+        settings: Res<Settings>,
+    ) {
+        // Cap framerate.
+        if let Some(last_frame_time) = device.last_frame_time {
+            let elapsed_time_us = last_frame_time.elapsed().as_micros();
+            let minimum_wait_time_us =
+                ((1.0 / settings.frame_rate_cap as f64) * 1_000_000.0).floor() as u128;
+            if elapsed_time_us < minimum_wait_time_us {
+                std::thread::sleep(Duration::from_micros(
+                    (minimum_wait_time_us - elapsed_time_us) as u64,
+                ));
+            }
+        }
+        device.last_frame_time = Some(Instant::now());
+
         device
             .backend_device
             .as_mut()

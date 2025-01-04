@@ -51,7 +51,7 @@ use super::{
     recorder::VulkanRecorder,
 };
 
-pub const VK_STAGING_BUFFER_MIN_SIZE: u64 = 1 << 20;
+pub const VK_STAGING_BUFFER_MIN_SIZE: u64 = 1 << 23; // 8 MiB
 
 pub struct VulkanContextInner {
     entry: ash::Entry,
@@ -1353,7 +1353,9 @@ pub struct VulkanResourceManager {
     /// Staging buffers associated with the frame index they are used on the gpu, so when we get
     /// the timeline semaphore for that frame index, we can free time.
     staging_buffer_gpu_timeline: Vec<parking_lot::RwLock<Vec<FreeListHandle<VulkanStagingBuffer>>>>,
-    copy_tasks: parking_lot::RwLock<HashMap<ResourceId<Buffer>, Vec<VulkanStagingCopyTask>>>,
+    copy_tasks: parking_lot::RwLock<
+        HashMap<FreeListHandle<VulkanStagingBuffer>, Vec<VulkanStagingCopyTask>>,
+    >,
 }
 
 struct VulkanStagingBuffer {
@@ -2081,9 +2083,13 @@ impl VulkanResourceManager {
         let mut staging_buffer_free_list = self.staging_buffers.write();
 
         for (index, staging_buffer) in staging_buffer_free_list.iter().enumerate() {
+            let handle = FreeListHandle::new(index);
+            if self.in_use_staging_buffers.read().contains(&handle) {
+                continue;
+            }
+
             let remaining_size = staging_buffer.size - (staging_buffer.curr_write_pointer + 1);
             if remaining_size >= min_size {
-                let handle = FreeListHandle::new(index);
                 return handle;
             }
         }
@@ -2154,7 +2160,7 @@ impl VulkanResourceManager {
         assert!(staging_buffer.curr_write_pointer < staging_buffer.size);
 
         let mut copy_tasks = self.copy_tasks.write();
-        let mut staging_buffer_copy_tasks = copy_tasks.entry(staging_buffer.buffer).or_default();
+        let mut staging_buffer_copy_tasks = copy_tasks.entry(staging_buffer_index).or_default();
         staging_buffer_copy_tasks.push(VulkanStagingCopyTask {
             dst_buffer: *dst_buffer,
             src_offset,
@@ -2180,14 +2186,15 @@ impl VulkanResourceManager {
         let mut staging_buffer_gpu_timeline =
             self.staging_buffer_gpu_timeline[self.ctx.curr_cpu_frame_index() as usize].write();
         let mut in_use_staging_buffers = self.in_use_staging_buffers.write();
-        let mut copy_tasks_guard = self.copy_tasks.write();
-
-        let mut copy_tasks = HashMap::new();
-        std::mem::swap(&mut copy_tasks, &mut copy_tasks_guard);
+        let mut copy_tasks = self.copy_tasks.write();
 
         let mut buffer_barriers = Vec::new();
 
-        for (staging_buffer, copy_tasks) in copy_tasks.into_iter() {
+        for (staging_buffer_index, copy_tasks) in copy_tasks.drain() {
+            in_use_staging_buffers.insert(staging_buffer_index);
+            staging_buffer_gpu_timeline.push(staging_buffer_index);
+            let staging_buffer = staging_buffers.get(staging_buffer_index);
+
             let mut dst_buffer_copy_map: HashMap<ResourceId<Buffer>, Vec<ash::vk::BufferCopy>> =
                 HashMap::new();
             for task in &copy_tasks {
@@ -2200,7 +2207,7 @@ impl VulkanResourceManager {
                 );
             }
 
-            let src_buffer = self.get_buffer_info(&staging_buffer);
+            let src_buffer = self.get_buffer_info(&staging_buffer.buffer);
             for (dst_buffer_id, regions) in dst_buffer_copy_map.into_iter() {
                 let dst_buffer = self.get_buffer_info(&dst_buffer_id);
 

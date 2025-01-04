@@ -66,8 +66,8 @@ pub fn game_loop(app: &App) {
 
     // ------- GPU RENDERING ---------
 
-    //app.run_system(VoxelWorldGpu::update_gpu_objects);
-    //app.run_system(VoxelWorldGpu::write_render_data);
+    app.run_system(VoxelWorldGpu::update_gpu_objects);
+    app.run_system(VoxelWorldGpu::write_render_data);
 
     // app.run_system(UIPass::write_render_data);
 

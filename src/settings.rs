@@ -56,6 +56,7 @@ pub struct Settings {
     pub chunk_queue_capacity: u32,
 
     pub graphics: GraphicsSettings,
+    pub frame_rate_cap: u32,
 }
 
 impl Default for Settings {
@@ -70,6 +71,7 @@ impl Default for Settings {
                 .get() as u32,
 
             graphics: GraphicsSettings::default(),
+            frame_rate_cap: 200,
         }
     }
 }
