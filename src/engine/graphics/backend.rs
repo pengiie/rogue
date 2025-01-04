@@ -28,6 +28,8 @@ pub trait GraphicsBackendDevice {
     /// Updates at the start of window redraw event.
     fn begin_frame(&mut self, events: &mut Events);
 
+    fn swapchain_size(&self) -> Vector2<u32>;
+
     fn create_frame_graph_executor(&mut self) -> Box<dyn GraphicsBackendFrameGraphExecutor>;
 
     fn register_compute_pipeline(

@@ -71,8 +71,12 @@ impl DeviceResource {
     }
 
     pub fn resize_swapchain(&mut self, new_size: winit::dpi::PhysicalSize<u32>, skip_frame: bool) {
-        if new_size.width > 0 && new_size.height > 0 {
-            if let Some(device) = self.backend_device.as_mut() {
+        if let Some(device) = self.backend_device.as_mut() {
+            let old_size = device.swapchain_size();
+            if new_size.width > 0
+                && new_size.height > 0
+                && (old_size.x != new_size.width || old_size.y != new_size.height)
+            {
                 debug!(
                     "Resizing swapchain to {}x{}",
                     new_size.width, new_size.height

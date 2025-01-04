@@ -52,13 +52,14 @@ pub struct FrameGraphPass {
     pub pass: Option<Box<dyn Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext)>>,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct FrameGraphImageInfo {
     pub image_type: GfxImageType,
     pub format: GfxImageFormat,
     pub extent: Vector2<u32>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct FrameGraphBufferInfo {
     pub size: u64,
 }

@@ -56,7 +56,7 @@ pub fn game_loop(app: &App) {
     app.run_system(PhysicsWorld::do_physics_update);
 
     // ------- TERRAIN -------
-    //app.run_system(VoxelTerrain::update_post_physics);
+    app.run_system(VoxelTerrain::update_post_physics);
 
     // ------- UI ---------
 
@@ -81,8 +81,8 @@ pub fn game_loop(app: &App) {
     app.run_system(Events::clear_events);
     app.run_system(VoxelWorldGpu::clear_frame_state);
 
-    debug!(
-        "CPU Frame took {}ms",
-        cpu_time.elapsed().as_micros() as f32 / 1000.0
-    )
+    //debug!(
+    //    "CPU Frame took {}ms",
+    //    cpu_time.elapsed().as_micros() as f32 / 1000.0
+    //)
 }

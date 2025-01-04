@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     sync::Arc,
+    time::Duration,
 };
 
 use ash::vk::CommandBuffer;
@@ -21,9 +22,9 @@ use crate::engine::{
             FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
             IntoFrameGraphResource, Pass,
         },
-        shader::ShaderCompiler,
+        shader::{ShaderCompiler, ShaderModificationTree},
     },
-    window::time::Instant,
+    window::time::{Instant, Timer},
 };
 
 use super::{
@@ -44,12 +45,22 @@ struct VulkanExecutorResourceManager {
     cached_frame_images: HashMap<FrameGraphImageInfo, ResourceId<Image>>,
     cached_frame_buffers: Vec<(FrameGraphBufferInfo, ResourceId<Buffer>)>,
     cached_compute_pipelines: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
+
+    invalidate_pipeline_timer: Timer,
+    shader_modification_tree: ShaderModificationTree,
+
+    new_compute_pipeline: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
+    // The timeline in which the new compute pipeline is old news, meaning all the frames in flight
+    // have updated to the new pipeline.
+    new_compute_pipeline_deletion_timeline: Vec<HashSet<GfxComputePipelineCreateInfo>>,
+
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
     // if we can move resources to the cache for reuse.
     cache_timeline: Vec<Vec<VulkanExecutorCachedResource>>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
 enum VulkanExecutorCachedResource {
     Image {
         id: ResourceId<Image>,
@@ -72,38 +83,97 @@ impl VulkanExecutorResourceManager {
             cached_frame_images: HashMap::new(),
             cached_frame_buffers: Vec::new(),
             cached_compute_pipelines: HashMap::new(),
+            invalidate_pipeline_timer: Timer::new(Duration::from_millis(250)),
+            shader_modification_tree: ShaderModificationTree::from_current_state(),
+
+            new_compute_pipeline: HashMap::new(),
+            new_compute_pipeline_deletion_timeline: (0..ctx.frames_in_flight())
+                .map(|_| HashSet::new())
+                .collect::<Vec<_>>(),
+
             cache_timeline: (0..ctx.frames_in_flight())
                 .map(|_| Vec::new())
                 .collect::<Vec<_>>(),
         }
     }
 
-    fn retire_resources(&mut self) {
-        let curr_gpu_frame = self.ctx.curr_gpu_frame();
-        let curr_cpu_frame = self.ctx.curr_cpu_frame();
-        // This is called after we wait for our gpu timeline semaphore n - 2 so
-        // we know this is our minimum.
-        let minimum_gpu_frame = (curr_cpu_frame.saturating_sub(self.ctx.frames_in_flight() as u64));
-        for i in minimum_gpu_frame..curr_cpu_frame {
-            if curr_gpu_frame < i {
-                continue;
-            }
-            let frame_index = i % self.ctx.frames_in_flight() as u64;
+    fn try_invalidate_pipelines(&mut self, shader_compiler: &mut ShaderCompiler) {
+        if !self.invalidate_pipeline_timer.try_complete() {
+            return;
+        }
 
-            for resource in self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].drain(..)
-            {
+        let curr_shader_state = ShaderModificationTree::from_current_state();
+        if curr_shader_state == self.shader_modification_tree {
+            return;
+        }
+
+        // Invalidate available pipelines.
+        debug!("Invalidating pipelines due to shader change.");
+        shader_compiler.invalidate_cache();
+        self.shader_modification_tree = curr_shader_state;
+
+        let mut recreation_compute_pipelines = Vec::new();
+        for (info, id) in self.cached_compute_pipelines.iter() {
+            recreation_compute_pipelines.push((*id, info.clone()));
+        }
+        for timeline in self.cache_timeline.iter() {
+            for resource in timeline {
                 match resource {
-                    VulkanExecutorCachedResource::Image { id, image_info } => {
-                        self.cached_frame_images.insert(image_info, id);
-                    }
-                    VulkanExecutorCachedResource::Buffer { id, buffer_info } => {
-                        self.cached_frame_buffers.push((buffer_info, id));
-                    }
                     VulkanExecutorCachedResource::ComputePipeline { id, info } => {
+                        recreation_compute_pipelines.push((*id, info.clone()))
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        for (id, info) in recreation_compute_pipelines {
+            match self
+                .ctx
+                .create_compute_pipeline(shader_compiler, info.clone())
+            {
+                Ok(pipeline) => {
+                    self.new_compute_pipeline.insert(info.clone(), pipeline);
+                    self.new_compute_pipeline_deletion_timeline
+                        [self.ctx.curr_cpu_frame_index() as usize]
+                        .insert(info);
+                }
+                Err(err) => {
+                    log::error!("Got error compiling slang shader:");
+                    log::error!("{}", err)
+                }
+            }
+        }
+    }
+
+    fn retire_resources(&mut self) {
+        for resource in self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].drain(..) {
+            match resource {
+                VulkanExecutorCachedResource::Image { id, image_info } => {
+                    self.cached_frame_images.insert(image_info, id);
+                }
+                VulkanExecutorCachedResource::Buffer { id, buffer_info } => {
+                    self.cached_frame_buffers.push((buffer_info, id));
+                }
+                VulkanExecutorCachedResource::ComputePipeline { id, info } => {
+                    if let Some(new_pipeline) = self.new_compute_pipeline.get(&info) {
+                        self.cached_compute_pipelines.insert(info, *new_pipeline);
+                        self.ctx.destroy_compute_pipeline(id);
+                    } else {
                         self.cached_compute_pipelines.insert(info, id);
                     }
                 }
             }
+        }
+
+        // If this was the frame index the pipeline invalidation was submitted, then that means
+        // since we retired that frame, we have updated all the frames in flight and can no longer
+        // qualify this as a "new" pipeline.
+        for info in self.new_compute_pipeline_deletion_timeline
+            [self.ctx.curr_cpu_frame_index() as usize]
+            .drain()
+        {
+            self.new_compute_pipeline.remove(&info);
         }
     }
 
@@ -185,40 +255,6 @@ impl VulkanExecutorResourceManager {
         );
 
         buffer_id
-    }
-
-    fn get_or_create_image(
-        &mut self,
-        resource_name: &str,
-        create_info: FrameGraphImageInfo,
-    ) -> ResourceId<Image> {
-        let (create_info, image_id) = self
-            .cached_frame_images
-            .remove_entry(&create_info)
-            .take()
-            .unwrap_or_else(|| {
-                let gfx_create_info = GfxImageCreateInfo {
-                    name: format!("frame_image_{}", resource_name),
-                    image_type: create_info.image_type,
-                    format: create_info.format,
-                    extent: create_info.extent,
-                };
-                let new_image = self.ctx.create_image(gfx_create_info).expect(&format!(
-                    "Failed to create frame image for resource {}.",
-                    resource_name
-                ));
-
-                (create_info, new_image)
-            });
-
-        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
-            VulkanExecutorCachedResource::Image {
-                id: image_id,
-                image_info: create_info,
-            },
-        );
-
-        image_id
     }
 
     fn get_or_create_compute_pipeline(
@@ -478,6 +514,7 @@ impl VulkanFrameGraphExecutor {
 
 impl Drop for VulkanFrameGraphExecutor {
     fn drop(&mut self) {
+        println!("Dropping executor");
         // TODO: Resource tracking so we dont block like this.
         unsafe { self.ctx.device().device_wait_idle() };
         for command_pool in &self.command_pools {
@@ -493,7 +530,7 @@ impl Drop for VulkanFrameGraphExecutor {
 impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
     fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
         let curr_cmd_pool = &mut self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
-        debug!("Resetting command pool {:?}", curr_cmd_pool.command_pool);
+        //debug!("Resetting command pool {:?}", curr_cmd_pool.command_pool);
         unsafe {
             self.ctx.device().reset_command_pool(
                 curr_cmd_pool.command_pool,
@@ -506,6 +543,11 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         self.session = Some(FrameSession::new(frame_graph));
         self.resource_manager.retire_resources();
+
+        // Invalidate pipelines before initializing resources so we can ensure we have the most up
+        // to date shader modification tree state.
+        self.resource_manager
+            .try_invalidate_pipelines(shader_compiler);
         self.initialize_session_resources(shader_compiler);
     }
 
@@ -596,11 +638,11 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
                 .swapchain_loader()
                 .queue_present(self.ctx.main_queue(), &present_info)
         };
-        debug!(
-            "Took {}ms to present swapchain image with present_mode {:?}.",
-            present_timer.elapsed().as_micros() as f32 / 1000.0,
-            self.ctx.swapchain().create_info.present_mode
-        );
+        // debug!(
+        //     "Took {}ms to present swapchain image with present_mode {:?}.",
+        //     present_timer.elapsed().as_micros() as f32 / 1000.0,
+        //     self.ctx.swapchain().create_info.present_mode
+        // );
 
         session.frame_graph
     }

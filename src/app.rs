@@ -203,7 +203,6 @@ impl winit::application::ApplicationHandler for App {
                         .get_resource_mut::<DeviceResource>()
                         .resize_swapchain(new_size, false);
 
-                    debug!("Resized window to {}x{}", new_size.width, new_size.height);
                     // TODO: Option to change between depending on window resize mode.
                     self.resource_bank()
                         .get_resource_mut::<Settings>()

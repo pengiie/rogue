@@ -96,7 +96,7 @@ impl Drop for VulkanContextInner {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
-            println!("Dropping the device");
+            println!("Dropping the inner device context");
 
             self.device
                 .destroy_semaphore(self.gpu_timeline_semaphore, None);
@@ -120,9 +120,13 @@ impl Drop for VulkanContextInner {
     }
 }
 
+// Order of fields is important due to struct drop order.
 pub struct VulkanContext {
-    inner: Arc<VulkanContextInner>,
+    memory_allocator: parking_lot::RwLock<VulkanAllocator>,
+    resource_manager: VulkanResourceManager,
+
     swapchain: parking_lot::RwLock<Arc<VulkanSwapchain>>,
+    inner: Arc<VulkanContextInner>,
 
     // Semaphore when the swapchain image is acquired.
     image_acquire_semaphores: Vec<ash::vk::Semaphore>,
@@ -131,9 +135,6 @@ pub struct VulkanContext {
 
     // The current swapchain image index of the most recently acquired image.
     swapchain_image_index: AtomicU32,
-
-    memory_allocator: parking_lot::RwLock<VulkanAllocator>,
-    resource_manager: VulkanResourceManager,
 }
 
 impl VulkanContext {
@@ -266,6 +267,10 @@ impl VulkanContext {
     ) -> anyhow::Result<ResourceId<ComputePipeline>> {
         self.resource_manager
             .create_compute_pipeline(shader_compiler, create_info)
+    }
+
+    pub fn destroy_compute_pipeline(&self, id: ResourceId<ComputePipeline>) {
+        warn!("TODO: Work on destroying pipelines.");
     }
 
     pub fn get_compute_pipeline(
@@ -792,9 +797,7 @@ impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
             self.device().device_wait_idle().unwrap();
-
-            drop(&mut self.resource_manager);
-            drop(self.swapchain.get_mut());
+            println!("Dropping vulkan context");
 
             for semaphore in self
                 .image_ready_semaphores
@@ -841,6 +844,15 @@ impl GraphicsBackendDevice for VulkanDevice {
 
                 // TODO: Worry about timeout.
                 unsafe { self.context.device().wait_semaphores(&wait_info, u64::MAX) };
+            } else {
+                let signal_semaphore_info = ash::vk::SemaphoreSignalInfo::default()
+                    .semaphore(self.context.inner.gpu_timeline_semaphore)
+                    .value(wait_gpu_frame);
+                unsafe {
+                    self.context
+                        .device()
+                        .signal_semaphore(&signal_semaphore_info)
+                };
             }
         }
 
@@ -903,18 +915,24 @@ impl GraphicsBackendDevice for VulkanDevice {
             &self.context.inner.device,
         );
         let acquire_timer = Instant::now();
-        let (image_index, out_of_date) = unsafe {
+        let (image_index, out_of_date) = match unsafe {
             swapchain_loader.acquire_next_image(
                 self.context.swapchain().swapchain,
-                10_000,
+                20 * 1_000_000_000, // 20 second timeout
                 self.context.curr_image_acquire_semaphore(),
                 ash::vk::Fence::null(),
             )
-        }?;
-        debug!(
-            "Took {}ms to acquire vk swapchain image.",
-            acquire_timer.elapsed().as_micros() as f32 / 1000.0
-        );
+        } {
+            Ok((image_index, out_of_date)) => (image_index, out_of_date),
+            Err(err) => anyhow::bail!("Got error {}", err),
+        };
+        if out_of_date {
+            debug!("Swapchain is out of date.");
+        }
+        // debug!(
+        //     "Took {}ms to acquire vk swapchain image.",
+        //     acquire_timer.elapsed().as_micros() as f32 / 1000.0
+        // );
         self.context
             .swapchain_image_index
             .store(image_index, std::sync::atomic::Ordering::Relaxed);
@@ -1012,6 +1030,11 @@ impl GraphicsBackendDevice for VulkanDevice {
     fn pre_init_update(&mut self, events: &mut Events) {
         // We initialize synchronously.
         events.push(GraphicsBackendEvent::Initialized);
+    }
+
+    fn swapchain_size(&self) -> Vector2<u32> {
+        let extent = self.context.swapchain.read().create_info.image_extent;
+        Vector2::new(extent.width, extent.height)
     }
 }
 
@@ -1285,6 +1308,7 @@ impl VulkanAllocator {
 impl Drop for VulkanAllocator {
     fn drop(&mut self) {
         unsafe { self.ctx.device.device_wait_idle() };
+        println!("Dropping vulkan allocator");
 
         for memory in self
             .shared_memory
@@ -2221,7 +2245,7 @@ impl VulkanResourceManager {
         allocator: &mut VulkanAllocator,
         create_info: GfxImageCreateInfo,
     ) -> anyhow::Result<ResourceId<Image>> {
-        debug!("creating vulkan image {}.", create_info.name);
+        debug!("creating vulkan owned image {}.", create_info.name);
         anyhow::ensure!(create_info.extent.x > 0 && create_info.extent.y > 0);
         let image_info = VulkanImageInfo {
             image_type: create_info.image_type,
@@ -2362,6 +2386,7 @@ impl Drop for VulkanResourceManager {
                 .device
                 .destroy_descriptor_pool(self.descriptor_pool, None)
         }
+        println!("Dropping vkResourceManager");
 
         for event_pool in &self.event_pools {
             let event_pool = event_pool.write();

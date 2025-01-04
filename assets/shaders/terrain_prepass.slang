@@ -32,5 +32,7 @@ void main(uint3 id: SV_DispatchThreadID) {
 //
 //  var out_color = sample_sky(uniforms.model_voxel_data, camera_ray) * sample_sky(uniforms.model_info_data, camera_ray);
 //
-  u_shader.backbuffer.Store(coord.xy, float4(u_frame.world_info.red, 0.0, 0.0, 1.0));
+
+  let uv = (float2) coord / (float2) dimensions;
+  u_shader.backbuffer.Store(coord.xy, float4(1.0, uv.xy, 1.0));
 }
