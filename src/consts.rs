@@ -1,5 +1,13 @@
 pub mod voxel {
-    pub use crate::engine::voxel::voxel_constants::*;
+    pub const TERRAIN_CHUNK_METER_LENGTH: u32 = 16;
+    pub const TERRAIN_CHUNK_VOXEL_LENGTH: u32 = TERRAIN_CHUNK_METER_LENGTH * VOXELS_PER_METER;
+    pub const TERRAIN_CHUNK_VOXEL_VOLUME: u32 = TERRAIN_CHUNK_VOXEL_LENGTH.pow(3);
+
+    pub const VOXELS_PER_METER: u32 = 16;
+    pub const VOXEL_METER_LENGTH: f32 = 1.0 / VOXELS_PER_METER as f32;
+
+    pub const MODEL_ESVO_SCHEMA: u32 = 1;
+    pub const MODEL_FLAT_SCHEMA: u32 = 2;
 }
 
 pub mod gfx {

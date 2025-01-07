@@ -1,4 +1,9 @@
-# Bugs that we can deal with later.
+# Bugs/optimizations that we can deal with later.
+
+## Swapchain destruction on wayland
+We get a segfault when destroying the final swapchain when closing the window on wayland. 
+This may be hyprland specific since it doesn't happen through xwayland but it doesn't matter
+since the app is closing anyways.
 
 ## Swapchain resizing
 When resizing the swapchain, frame image resources in the executor are always 
@@ -15,3 +20,8 @@ and perform caching like for the buffers on them. We do the same thing for image
 images and always retire them to the cache at the end of a frame, we could even reuse the same image within the frame but
 that would require dependency aliasing. For pipelines we just can have a set of compiled pipelines relating to shaders in a
 hashmap. That would fix the pipeline issue of this as well.
+
+## Staging buffer is locked when used on gpu.
+Right now we lock any staging buffer that is used on the gpu even though the only memory we need
+to lock of it is just up to the write pointer. We can make it so we can still submit writes with that
+buffer, but to ping pong between different sections within the buffer to optimize the space used.

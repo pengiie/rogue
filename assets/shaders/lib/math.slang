@@ -48,6 +48,6 @@ public struct AABB {
 }
 
 public float3 dither(float3 v) {
-  let n = rand_f32() + rand_f32() - 1.0;  // triangular noise
+  let n = random::rand_f32() + random::rand_f32() - 1.0;  // triangular noise
   return v + n * exp2(-8.0);
 }

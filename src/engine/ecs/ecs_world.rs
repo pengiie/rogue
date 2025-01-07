@@ -1,15 +1,19 @@
 use std::any::TypeId;
 
-use hecs::{Entity, Query, QueryBorrow, QueryIter, With};
+use hecs::{Query, QueryBorrow, QueryIter, With};
 use rogue_macros::Resource;
 
 use crate::{
     engine::{
+        graphics::camera::{Camera, MainCamera},
+        physics::transform::Transform,
         system::SystemParam,
         voxel::voxel::{VoxelModel, VoxelModelImpl},
     },
     game::player::player::Player,
 };
+
+pub type Entity = hecs::Entity;
 
 #[derive(Resource)]
 pub struct ECSWorld {
@@ -31,6 +35,19 @@ impl ECSWorld {
         PlayerQuery::new(
             self.query::<Q>().with::<&'a Player>() as QueryBorrow<'a, With<Q, &'a Player>>
         )
+    }
+
+    pub fn get_main_camera(
+        &self,
+        main_camera: &MainCamera,
+    ) -> hecs::QueryOne<'_, (&Transform, &Camera)> {
+        self.world
+            .query_one::<(&Transform, &Camera)>(
+                main_camera
+                    .camera()
+                    .expect("Main camera has not been set yet."),
+            )
+            .expect("Supplied main camera doesnt have a Transform and Camera component.")
     }
 }
 

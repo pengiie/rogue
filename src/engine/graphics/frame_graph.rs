@@ -353,10 +353,19 @@ impl FrameGraphContextImpl for FrameGraph {
     }
 }
 
-#[derive(Debug)]
 pub struct FrameGraphResource<T> {
     id: u32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> std::fmt::Debug for FrameGraphResource<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!(
+            "Reource id: {}, type_id: {}",
+            self.id,
+            std::any::type_name::<T>()
+        ))
+    }
 }
 
 impl<T> FrameGraphResource<T> {

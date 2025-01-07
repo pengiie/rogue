@@ -1087,7 +1087,7 @@ enum VulkanAllocationType {
 }
 
 impl VulkanAllocator {
-    const SHARED_MEMORY_CHUNK_SIZE: u64 = 1 << 23; // 8.38 Mib
+    const SHARED_MEMORY_CHUNK_SIZE: u64 = 1 << 25; // 32 Mib
 
     fn new(ctx: &Arc<VulkanContextInner>) -> Self {
         Self {
@@ -1109,13 +1109,17 @@ impl VulkanAllocator {
             .memory_types
             .iter()
             .enumerate()
-            .find(|(i, memory_type)| memory_type.property_flags.intersects(memory_property_flags))
+            .find(|(i, memory_type)| memory_type.property_flags.contains(memory_property_flags))
             .context("Failed to find a suitable memory type")?;
 
         let allocation_info = ash::vk::MemoryAllocateInfo::default()
             .allocation_size(size)
             .memory_type_index(memory_type_index as u32);
         let device_memory = unsafe { self.ctx.device.allocate_memory(&allocation_info, None) }?;
+        debug!(
+                    "Allocated {} bytes of with memory type index {} with properties {:?} for memory properties {:?}",
+                    size, memory_type_index as u32, memory_type.property_flags, memory_property_flags
+                );
 
         Ok((
             VulkanMemory {
@@ -1136,11 +1140,11 @@ impl VulkanAllocator {
         for (memory_index, shared_memory) in self.shared_memory.iter().enumerate() {
             if shared_memory
                 .memory_property_flags
-                .intersects(memory_property_flags)
+                .contains(memory_property_flags)
                 && shared_memory.free_size_remaining >= allocation_size
             {
                 debug!(
-                    "Using memory type index {} for memory properties {:?}",
+                    "Using shared memory index {} for memory properties {:?}",
                     memory_index, memory_property_flags
                 );
                 return Ok(memory_index as VulkanMemoryIndex);
@@ -1843,8 +1847,8 @@ impl VulkanResourceManager {
         let vk_descriptor_sets = pipeline_layout
             .shader_bindings
             .iter()
-            .zip(uniform_set_datas)
-            .map(|(set_binding, new_set_bindings)| {
+            .map(|set_binding| {
+                let new_set_bindings = uniform_set_datas.get(&set_binding.set_index).unwrap();
                 let descriptor_set = descriptor_set_map.get_mut(set_binding).unwrap();
 
                 let mut needs_write = false;
@@ -1865,18 +1869,18 @@ impl VulkanResourceManager {
                         (new_set, new_set_bindings.clone())
                     });
 
-                if &new_set_bindings != prev_set_bindings {
-                    *prev_set_bindings = new_set_bindings;
+                if new_set_bindings != prev_set_bindings {
+                    *prev_set_bindings = new_set_bindings.clone();
                     needs_write = true;
                 }
 
                 if needs_write {
                     // prev_set_bindings is now equal to new_set_bindings here.
-                    for (binding_idx, binding) in prev_set_bindings.data.iter().enumerate() {
+                    for (binding_idx, binding) in prev_set_bindings.bindings.iter() {
                         let mut write = ash::vk::WriteDescriptorSet::default()
                             .dst_set(*vk_descriptor_set)
                             .descriptor_count(1)
-                            .dst_binding(binding_idx as u32);
+                            .dst_binding(*binding_idx);
                         let mut info = None;
 
                         // Due to the image infos possibly resizing while pushing, we must store
@@ -1932,7 +1936,20 @@ impl VulkanResourceManager {
                                 write =
                                     write.descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER);
                             }
-                            Binding::StorageBuffer { buffer } => todo!(),
+                            Binding::StorageBuffer { buffer } => {
+                                let vk_buffer_info = self.get_buffer_info(buffer);
+                                vk_buffer_infos.push(
+                                    ash::vk::DescriptorBufferInfo::default()
+                                        .buffer(vk_buffer_info.buffer)
+                                        .offset(0)
+                                        .range(ash::vk::WHOLE_SIZE),
+                                );
+                                info = Some(VulkanSetWriteIndex::BufferInfo(
+                                    vk_buffer_infos.len() - 1,
+                                ));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER);
+                            }
                         }
 
                         vk_descriptor_set_writes.push((write, info.unwrap()));

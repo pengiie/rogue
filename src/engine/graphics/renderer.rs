@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     common::color::Color,
     engine::{
+        ecs::{self, ecs_world::ECSWorld},
         resource::{Res, ResMut},
+        voxel::voxel_world::{self, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
     settings::{GraphicsSettings, Settings},
@@ -19,6 +21,7 @@ use super::{
         Binding, GfxFilterMode, GfxImageFormat, GraphicsBackendFrameGraphExecutor,
         GraphicsBackendRecorder, Image, UniformData,
     },
+    camera::MainCamera,
     device::DeviceResource,
     frame_graph::{
         FrameGraph, FrameGraphComputeInfo, FrameGraphContext, FrameGraphContextImpl,
@@ -44,6 +47,10 @@ struct GraphConstantsRT {
     image_albedo: &'static str,
     image_depth: &'static str,
 
+    buffer_terrain_acceleration_data: &'static str,
+    buffer_model_info_data: &'static str,
+    buffer_model_voxel_data: &'static str,
+
     compute_prepass: &'static str,
     compute_prepass_info: FrameGraphComputeInfo<'static>,
     pass_prepass: &'static str,
@@ -61,7 +68,8 @@ struct GraphConstants {
     rt: GraphConstantsRT,
     post_process: GraphConstantsPostProcess,
 
-    frame_info: &'static str,
+    frame_info_buffer: &'static str,
+    frame_world_info_buffer: &'static str,
 
     swapchain: &'static str,
     swapchain_size: &'static str,
@@ -72,6 +80,11 @@ impl Renderer {
         rt: GraphConstantsRT {
             image_albedo: "rt_image_albedo",
             image_depth: "rt_image_depth",
+
+            buffer_terrain_acceleration_data: "rt_buffer_terrain_acceleration_data",
+            buffer_model_info_data: "rt_buffer_model_info_data",
+            buffer_model_voxel_data: "rt_buffer_model_voxel_data",
+
             compute_prepass: "rt_compute_prepass",
             compute_prepass_info: FrameGraphComputeInfo {
                 shader_path: "terrain_prepass",
@@ -88,7 +101,10 @@ impl Renderer {
             },
             pass_post_process: "post_process_pass_post_process",
         },
-        frame_info: "frame_info_buffer",
+
+        frame_info_buffer: "frame_info_buffer",
+        frame_world_info_buffer: "frame_world_info_buffer",
+
         swapchain: "swapchain",
         swapchain_size: "swapchain_size",
     };
@@ -110,7 +126,9 @@ impl Renderer {
         let swapchain_image = builder.create_input_image(Self::GRAPH.swapchain);
         let swapchain_size_input = builder.create_input(Self::GRAPH.swapchain_size);
 
-        let frame_info_buffer = builder.create_frame_buffer(Self::GRAPH.frame_info);
+        let frame_info_buffer = builder.create_frame_buffer(Self::GRAPH.frame_info_buffer);
+        let frame_world_info_buffer =
+            builder.create_frame_buffer(Self::GRAPH.frame_world_info_buffer);
 
         // RT passes
         let rt_albedo_image = builder.create_frame_image(
@@ -124,13 +142,26 @@ impl Renderer {
                 FrameGraphImageInfo::new_depth(gfx_settings.rt_size),
             );
 
+            let rt_buffer_terrain_acceleration_data =
+                builder.create_input_buffer(Self::GRAPH.rt.buffer_terrain_acceleration_data);
+            let rt_buffer_model_info_data =
+                builder.create_input_buffer(Self::GRAPH.rt.buffer_model_info_data);
+            let rt_buffer_model_voxel_data =
+                builder.create_input_buffer(Self::GRAPH.rt.buffer_model_voxel_data);
+
             builder.create_compute_pipeline(
                 Self::GRAPH.rt.compute_prepass,
                 Self::GRAPH.rt.compute_prepass_info,
             );
             builder.create_input_pass(
                 Self::GRAPH.rt.pass_prepass,
-                &[&Self::GRAPH.frame_info],
+                &[
+                    &Self::GRAPH.frame_info_buffer,
+                    &Self::GRAPH.frame_world_info_buffer,
+                    &rt_buffer_terrain_acceleration_data,
+                    &rt_buffer_model_info_data,
+                    &rt_buffer_model_voxel_data,
+                ],
                 &[&Self::GRAPH.rt.image_albedo],
             );
         }
@@ -216,6 +247,57 @@ impl Renderer {
             .begin_frame(&mut shader_compiler, frame_graph);
     }
 
+    pub fn write_common_render_data(
+        mut renderer: ResMut<Renderer>,
+        time: Res<Time>,
+        voxel_world_gpu: Res<VoxelWorldGpu>,
+        ecs_world: Res<ECSWorld>,
+        main_camera: Res<MainCamera>,
+    ) {
+        // Write buffers.
+        let frame_info: structs::FrameInfo = structs::FrameInfo {
+            time_ms: time.start_time().elapsed().as_millis() as u32,
+        };
+        renderer.frame_graph_executor.write_buffer_slice(
+            Self::GRAPH.frame_info_buffer,
+            bytemuck::bytes_of(&frame_info),
+        );
+
+        let frame_world_info: structs::FrameWorldInfo = structs::FrameWorldInfo {
+            camera: {
+                let mut camera_query = ecs_world.get_main_camera(&main_camera);
+                let (camera_transform, camera) = camera_query.get().unwrap();
+
+                let transform = camera_transform.to_view_matrix().transpose();
+                let transform_arr: [f32; 16] = transform.as_slice().try_into().unwrap();
+                let rotation_arr = transform_arr[0..15].try_into().unwrap();
+                structs::Camera {
+                    transform: transform_arr,
+                    rotation: rotation_arr,
+                    fov: camera.fov(),
+                }
+            },
+        };
+        renderer.frame_graph_executor.write_buffer_slice(
+            Self::GRAPH.frame_world_info_buffer,
+            bytemuck::bytes_of(&frame_world_info),
+        );
+
+        // TODO: Move this out to a separate pass struct for rt.
+        renderer.frame_graph_executor.supply_buffer_ref(
+            &Self::GRAPH.rt.buffer_terrain_acceleration_data,
+            voxel_world_gpu.world_terrain_acceleration_buffer(),
+        );
+        renderer.frame_graph_executor.supply_buffer_ref(
+            &Self::GRAPH.rt.buffer_model_info_data,
+            voxel_world_gpu.world_voxel_model_info_buffer(),
+        );
+        renderer.frame_graph_executor.supply_buffer_ref(
+            &Self::GRAPH.rt.buffer_model_voxel_data,
+            voxel_world_gpu.world_data_buffer().unwrap(),
+        );
+    }
+
     pub fn finish_frame(
         mut renderer: ResMut<Renderer>,
         mut device: ResMut<DeviceResource>,
@@ -233,7 +315,8 @@ impl Renderer {
         };
         let swapchain_image_info = device.get_image_info(&swapchain_image);
 
-        // Swapchain inputs
+        // -------- Common inputs ---------
+
         renderer
             .frame_graph_executor
             .supply_image_ref(Self::GRAPH.swapchain, &swapchain_image);
@@ -242,13 +325,7 @@ impl Renderer {
             Box::new(swapchain_image_info.resolution_xy()),
         );
 
-        // -------- RT Pass --------
-
-        // Write buffers.
-        let red: f32 = time.start_time().elapsed().as_secs_f32().sin().abs();
-        renderer
-            .frame_graph_executor
-            .write_buffer_slice(Self::GRAPH.frame_info, bytemuck::bytes_of(&[red]));
+        // -------- RT Pass ---------------
 
         // Supply pass logic.
         renderer.frame_graph_executor.supply_pass_ref(
@@ -263,12 +340,35 @@ impl Renderer {
                     {
                         let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
                         compute_pass.bind_uniforms({
-                            let frame_info_buffer = ctx.get_buffer(Self::GRAPH.frame_info);
-
                             let mut uniforms = UniformData::new();
-                            uniforms
-                                .load("u_frame.world_info", frame_info_buffer.as_uniform_binding());
+
+                            uniforms.load(
+                                "u_frame.frame_info",
+                                ctx.get_buffer(Self::GRAPH.frame_info_buffer)
+                                    .as_uniform_binding(),
+                            );
+                            uniforms.load(
+                                "u_frame.world_info",
+                                ctx.get_buffer(Self::GRAPH.frame_world_info_buffer)
+                                    .as_uniform_binding(),
+                            );
+
                             uniforms.load("u_shader.backbuffer", rt_image.as_storage_binding());
+                            uniforms.load(
+                                "u_shader.terrain_acceleration_data",
+                                ctx.get_buffer(Self::GRAPH.rt.buffer_terrain_acceleration_data)
+                                    .as_storage_binding(),
+                            );
+                            uniforms.load(
+                                "u_shader.model_info_data",
+                                ctx.get_buffer(Self::GRAPH.rt.buffer_model_info_data)
+                                    .as_storage_binding(),
+                            );
+                            uniforms.load(
+                                "u_shader.model_voxel_data",
+                                ctx.get_buffer(Self::GRAPH.rt.buffer_model_voxel_data)
+                                    .as_storage_binding(),
+                            );
                             uniforms
                         });
                         let wg_size = compute_pass.workgroup_size();
@@ -284,4 +384,39 @@ impl Renderer {
 
         renderer.frame_graph = Some(renderer.frame_graph_executor.end_frame());
     }
+}
+
+// ------ Shader uniform structs, TODO: Fetch memory layout info from slang and write a
+// BufferWriter API. ------------------------------------------------------------------
+
+pub mod structs {
+
+    macro_rules! shader_struct {
+        ($name: item) => {
+            #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+            #[repr(C)]
+            $name
+        };
+    }
+
+    shader_struct!(
+        #[repr(align(16))]
+        pub struct Camera {
+            pub transform: [f32; 16], // matrix4x4
+            pub rotation: [f32; 15],  // matrix3x3
+            pub fov: f32,
+        }
+    );
+
+    shader_struct!(
+        pub struct FrameWorldInfo {
+            pub camera: Camera,
+        }
+    );
+
+    shader_struct!(
+        pub struct FrameInfo {
+            pub time_ms: u32,
+        }
+    );
 }

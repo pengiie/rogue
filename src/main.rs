@@ -61,5 +61,10 @@ fn main() {
         std::process::exit(1);
     }));
 
+    // Wayland gives weird issues with the swapchain for me, so default to xwayland.
+    if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
     crate::app::App::new().run();
 }

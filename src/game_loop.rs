@@ -69,6 +69,8 @@ pub fn game_loop(app: &App) {
     app.run_system(VoxelWorldGpu::update_gpu_objects);
     app.run_system(VoxelWorldGpu::write_render_data);
 
+    app.run_system(Renderer::write_common_render_data);
+
     // app.run_system(UIPass::write_render_data);
 
     // Render the frame to the swapchain.

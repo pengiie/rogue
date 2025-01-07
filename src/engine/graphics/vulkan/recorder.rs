@@ -264,7 +264,7 @@ impl GraphicsBackendComputePass for VulkanComputePass<'_> {
                 }),
                 Binding::Sampler { sampler } => todo!(),
                 Binding::UniformBuffer { buffer } => {}
-                Binding::StorageBuffer { buffer } => todo!(),
+                Binding::StorageBuffer { buffer } => {}
             }
         }
         self.recorder.transition_images(

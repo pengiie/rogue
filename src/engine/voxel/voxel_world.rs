@@ -17,7 +17,7 @@ use crate::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
     },
-    consts::voxel::VOXEL_WORLD_UNIT_LENGTH,
+    consts::voxel::VOXEL_METER_LENGTH,
     engine::{
         ecs::ecs_world::ECSWorld,
         graphics::{

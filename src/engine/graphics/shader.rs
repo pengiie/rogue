@@ -17,10 +17,10 @@ use rogue_macros::Resource;
 use slang::{Downcast, OptionsBuilder, SessionDescBuilder, TargetDescBuilder};
 use wgpu::ErrorFilter;
 
-use crate::engine::{
+use crate::{consts, engine::{
     asset::asset::{AssetFile, AssetLoadFuture, AssetLoader, Assets},
     resource::ResMut, window::time::Instant,
-};
+}};
 
 use super::device::DeviceResource;
 
@@ -33,6 +33,8 @@ pub struct ShaderCompiler {
     global_session: slang::GlobalSession,
 
     cached_shaders: HashMap<ShaderCompilationOptions, Shader>,
+
+    shader_constants: HashMap<String, String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -68,6 +70,7 @@ pub struct ShaderSetBinding {
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ShaderBinding {
+    /// The fully qualified uniform name of the binding.
     pub binding_name: String,
     pub binding_index: u32,
     pub binding_type: ShaderBindingType,
@@ -117,9 +120,16 @@ impl ShaderCompiler {
     pub fn new() -> Self {
         let global_session = slang::GlobalSession::new().unwrap();
 
+        let shader_constants = {
+            let mut map = HashMap::new();
+            map.insert("CONST_METERS_PER_VOXEL".to_owned(), consts::voxel::VOXEL_METER_LENGTH.to_string());
+            map
+        };
+
         Self {
             global_session,
             cached_shaders: HashMap::new(),
+            shader_constants
         }
     }
 
@@ -142,8 +152,10 @@ impl ShaderCompiler {
                 let search_path = std::ffi::CString::new("assets/shaders").unwrap();
 
                 let targets = [*TargetDescBuilder::new().format(options.target.into())];
+
+
                 let mut slang_opts = OptionsBuilder::new().stage(options.stage.into());
-                for (key, value) in &options.macro_defines {
+                for (key, value) in &self.shader_constants {
                     slang_opts = slang_opts.macro_define(key, value);
                 }
 
@@ -226,7 +238,7 @@ impl ShaderCompiler {
                 for global_field in global_type_layout.fields() {
                     let field_type = global_field.type_layout();
                     assert_eq!(field_type.kind(), slang::TypeKind::ParameterBlock);
-                    let set_index = global_field.semantic_index();
+                    let set_index = global_field.binding_index();
                     let set_param_block_name = global_field.variable().name().unwrap();
 
                     let mut bindings = Vec::new();
@@ -252,7 +264,7 @@ impl ShaderCompiler {
                                 }
                                 ty => todo!("Support reflection for shader resource type {:?}", ty),
                             },
-                            slang::TypeKind::Struct => 
+                            slang::TypeKind::ConstantBuffer => 
                                 ShaderBindingType::UniformBuffer,
                             _ =>                             panic!("Encountered non-supported non-resource ParameterBlock field when reflecting shader."),
 
@@ -391,7 +403,8 @@ pub struct ShaderModificationTree {
 }
 
 impl ShaderModificationTree {
-    pub fn from_current_state() -> Self {let shader_dir_path = PathBuf::from_str(SHADER_DIR).unwrap();
+    pub fn from_current_state() -> Self {
+        let shader_dir_path = PathBuf::from_str(SHADER_DIR).unwrap();
         let shader_dir = std::fs::metadata(&shader_dir_path).expect("Unable to query shader dir metadata.");
 
         let mut tree = ShaderModificationTree {
@@ -399,7 +412,7 @@ impl ShaderModificationTree {
             files: HashMap::new(),
         };
 
-        let mut to_process_dirs: Vec<PathBuf> = vec![];
+        let mut to_process_dirs: Vec<PathBuf> = vec![shader_dir_path];
         while !to_process_dirs.is_empty() {
             let curr_dir_path = to_process_dirs.pop().unwrap();
 

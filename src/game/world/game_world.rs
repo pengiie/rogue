@@ -12,7 +12,7 @@ use crate::{
     common::{aabb::AABB, color::Color},
     engine::{
         ecs::ecs_world::ECSWorld,
-        graphics::camera::Camera,
+        graphics::camera::{Camera, MainCamera},
         physics::transform::Transform,
         resource::{Res, ResMut},
         voxel::{
@@ -217,15 +217,16 @@ impl GameWorld {
         //// }
     }
 
-    pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>) {
+    pub fn spawn_player(mut ecs_world: ResMut<ECSWorld>, mut main_camera: ResMut<MainCamera>) {
         if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
             panic!("Player already spawned.");
         }
 
-        ecs_world.spawn((
+        let player = ecs_world.spawn((
             Player::new(),
-            Camera::new(),
+            Camera::new(90.0),
             Transform::with_translation(Translation3::new(0.0, 8.0, 0.0)),
         ));
+        main_camera.set_camera(player, "player_camera");
     }
 }

@@ -1,5 +1,7 @@
 implementing lib;
 
+namespace color {
+
 public float3 srgb_to_lsrgb(float3 srgb) {
     let cutoff = srgb < float3(0.04045);
     let lower = srgb / float3(12.92);
@@ -13,3 +15,5 @@ public float3 lsrgb_to_srgb(float3 lsrgb) {
     let higher = float3(1.055) * pow(lsrgb, float3(1.0 / 2.4)) - float3(0.055);
     return select(cutoff, lower, higher);
 }
+
+} // namespace color

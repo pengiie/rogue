@@ -1,5 +1,8 @@
-use std::{collections::HashMap, future::Future, mem::MaybeUninit, num::NonZeroU32, sync::Arc};
+use std::{
+    collections::HashMap, future::Future, hash::Hash, mem::MaybeUninit, num::NonZeroU32, sync::Arc,
+};
 
+use log::debug;
 use nalgebra::{Vector2, Vector3};
 use serde::{Deserialize, Serialize};
 
@@ -251,6 +254,12 @@ impl ResourceId<Buffer> {
             buffer: self.clone(),
         }
     }
+
+    pub fn as_storage_binding(&self) -> Binding {
+        Binding::StorageBuffer {
+            buffer: self.clone(),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -279,67 +288,75 @@ impl UniformData {
         self.data.values()
     }
 
-    /// Requires the passed in set bindings to be sorted by set index, and returns a vec sorted by
-    /// set index with the set bindings also sorted by binding index.
-    pub fn as_sets(&self, shader_set_bindings: &Vec<ShaderSetBinding>) -> Vec<UniformSetData> {
-        assert!(shader_set_bindings.is_sorted_by_key(|set| set.set_index));
-        let mut buckets = shader_set_bindings
+    pub fn as_sets(
+        &self,
+        shader_set_bindings: &Vec<ShaderSetBinding>,
+    ) -> HashMap</*set_index=*/ u32, UniformSetData> {
+        let mut set_bindings = shader_set_bindings
             .iter()
-            .map(|set| (0..set.bindings.len()).map(|_| None).collect())
-            .collect::<Vec<Vec<Option<Binding>>>>();
+            .map(|set| {
+                (
+                    set.set_index,
+                    UniformSetData {
+                        bindings: HashMap::new(),
+                    },
+                )
+            })
+            .collect::<HashMap<u32, UniformSetData>>();
 
         for (full_uniform_name, binding) in &self.data {
             let parts = full_uniform_name.split(".").collect::<Vec<_>>();
-            let Some((set_index, binding_index)) =
-                shader_set_bindings
-                    .iter()
-                    .enumerate()
-                    .find_map(|(set_idx, set)| {
-                        if set.name != parts[0] {
-                            return None;
-                        }
+            let Some((set_index, binding_index)) = shader_set_bindings.iter().find_map(|set| {
+                if set.name != parts[0] {
+                    return None;
+                }
 
-                        let binding_idx =
-                            set.bindings
-                                .iter()
-                                .enumerate()
-                                .find_map(|(i, shader_binding)| {
-                                    (shader_binding.binding_name == parts[1]).then_some(i)
-                                });
+                let binding_idx = set.bindings.iter().find_map(|shader_binding| {
+                    (shader_binding.binding_name == parts[1])
+                        .then_some(shader_binding.binding_index)
+                });
 
-                        binding_idx.map(|binding_idx| (set_idx, binding_idx))
-                    })
-            else {
+                binding_idx.map(|binding_idx| (set.set_index, binding_idx))
+            }) else {
                 panic!("Loaded uniform `{}` but a uniform with that qualified name does not exist in the target shader.", full_uniform_name);
             };
 
-            buckets[set_index][binding_index] = Some(binding.clone());
+            set_bindings
+                .get_mut(&set_index)
+                .unwrap()
+                .bindings
+                .insert(binding_index, binding.clone());
         }
 
         // Safety: We ensure each uniforms data has been provided for the given sets.
-        buckets
-            .into_iter()
-            .enumerate()
-            .map(|(set_idx, bucket)| UniformSetData {
-                data: bucket
-                    .into_iter()
-                    .enumerate()
-                    .map(|(binding_idx, binding)| {
-                        binding.expect(&format!(
-                            "Uniform for set {}, binding {} was not set.",
-                            set_idx, binding_idx
-                        ))
-                    })
-                    .collect(),
-            })
-            .collect()
+        for set in shader_set_bindings {
+            for shader_set_binding in &set.bindings {
+                let binding_was_submitted = set_bindings.get(&set.set_index).map_or(false, |set| {
+                    set.bindings.contains_key(&shader_set_binding.binding_index)
+                });
+                if !binding_was_submitted {
+                    panic!("Did not supply uniform binding for set: {}, binding {}, uniform name `{}`.", set.set_index, shader_set_binding.binding_index, shader_set_binding.binding_name);
+                };
+            }
+        }
+
+        set_bindings
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct UniformSetData {
     /// Set bindings ordered by backend binding index.
-    pub data: Vec<Binding>,
+    pub bindings: HashMap</*binding_index=*/ u32, Binding>,
+}
+
+impl std::hash::Hash for UniformSetData {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (idx, binding) in self.bindings.iter() {
+            idx.hash(state);
+            binding.hash(state);
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

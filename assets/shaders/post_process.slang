@@ -31,5 +31,7 @@ void main(uint3 id: SV_DispatchThreadID) {
   let sample_pixel = uint2(uv * float2(rt_dim));
   let sample_color = u_shader.rt_final.Load(uint3(sample_pixel.xy, 0));
 
-  u_shader.backbuffer.Store(coord.xy, float4(sample_color.rgb, 1.0));
+  let color_srgb = color::lsrgb_to_srgb(sample_color.rgb);
+
+  u_shader.backbuffer.Store(coord.xy, float4(color_srgb, 1.0));
 }

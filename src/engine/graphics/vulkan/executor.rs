@@ -441,18 +441,40 @@ impl VulkanFrameGraphExecutor {
                     continue;
                 }
 
-                panic!("Resource should be populated if its an image we are here.");
+                if frame_graph.inputs.contains_key(&input) {
+                    panic!(
+                        "User defined image input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
+                    );
+                } else {
+                    panic!(
+                        "Pass has an image input that is somehow not contained in the executor's session frame graph definition."
+                    );
+                }
             }
 
             if input_info.type_id == std::any::TypeId::of::<Buffer>() {
-                let Some(buffer_info) = frame_graph.frame_buffers.get(&input.as_typed()) else {
+                if frame_graph
+                    .frame_buffers
+                    .contains(&input.as_typed::<Buffer>())
+                {
                     panic!(
-                        "User defined buffer input hasn't been populated yet, and it is required."
+                        "Frame graph frame buffer `{}` hasn't been written to yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
                     );
-                };
+                } else if frame_graph.inputs.contains_key(&input) {
+                    panic!(
+                        "User defined buffer input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
+                    );
+                } else {
+                    panic!(
+                        "Pass has a buffer input that is somehow not contained in the executor's session frame graph definition."
+                    );
+                }
             }
 
-            panic!("Unknown frame graph input type.")
+            panic!(
+                "Unknown frame graph input type for input name `{}` and type {:?}.",
+                input_info.name, input_info.type_id
+            );
         }
     }
 
