@@ -15,14 +15,14 @@ use crate::engine::{
         backend::{
             Buffer, ComputePipeline, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
             GfxComputePipelineInfo, GfxImageCreateInfo, GfxPassOnceImpl,
-            GraphicsBackendFrameGraphExecutor, Image, ResourceId, Untyped,
+            GraphicsBackendFrameGraphExecutor, Image, ResourceId, ShaderWriter, Untyped,
         },
         frame_graph::{
             self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo, FrameGraphContext,
             FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
             IntoFrameGraphResource, Pass,
         },
-        shader::{ShaderCompiler, ShaderModificationTree},
+        shader::{ShaderCompiler, ShaderModificationTree, ShaderSetBinding},
     },
     window::time::{Instant, Timer},
 };
@@ -53,6 +53,8 @@ struct VulkanExecutorResourceManager {
     // The timeline in which the new compute pipeline is old news, meaning all the frames in flight
     // have updated to the new pipeline.
     new_compute_pipeline_deletion_timeline: Vec<HashSet<GfxComputePipelineCreateInfo>>,
+
+    cached_library_bindings: Option<Vec<ShaderSetBinding>>,
 
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
@@ -90,6 +92,7 @@ impl VulkanExecutorResourceManager {
             new_compute_pipeline_deletion_timeline: (0..ctx.frames_in_flight())
                 .map(|_| HashSet::new())
                 .collect::<Vec<_>>(),
+            cached_library_bindings: None,
 
             cache_timeline: (0..ctx.frames_in_flight())
                 .map(|_| Vec::new())
@@ -111,6 +114,7 @@ impl VulkanExecutorResourceManager {
         debug!("Invalidating pipelines due to shader change.");
         shader_compiler.invalidate_cache();
         self.shader_modification_tree = curr_shader_state;
+        self.cached_library_bindings = None;
 
         let mut recreation_compute_pipelines = Vec::new();
         for (info, id) in self.cached_compute_pipelines.iter() {
@@ -312,6 +316,14 @@ impl FrameSession {
             buffer_writes_event: None,
         }
     }
+
+    fn create_context(&self) -> FrameGraphContext {
+        FrameGraphContext {
+            frame_graph: &self.frame_graph,
+            resource_map: &self.resource_map,
+            supplied_inputs: &self.supplied_inputs,
+        }
+    }
 }
 
 pub struct VulkanCommandPool {
@@ -353,6 +365,14 @@ impl VulkanFrameGraphExecutor {
 
     fn initialize_session_resources(&mut self, shader_compiler: &mut ShaderCompiler) {
         let session = self.session.as_mut().unwrap();
+
+        if self.resource_manager.cached_library_bindings.is_none() {
+            self.resource_manager.cached_library_bindings = Some(
+                shader_compiler
+                    .get_library_bindings()
+                    .expect("Failed to reflect library bindings."),
+            );
+        }
 
         // Initialize compute pipelines.
         for (frame_resource, compute_pipeline_info) in &session.frame_graph.compute_pipelines {
@@ -825,5 +845,33 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         let resource = session.frame_graph.get_handle_untyped(name);
 
         session.supplied_inputs.insert(resource, input_data);
+    }
+
+    /// Writes any library exposed uniforms
+    fn write_uniforms(&mut self, write_fn: &mut dyn FnMut(&mut ShaderWriter, &FrameGraphContext)) {
+        let session = self.session.as_mut().unwrap();
+
+        let library_bindings = self
+            .resource_manager
+            .cached_library_bindings
+            .as_ref()
+            .expect("Library bindings should be reflected by now.");
+
+        let mut writer = ShaderWriter::new(library_bindings, true);
+        write_fn(&mut writer, &session.create_context());
+        writer.validate();
+
+        let writes = writer
+            .take_set_data()
+            .into_iter()
+            .map(|(set_index, set)| {
+                let set_info = library_bindings
+                    .iter()
+                    .find(|s| s.set_index == set_index)
+                    .unwrap();
+                (set_index, (set_info, set))
+            })
+            .collect::<HashMap<_, _>>();
+        self.ctx.write_shader_sets(writes);
     }
 }

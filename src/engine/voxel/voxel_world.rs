@@ -398,6 +398,7 @@ pub struct VoxelWorldGpu {
     voxel_model_info_map: HashMap<VoxelModelId, VoxelWorldModelGpuInfo>,
     // Rendered voxel models entities, count of entities pointing to models in the acceleration buffer.
     rendered_voxel_model_entity_count: u32,
+    terrain_side_length: u32,
 
     /// The allocator that owns and manages the world data buffer holding all the voxel model
     /// information.
@@ -448,6 +449,7 @@ impl VoxelWorldGpu {
             voxel_model_info_allocator: None,
             voxel_model_info_map: HashMap::new(),
             rendered_voxel_model_entity_count: 0,
+            terrain_side_length: 0,
             voxel_data_allocator: None,
             frame_state: VoxelWorldGpuFrameState::new(),
         }
@@ -617,6 +619,7 @@ impl VoxelWorldGpu {
                 .is_empty()
         {
             let chunk_tree = voxel_terrain.chunk_tree();
+            voxel_world_gpu.terrain_side_length = chunk_tree.chunk_side_length();
             let chunk_tree_gpu = ChunkTreeGpu::build(
                 chunk_tree,
                 voxel_world_gpu
@@ -626,21 +629,9 @@ impl VoxelWorldGpu {
                     .collect::<HashMap<_, _>>(),
             );
 
-            let co = chunk_tree.chunk_origin();
-            let metadata = vec![
-                co.x as u32,
-                co.y as u32,
-                co.z as u32,
-                chunk_tree.chunk_side_length(),
-            ];
             device.write_buffer_slice(
                 voxel_world_gpu.world_terrain_acceleration_buffer(),
                 0,
-                bytemuck::cast_slice(&metadata),
-            );
-            device.write_buffer_slice(
-                voxel_world_gpu.world_terrain_acceleration_buffer(),
-                (metadata.len() * std::mem::size_of::<u32>()) as u64,
                 bytemuck::cast_slice(&chunk_tree_gpu.data),
             );
         }
@@ -714,6 +705,10 @@ impl VoxelWorldGpu {
 
     pub fn rendered_voxel_model_entity_count(&self) -> u32 {
         self.rendered_voxel_model_entity_count
+    }
+
+    pub fn terrain_side_length(&self) -> u32 {
+        self.terrain_side_length
     }
 
     pub fn world_acceleration_buffer(&self) -> &ResourceId<Buffer> {

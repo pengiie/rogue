@@ -19,7 +19,7 @@ use crate::{
 use super::{
     backend::{
         Binding, GfxFilterMode, GfxImageFormat, GraphicsBackendFrameGraphExecutor,
-        GraphicsBackendRecorder, Image, UniformData,
+        GraphicsBackendRecorder, Image, ShaderWriter,
     },
     camera::MainCamera,
     device::DeviceResource,
@@ -47,6 +47,7 @@ struct GraphConstantsRT {
     image_albedo: &'static str,
     image_depth: &'static str,
 
+    buffer_shader_info: &'static str,
     buffer_terrain_acceleration_data: &'static str,
     buffer_model_info_data: &'static str,
     buffer_model_voxel_data: &'static str,
@@ -81,6 +82,7 @@ impl Renderer {
             image_albedo: "rt_image_albedo",
             image_depth: "rt_image_depth",
 
+            buffer_shader_info: "rt_buffer_shader_info",
             buffer_terrain_acceleration_data: "rt_buffer_terrain_acceleration_data",
             buffer_model_info_data: "rt_buffer_model_info_data",
             buffer_model_voxel_data: "rt_buffer_model_voxel_data",
@@ -142,12 +144,8 @@ impl Renderer {
                 FrameGraphImageInfo::new_depth(gfx_settings.rt_size),
             );
 
-            let rt_buffer_terrain_acceleration_data =
-                builder.create_input_buffer(Self::GRAPH.rt.buffer_terrain_acceleration_data);
-            let rt_buffer_model_info_data =
-                builder.create_input_buffer(Self::GRAPH.rt.buffer_model_info_data);
-            let rt_buffer_model_voxel_data =
-                builder.create_input_buffer(Self::GRAPH.rt.buffer_model_voxel_data);
+            let rt_buffer_shader_info =
+                builder.create_frame_buffer(Self::GRAPH.rt.buffer_shader_info);
 
             builder.create_compute_pipeline(
                 Self::GRAPH.rt.compute_prepass,
@@ -158,9 +156,7 @@ impl Renderer {
                 &[
                     &Self::GRAPH.frame_info_buffer,
                     &Self::GRAPH.frame_world_info_buffer,
-                    &rt_buffer_terrain_acceleration_data,
-                    &rt_buffer_model_info_data,
-                    &rt_buffer_model_voxel_data,
+                    &rt_buffer_shader_info,
                 ],
                 &[&Self::GRAPH.rt.image_albedo],
             );
@@ -203,11 +199,10 @@ impl Renderer {
                             ctx.get_compute_pipeline(post_process_compute_pipline);
 
                         let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
-                        compute_pass.bind_uniforms({
-                            let mut data = UniformData::new();
-                            data.load("u_shader.rt_final", rt_image.as_sampled_binding());
-                            data.load("u_shader.backbuffer", backbuffer_image.as_storage_binding());
-                            data
+                        compute_pass.bind_uniforms(&mut |writer| {
+                            writer.use_set_cache("u_frame");
+                            writer.write_binding("u_shader.rt_final", rt_image);
+                            writer.write_binding("u_shader.backbuffer", backbuffer_image);
                         });
 
                         let wg_size = compute_pass.workgroup_size();
@@ -284,18 +279,41 @@ impl Renderer {
         );
 
         // TODO: Move this out to a separate pass struct for rt.
-        renderer.frame_graph_executor.supply_buffer_ref(
-            &Self::GRAPH.rt.buffer_terrain_acceleration_data,
-            voxel_world_gpu.world_terrain_acceleration_buffer(),
+        let shader_info: structs::rt::ShaderInfo = structs::rt::ShaderInfo {
+            terrain_side_length: voxel_world_gpu.terrain_side_length(),
+        };
+        renderer.frame_graph_executor.write_buffer_slice(
+            Self::GRAPH.rt.buffer_shader_info,
+            bytemuck::bytes_of(&shader_info),
         );
-        renderer.frame_graph_executor.supply_buffer_ref(
-            &Self::GRAPH.rt.buffer_model_info_data,
-            voxel_world_gpu.world_voxel_model_info_buffer(),
-        );
-        renderer.frame_graph_executor.supply_buffer_ref(
-            &Self::GRAPH.rt.buffer_model_voxel_data,
-            voxel_world_gpu.world_data_buffer().unwrap(),
-        );
+
+        renderer
+            .frame_graph_executor
+            .write_uniforms(&mut |writer, ctx| {
+                writer.write_binding(
+                    "u_frame.frame_info",
+                    ctx.get_buffer(Self::GRAPH.frame_info_buffer),
+                );
+                writer.write_binding(
+                    "u_frame.world_info",
+                    ctx.get_buffer(Self::GRAPH.frame_world_info_buffer),
+                );
+                writer.write_binding(
+                    "u_frame.voxel.terrain.data",
+                    *voxel_world_gpu.world_terrain_acceleration_buffer(),
+                );
+                writer.write_binding(
+                    "u_frame.voxel.model_info_data",
+                    *voxel_world_gpu.world_voxel_model_info_buffer(),
+                );
+                writer.write_binding(
+                    "u_frame.voxel.model_voxel_data",
+                    *voxel_world_gpu.world_data_buffer().unwrap(),
+                );
+
+                writer.write_uniform("u_frame.voxel.terrain.side_length", 16u32);
+                writer.write_uniform("u_frame.voxel.terrain.volume", 16u32 * 16 * 16);
+            });
     }
 
     pub fn finish_frame(
@@ -339,37 +357,9 @@ impl Renderer {
 
                     {
                         let mut compute_pass = recorder.begin_compute_pass(compute_pipeline);
-                        compute_pass.bind_uniforms({
-                            let mut uniforms = UniformData::new();
-
-                            uniforms.load(
-                                "u_frame.frame_info",
-                                ctx.get_buffer(Self::GRAPH.frame_info_buffer)
-                                    .as_uniform_binding(),
-                            );
-                            uniforms.load(
-                                "u_frame.world_info",
-                                ctx.get_buffer(Self::GRAPH.frame_world_info_buffer)
-                                    .as_uniform_binding(),
-                            );
-
-                            uniforms.load("u_shader.backbuffer", rt_image.as_storage_binding());
-                            uniforms.load(
-                                "u_shader.terrain_acceleration_data",
-                                ctx.get_buffer(Self::GRAPH.rt.buffer_terrain_acceleration_data)
-                                    .as_storage_binding(),
-                            );
-                            uniforms.load(
-                                "u_shader.model_info_data",
-                                ctx.get_buffer(Self::GRAPH.rt.buffer_model_info_data)
-                                    .as_storage_binding(),
-                            );
-                            uniforms.load(
-                                "u_shader.model_voxel_data",
-                                ctx.get_buffer(Self::GRAPH.rt.buffer_model_voxel_data)
-                                    .as_storage_binding(),
-                            );
-                            uniforms
+                        compute_pass.bind_uniforms(&mut |writer| {
+                            writer.use_set_cache("u_frame");
+                            writer.write_binding("u_shader.backbuffer", rt_image);
                         });
                         let wg_size = compute_pass.workgroup_size();
                         compute_pass.dispatch(
@@ -419,4 +409,12 @@ pub mod structs {
             pub time_ms: u32,
         }
     );
+
+    pub mod rt {
+        shader_struct!(
+            pub struct ShaderInfo {
+                pub terrain_side_length: u32,
+            }
+        );
+    }
 }

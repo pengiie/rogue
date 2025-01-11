@@ -7,7 +7,7 @@ use crate::{
     common::color::{Color, ColorSpaceSrgb},
     engine::graphics::backend::{
         Binding, ComputePass, ComputePipeline, GfxFilterMode, GfxImageInfo,
-        GraphicsBackendComputePass, GraphicsBackendRecorder, Image, ResourceId, UniformData,
+        GraphicsBackendComputePass, GraphicsBackendRecorder, Image, ResourceId, ShaderWriter,
     },
 };
 
@@ -245,43 +245,54 @@ pub struct VulkanComputePass<'a> {
 }
 
 impl GraphicsBackendComputePass for VulkanComputePass<'_> {
-    fn bind_uniforms(&mut self, uniform_data: UniformData) {
+    fn bind_uniforms(&mut self, writer_fn: &mut dyn FnMut(&mut ShaderWriter)) {
         self.uniforms_bound = true;
 
-        let mut image_transitions = Vec::new();
-        for binding in uniform_data.bindings() {
-            match binding {
-                Binding::StorageImage { image } => image_transitions.push(VulkanImageTransition {
-                    image_id: *image,
-                    new_layout: ash::vk::ImageLayout::GENERAL,
-                    new_access_flags: ash::vk::AccessFlags::SHADER_READ
-                        | ash::vk::AccessFlags::SHADER_WRITE,
-                }),
-                Binding::SampledImage { image } => image_transitions.push(VulkanImageTransition {
-                    image_id: *image,
-                    new_layout: ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    new_access_flags: ash::vk::AccessFlags::SHADER_READ,
-                }),
-                Binding::Sampler { sampler } => todo!(),
-                Binding::UniformBuffer { buffer } => {}
-                Binding::StorageBuffer { buffer } => {}
-            }
-        }
+        let pipeline_layout = &self
+            .recorder
+            .ctx
+            .get_pipeline_layout(self.pipeline_id.as_untyped());
+        let mut writer = ShaderWriter::new(&pipeline_layout.shader_bindings, false);
+        writer_fn(&mut writer);
+        writer.validate();
+
+        let uniform_data = writer.take_set_data();
+        let uniform_bind_info = self
+            .recorder
+            .ctx
+            .bind_uniforms(self.pipeline_id.as_untyped(), uniform_data);
+
+        let mut image_transitions = uniform_bind_info
+            .expected_image_layouts
+            .into_iter()
+            .map(|(image_id, (layout, access))| VulkanImageTransition {
+                image_id,
+                new_layout: layout,
+                new_access_flags: access,
+            })
+            .collect::<Vec<_>>();
         self.recorder.transition_images(
             &image_transitions,
             ash::vk::PipelineStageFlags::COMPUTE_SHADER,
         );
 
-        self.recorder.ctx.bind_uniforms(
-            self.recorder.command_buffer,
-            self.pipeline_id.as_untyped(),
-            ash::vk::PipelineBindPoint::COMPUTE,
-            uniform_data,
-        );
+        unsafe {
+            self.recorder.ctx.device().cmd_bind_descriptor_sets(
+                self.recorder.command_buffer,
+                ash::vk::PipelineBindPoint::COMPUTE,
+                uniform_bind_info.pipeline_layout,
+                uniform_bind_info.first_set,
+                &uniform_bind_info.descriptor_sets,
+                &[],
+            )
+        };
     }
 
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {
-        assert!(self.uniforms_bound);
+        assert!(
+            self.uniforms_bound,
+            "Tried to dispatch without binding uniforms."
+        );
         unsafe {
             self.recorder
                 .ctx

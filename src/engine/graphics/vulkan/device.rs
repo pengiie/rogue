@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     borrow::BorrowMut,
     collections::{HashMap, HashSet},
     ffi::CString,
@@ -31,7 +32,7 @@ use crate::{
                 GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxPresentMode,
                 GfxSwapchainInfo, GraphicsBackendDevice, GraphicsBackendEvent,
                 GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline,
-                RasterPipelineCreateInfo, ResourceId, UniformData, UniformSetData, Untyped,
+                RasterPipelineCreateInfo, ResourceId, ShaderSetData, ShaderWriter, Untyped,
             },
             gpu_allocator::{Allocation, AllocatorTree},
             shader::{
@@ -238,6 +239,10 @@ impl VulkanContext {
         )
     }
 
+    pub fn get_pipeline_layout(&self, pipeline: ResourceId<Untyped>) -> VulkanPipelineLayout {
+        self.resource_manager.get_pipeline_layout(pipeline)
+    }
+
     pub fn record_buffer_writes(&self, recorder: &mut VulkanRecorder) {
         self.resource_manager.record_buffer_writes(recorder);
     }
@@ -280,20 +285,31 @@ impl VulkanContext {
         self.resource_manager.get_compute_pipeline(compute_pipeline)
     }
 
+    /// Writes the descriptor sets.
+    pub fn write_shader_sets(
+        &self,
+        binding_data: HashMap<u32, (&ShaderSetBinding, ShaderSetData)>,
+    ) {
+        let mut memory_allocator = self.memory_allocator.write();
+        self.resource_manager
+            .write_shader_sets(&mut memory_allocator, binding_data);
+    }
+
     pub fn bind_uniforms(
         &self,
-        command_buffer: ash::vk::CommandBuffer,
         pipeline: ResourceId<Untyped>,
-        pipeline_bind_point: ash::vk::PipelineBindPoint,
-        uniform_data: UniformData,
-    ) {
-        self.resource_manager.bind_uniforms(
-            command_buffer,
-            pipeline_bind_point,
-            pipeline,
-            uniform_data,
-        );
+        binding_data: HashMap<u32, ShaderSetData>,
+    ) -> VulkanUniformBinding {
+        self.resource_manager.bind_uniforms(pipeline, binding_data)
     }
+}
+
+pub struct VulkanUniformBinding {
+    pub pipeline_layout: ash::vk::PipelineLayout,
+    pub first_set: u32,
+    pub descriptor_sets: Vec<ash::vk::DescriptorSet>,
+    pub expected_image_layouts:
+        HashMap<ResourceId<Image>, (ash::vk::ImageLayout, ash::vk::AccessFlags)>,
 }
 
 pub type VulkanContextHandle = Arc<VulkanContext>;
@@ -1382,14 +1398,16 @@ struct VulkanDescriptorSet {
     // Vec size is # of frames in flight. Meaning one descriptor set used per frame per layout.
     // TODO: Support multiple descriptor sets with the same layout to allow for multiple queues,
     // this would require abstracting the descriptor set away from the "frame" due to async contexts.
-    frame_sets: Vec<
-        Option<(
-            ash::vk::DescriptorSet,
-            /*last_bound_uniform_data=*/ UniformSetData,
-        )>,
-    >,
+    frame_sets: Vec<Option<VulkanDescriptorFrameSet>>,
 }
 
+struct VulkanDescriptorFrameSet {
+    descriptor_set: ash::vk::DescriptorSet,
+    uniform_buffer: Option<ResourceId<Buffer>>,
+    last_set: ShaderSetData,
+}
+
+#[derive(Clone)]
 pub struct VulkanPipelineLayout {
     pub layout: ash::vk::PipelineLayout,
     pub shader_bindings: Vec<ShaderSetBinding>,
@@ -1665,26 +1683,41 @@ impl VulkanResourceManager {
         set_binding: &ShaderSetBinding,
     ) -> anyhow::Result<ash::vk::DescriptorSetLayout> {
         debug!("Creating descriptor set layout");
-        let layout_bindings = set_binding
+        let mut layout_bindings = set_binding
             .bindings
             .iter()
-            .map(|binding| {
-                let vk_binding_type = match binding.binding_type {
-                    ShaderBindingType::Sampler => ash::vk::DescriptorType::SAMPLER,
-                    ShaderBindingType::SampledImage => ash::vk::DescriptorType::SAMPLED_IMAGE,
-                    ShaderBindingType::StorageImage => ash::vk::DescriptorType::STORAGE_IMAGE,
-                    ShaderBindingType::UniformBuffer => ash::vk::DescriptorType::UNIFORM_BUFFER,
-                    ShaderBindingType::StorageBuffer => ash::vk::DescriptorType::STORAGE_BUFFER,
+            .filter_map(|(binding_name, (binding, _is_used))| 'map: {
+                let vk_binding_type = match binding.binding_slot_type() {
+                    Some(ty) => match ty {
+                        ShaderBindingType::Sampler => ash::vk::DescriptorType::SAMPLER,
+                        ShaderBindingType::SampledImage => ash::vk::DescriptorType::SAMPLED_IMAGE,
+                        ShaderBindingType::StorageImage => ash::vk::DescriptorType::STORAGE_IMAGE,
+                        ShaderBindingType::UniformBuffer => ash::vk::DescriptorType::UNIFORM_BUFFER,
+                        ShaderBindingType::StorageBuffer => ash::vk::DescriptorType::STORAGE_BUFFER,
+                    },
+                    None => {
+                        break 'map None;
+                    }
                 };
                 let vk_binding = ash::vk::DescriptorSetLayoutBinding::default()
-                    .binding(binding.binding_index)
+                    .binding(binding.binding_index(set_binding))
                     .descriptor_count(1)
                     .descriptor_type(vk_binding_type)
                     .stage_flags(ash::vk::ShaderStageFlags::ALL);
 
-                vk_binding
+                Some(vk_binding)
             })
             .collect::<Vec<_>>();
+
+        if let Some(global_uniform_binding_index) = set_binding.global_uniform_binding_index {
+            layout_bindings.push(
+                ash::vk::DescriptorSetLayoutBinding::default()
+                    .binding(global_uniform_binding_index)
+                    .descriptor_count(1)
+                    .descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER)
+                    .stage_flags(ash::vk::ShaderStageFlags::ALL),
+            )
+        }
 
         let create_info =
             ash::vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_bindings);
@@ -1807,78 +1840,99 @@ impl VulkanResourceManager {
         Ok(resource_id)
     }
 
-    /// Auto creates a descriptor set in use for this frame stored for reuse by the hashed
-    /// `ShaderSetBinding`. Will be auto freed and available for reuse when this frame is over.
-    /// This is done to avoid relying on the `VulkanFrameGraphExecutor` directly and makes uniform
-    /// uploading a lot easier and renderer agnostic when using the gfx api.
-    fn bind_uniforms(
+    /// Writes the descriptor sets for the given binding data.
+    pub fn write_shader_sets(
         &self,
-        command_buffer: ash::vk::CommandBuffer,
-        pipeline_bind_point: ash::vk::PipelineBindPoint,
-        pipeline: ResourceId<Untyped>,
-        uniform_data: UniformData,
+        allocator: &mut VulkanAllocator,
+        binding_data: HashMap<u32, (&ShaderSetBinding, ShaderSetData)>,
     ) {
-        let mut pipeline_layout_index = None;
-        if let Some(pipeline) = self
-            .compute_pipelines
-            .read()
-            .get(&ResourceId::new(pipeline.id()))
-        {
-            pipeline_layout_index = Some(pipeline.pipeline_layout);
-        }
-        assert!(
-            pipeline_layout_index.is_some(),
-            "Pipeline id {} is invalid.",
-            pipeline.id()
-        );
-
         let mut descriptor_set_map = self.descriptor_sets.write();
-        let pipeline_layouts = self.pipeline_layouts.read();
-        let pipeline_layout = pipeline_layouts
-            .get(pipeline_layout_index.unwrap() as usize)
-            .unwrap();
-
-        let uniform_set_datas = uniform_data.as_sets(&pipeline_layout.shader_bindings);
 
         let mut vk_image_infos = Vec::new();
         let mut vk_buffer_infos = Vec::new();
         let mut vk_descriptor_set_writes = Vec::new();
 
-        let vk_descriptor_sets = pipeline_layout
-            .shader_bindings
-            .iter()
-            .map(|set_binding| {
-                let new_set_bindings = uniform_set_datas.get(&set_binding.set_index).unwrap();
+        let vk_descriptor_sets = binding_data
+            .into_values()
+            .map(|(set_binding, mut new_set)| {
+                if !descriptor_set_map.contains_key(set_binding) {
+                    let new_layout = self.create_descriptor_set_layout(set_binding).expect(&format!("Failed to create descriptor set layout for global shader set write for set `{}`", set_binding.name));
+                    descriptor_set_map.insert(
+                        set_binding.clone(),
+                        VulkanDescriptorSet {
+                            layout: new_layout,
+                            pipeline_ref_count: 0,
+                            frame_sets: (0..self.ctx.frames_in_flight).map(|_| None).collect(),
+                        },
+                    );
+                }
                 let descriptor_set = descriptor_set_map.get_mut(set_binding).unwrap();
 
-                let mut needs_write = false;
-                let (vk_descriptor_set, prev_set_bindings) = descriptor_set.frame_sets
+                let mut needs_binding_write = false;
+                let mut needs_uniform_write = false;
+                let frame_set = descriptor_set.frame_sets
                     [self.ctx.curr_cpu_frame_index() as usize]
                     .get_or_insert_with(|| {
-                        needs_write = true;
+                        if new_set.is_cached() {
+                            panic!("Set `{}` was defined as cached but that should be impossible when writing shader sets with this function.", set_binding.name);
+                        }
+
+                        needs_binding_write = true;
                         let set_layouts = [descriptor_set.layout];
                         let create_info = ash::vk::DescriptorSetAllocateInfo::default()
                             .descriptor_pool(self.descriptor_pool)
                             .set_layouts(&set_layouts);
+
+                        let hashed_set_info = new_set.clone();
                         let new_set =
                             unsafe { self.ctx.device.allocate_descriptor_sets(&create_info) }
-                                .expect("Failed to create descriptor set")
+                                .expect("Failed to create global descriptor set")
                                 .remove(0);
-                        debug!("Creating descriptor set.");
+                        debug!("Creating global descriptor set.");
 
-                        (new_set, new_set_bindings.clone())
+                        let uniform_buffer = set_binding.global_uniform_binding_index.is_some().then(|| {
+                            needs_uniform_write = true;
+                            self.create_buffer(allocator, GfxBufferCreateInfo { name: format!("set_{}_global_uniform_buffer", set_binding.name), size: set_binding.global_uniforms_size as u64}, VulkanAllocationType::GpuLocal, false).expect(&format!("Failed to create uniform buffer for set `{}`.", set_binding.name))
+                        });
+
+                        VulkanDescriptorFrameSet {
+                            descriptor_set: new_set,
+                            uniform_buffer,
+                            last_set: hashed_set_info,
+                        }
                     });
 
-                if new_set_bindings != prev_set_bindings {
-                    *prev_set_bindings = new_set_bindings.clone();
-                    needs_write = true;
+                if !needs_binding_write && new_set.bindings_mut() != frame_set.last_set.bindings_mut() {
+                    frame_set.last_set.set_bindings(new_set.take_bindings());
+                    needs_binding_write = true;
                 }
 
-                if needs_write {
-                    // prev_set_bindings is now equal to new_set_bindings here.
-                    for (binding_idx, binding) in prev_set_bindings.bindings.iter() {
+                if !needs_uniform_write && new_set.uniform_data() != frame_set.last_set.uniform_data() {
+                    frame_set.last_set.set_uniform_data(new_set.take_uniform_data());
+                    needs_uniform_write = true;
+                }
+
+                if needs_binding_write {
+                    if let Some(uniform_buffer_id) = &frame_set.uniform_buffer {
+                            let vk_buffer_info = self.get_buffer_info(uniform_buffer_id);
                         let mut write = ash::vk::WriteDescriptorSet::default()
-                            .dst_set(*vk_descriptor_set)
+                            .dst_set(frame_set.descriptor_set)
+                            .descriptor_count(1)
+                            .dst_binding(set_binding.global_uniform_binding_index.unwrap()).descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER);
+
+                        vk_buffer_infos.push(
+                            ash::vk::DescriptorBufferInfo::default()
+                                .buffer(vk_buffer_info.buffer)
+                                .offset(0)
+                                .range(ash::vk::WHOLE_SIZE),
+                        );
+                        vk_descriptor_set_writes.push((write, VulkanSetWriteIndex::BufferInfo(vk_buffer_infos.len() - 1)));
+                    }
+
+                    // prev_set_bindings is now equal to new_set_bindings here.
+                    for (binding_idx, binding) in frame_set.last_set.bindings_mut().iter() {
+                        let mut write = ash::vk::WriteDescriptorSet::default()
+                            .dst_set(frame_set.descriptor_set)
                             .descriptor_count(1)
                             .dst_binding(*binding_idx);
                         let mut info = None;
@@ -1956,7 +2010,214 @@ impl VulkanResourceManager {
                     }
                 }
 
-                *vk_descriptor_set
+                if needs_uniform_write {
+                    debug!("Writing global descriptor set.");
+                    self.write_buffer(allocator, frame_set.uniform_buffer.as_ref().unwrap(), 0, frame_set.last_set.uniform_data().data.len() as u64, &mut |dst| {
+                        dst.copy_from_slice(&frame_set.last_set.uniform_data().data);
+                    });
+                }
+
+                frame_set.descriptor_set
+            })
+            .collect::<Vec<_>>();
+
+        if !vk_descriptor_set_writes.is_empty() {
+            let vk_descriptor_set_writes = vk_descriptor_set_writes
+                .into_iter()
+                .map(|(write, info)| match info {
+                    VulkanSetWriteIndex::ImageInfo(idx) => {
+                        write.image_info(std::slice::from_ref(&vk_image_infos[idx]))
+                    }
+                    VulkanSetWriteIndex::BufferInfo(idx) => {
+                        write.buffer_info(std::slice::from_ref(&vk_buffer_infos[idx]))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            unsafe {
+                self.ctx
+                    .device
+                    .update_descriptor_sets(&vk_descriptor_set_writes, &[])
+            };
+        }
+    }
+
+    /// Auto creates a descriptor set in use for this frame stored for reuse by the hashed
+    /// `ShaderSetBinding`. Will be auto freed and available for reuse when this frame is over.
+    /// This is done to avoid relying on the `VulkanFrameGraphExecutor` directly and makes uniform
+    /// uploading a lot easier and renderer agnostic when using the gfx api.
+    fn bind_uniforms(
+        &self,
+        pipeline: ResourceId<Untyped>,
+        binding_data: HashMap<u32, ShaderSetData>,
+    ) -> VulkanUniformBinding {
+        let mut pipeline_layout_index = None;
+        if let Some(pipeline) = self
+            .compute_pipelines
+            .read()
+            .get(&ResourceId::new(pipeline.id()))
+        {
+            pipeline_layout_index = Some(pipeline.pipeline_layout);
+        }
+        assert!(
+            pipeline_layout_index.is_some(),
+            "Pipeline id {} is invalid.",
+            pipeline.id()
+        );
+
+        let mut descriptor_set_map = self.descriptor_sets.write();
+        let pipeline_layouts = self.pipeline_layouts.read();
+        let pipeline_layout = pipeline_layouts
+            .get(pipeline_layout_index.unwrap() as usize)
+            .unwrap();
+
+        let mut written_sets = binding_data;
+        let mut vk_image_infos = Vec::new();
+        let mut vk_buffer_infos = Vec::new();
+        let mut vk_descriptor_set_writes = Vec::new();
+
+        let mut expected_image_layouts = HashMap::new();
+
+        let vk_descriptor_sets = pipeline_layout
+            .shader_bindings
+            .iter()
+            .map(|set_binding| {
+                let mut new_set = written_sets.remove(&set_binding.set_index).unwrap();
+                let descriptor_set = descriptor_set_map.get_mut(set_binding).unwrap();
+
+                let mut needs_write = false;
+                let frame_set = descriptor_set.frame_sets
+                    [self.ctx.curr_cpu_frame_index() as usize]
+                    .get_or_insert_with(|| {
+                        if new_set.is_cached() {
+                            panic!("Expected set with name `{}` to be cached, aka. existing and written to, accoring to the user. But it wasn't since we are trying to make a new descriptor set.", set_binding.name);
+                        }
+
+                        needs_write = true;
+                        let set_layouts = [descriptor_set.layout];
+                        let create_info = ash::vk::DescriptorSetAllocateInfo::default()
+                            .descriptor_pool(self.descriptor_pool)
+                            .set_layouts(&set_layouts);
+
+                        let hashed_set_info = new_set.clone();
+                        let new_set =
+                            unsafe { self.ctx.device.allocate_descriptor_sets(&create_info) }
+                                .expect("Failed to create descriptor set")
+                                .remove(0);
+                        debug!("Creating descriptor set.");
+
+                        let uniform_buffer = set_binding.global_uniform_binding_index.is_some().then(|| todo!("Create global uniform buffer for pipeline uniform bindings."));
+
+                        VulkanDescriptorFrameSet {
+                            descriptor_set: new_set,
+                            uniform_buffer,
+                            last_set: hashed_set_info,
+                        }
+                    });
+
+
+                if !new_set.is_cached() && new_set.bindings_mut() != frame_set.last_set.bindings_mut() {
+                    frame_set.last_set.set_bindings(new_set.take_bindings());
+                    needs_write = true;
+                }
+
+                for (binding_idx, binding) in frame_set.last_set.bindings() {
+                    match binding {
+                        Binding::StorageImage { image } => {
+                            let old = expected_image_layouts.insert(*image, (ash::vk::ImageLayout::GENERAL, ash::vk::AccessFlags::SHADER_WRITE));
+                            assert!(old.is_none());
+                        },
+                        Binding::SampledImage { image } => {
+                            let old = expected_image_layouts.insert(*image, (ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, ash::vk::AccessFlags::SHADER_READ));
+                            assert!(old.is_none());
+                        },
+                        _ => {}
+                    }
+                }
+
+                if needs_write {
+                    // prev_set_bindings is now equal to new_set_bindings here.
+                    for (binding_idx, binding) in frame_set.last_set.bindings_mut().iter() {
+                        let mut write = ash::vk::WriteDescriptorSet::default()
+                            .dst_set(frame_set.descriptor_set)
+                            .descriptor_count(1)
+                            .dst_binding(*binding_idx);
+                        let mut info = None;
+
+                        // Due to the image infos possibly resizing while pushing, we must store
+                        // indexes to the image info and populate that in the vulkan write struct
+                        // once we are no longer pushing writes.
+                        match binding {
+                            Binding::StorageImage { image } => {
+                                let vk_image_info = self.get_image(*image);
+                                vk_image_infos.push(
+                                    ash::vk::DescriptorImageInfo::default()
+                                        .image_view(
+                                            vk_image_info
+                                                .view
+                                                .expect("Storage image should have an image view."),
+                                        )
+                                        .image_layout(ash::vk::ImageLayout::GENERAL),
+                                );
+                                info =
+                                    Some(VulkanSetWriteIndex::ImageInfo(vk_image_infos.len() - 1));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::STORAGE_IMAGE);
+                            }
+                            Binding::SampledImage { image } => {
+                                let vk_image_info = self.get_image(*image);
+                                vk_image_infos.push(
+                                    ash::vk::DescriptorImageInfo::default()
+                                        .image_view(
+                                            vk_image_info
+                                                .view
+                                                .expect("Sampled image should have an image view."),
+                                        )
+                                        .image_layout(
+                                            ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                        ),
+                                );
+                                info =
+                                    Some(VulkanSetWriteIndex::ImageInfo(vk_image_infos.len() - 1));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::SAMPLED_IMAGE);
+                            }
+                            Binding::Sampler { sampler } => todo!(),
+                            Binding::UniformBuffer { buffer } => {
+                                let vk_buffer_info = self.get_buffer_info(buffer);
+                                vk_buffer_infos.push(
+                                    ash::vk::DescriptorBufferInfo::default()
+                                        .buffer(vk_buffer_info.buffer)
+                                        .offset(0)
+                                        .range(ash::vk::WHOLE_SIZE),
+                                );
+                                info = Some(VulkanSetWriteIndex::BufferInfo(
+                                    vk_buffer_infos.len() - 1,
+                                ));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::UNIFORM_BUFFER);
+                            }
+                            Binding::StorageBuffer { buffer } => {
+                                let vk_buffer_info = self.get_buffer_info(buffer);
+                                vk_buffer_infos.push(
+                                    ash::vk::DescriptorBufferInfo::default()
+                                        .buffer(vk_buffer_info.buffer)
+                                        .offset(0)
+                                        .range(ash::vk::WHOLE_SIZE),
+                                );
+                                info = Some(VulkanSetWriteIndex::BufferInfo(
+                                    vk_buffer_infos.len() - 1,
+                                ));
+                                write =
+                                    write.descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER);
+                            }
+                        }
+
+                        vk_descriptor_set_writes.push((write, info.unwrap()));
+                    }
+                }
+
+                frame_set.descriptor_set
             })
             .collect::<Vec<_>>();
 
@@ -1980,16 +2241,35 @@ impl VulkanResourceManager {
             };
         }
 
-        unsafe {
-            self.ctx.device.cmd_bind_descriptor_sets(
-                command_buffer,
-                pipeline_bind_point,
-                pipeline_layout.layout,
-                0,
-                &vk_descriptor_sets,
-                &[],
-            )
-        };
+        VulkanUniformBinding {
+            pipeline_layout: pipeline_layout.layout,
+            first_set: 0,
+            descriptor_sets: vk_descriptor_sets,
+            expected_image_layouts,
+        }
+    }
+
+    pub fn get_pipeline_layout(&self, pipeline: ResourceId<Untyped>) -> VulkanPipelineLayout {
+        let mut pipeline_layout_index = None;
+        if let Some(pipeline) = self
+            .compute_pipelines
+            .read()
+            .get(&ResourceId::new(pipeline.id()))
+        {
+            pipeline_layout_index = Some(pipeline.pipeline_layout);
+        }
+        assert!(
+            pipeline_layout_index.is_some(),
+            "Pipeline id {} is invalid.",
+            pipeline.id()
+        );
+
+        let mut descriptor_set_map = self.descriptor_sets.write();
+        let pipeline_layouts = self.pipeline_layouts.read();
+        pipeline_layouts
+            .get(pipeline_layout_index.unwrap() as usize)
+            .unwrap()
+            .clone()
     }
 
     fn create_image_borrowed(

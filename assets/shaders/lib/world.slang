@@ -16,7 +16,7 @@ public struct Camera {
     let aspect_ratio = screen_dimensions.x / screen_dimensions.y;
     var scaled_uv = float2(uv.x * aspect_ratio, uv.y);
 
-    let ray_origin = float3(transform._m03, transform._m13, transform._m23);
+    var ray_origin = float3(transform._m03, transform._m13, transform._m23);
     let ray_dir = normalize(mul(rotation, float3(scaled_uv.xy, 1.0)));
 
     return Ray(ray_origin, ray_dir);

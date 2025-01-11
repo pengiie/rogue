@@ -1,15 +1,24 @@
 use std::{
-    collections::HashMap, future::Future, hash::Hash, mem::MaybeUninit, num::NonZeroU32, sync::Arc,
+    collections::{HashMap, HashSet},
+    future::Future,
+    hash::Hash,
+    io::Write,
+    mem::MaybeUninit,
+    num::NonZeroU32,
+    ops::Deref,
+    sync::Arc,
 };
 
-use log::debug;
+use log::{debug, warn};
 use nalgebra::{Vector2, Vector3};
+use ron::to_string;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     common::color::{Color, ColorSpaceSrgb},
     engine::{
         event::Events,
+        graphics::shader::{ShaderBinding, ShaderBindingType},
         window::window::{Window, WindowHandle},
     },
 };
@@ -92,7 +101,7 @@ pub trait GraphicsBackendRecorder {
 pub trait GraphicsBackendComputePass {
     /// Expects all uniforms listed in the shader to be present in UniformData, however that
     /// doesn't mean the backend will constantly rebind the same descriptor set.
-    fn bind_uniforms(&mut self, uniform_data: UniformData);
+    fn bind_uniforms(&mut self, writer_fn: &mut dyn FnMut(&mut ShaderWriter));
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn workgroup_size(&self) -> Vector3<u32>;
 }
@@ -122,6 +131,8 @@ pub trait GraphicsBackendFrameGraphExecutor {
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
     fn supply_buffer_ref(&mut self, name: &str, buffer: &ResourceId<Buffer>);
     fn supply_pass_ref(&mut self, name: &str, pass: Box<dyn GfxPassOnceImpl>);
+
+    fn write_uniforms(&mut self, write_fn: &mut dyn FnMut(&mut ShaderWriter, &FrameGraphContext));
 
     fn supply_input(&mut self, name: &str, input_data: Box<dyn std::any::Any>);
 }
@@ -269,97 +280,412 @@ pub struct GfxComputePipelineInfo {
 }
 
 #[derive(PartialEq, Eq)]
-pub struct UniformData {
-    data: HashMap<String, Binding>,
+pub struct ShaderWriter<'a> {
+    shader_set_bindings: &'a [ShaderSetBinding],
+    set_bindings: HashMap</*set_index=*/ u32, ShaderSetData>,
+    global_writer: bool,
 }
 
-impl UniformData {
-    pub fn new() -> Self {
+impl<'a> ShaderWriter<'a> {
+    pub fn new(shader_set_bindings: &'a [ShaderSetBinding], global_writer: bool) -> Self {
         Self {
-            data: HashMap::new(),
+            shader_set_bindings,
+            set_bindings: HashMap::new(),
+            global_writer,
         }
     }
 
-    pub fn load(&mut self, full_uniform_name: impl ToString, binding: Binding) {
-        self.data.insert(full_uniform_name.to_string(), binding);
+    pub fn take_set_data(&mut self) -> HashMap<u32, ShaderSetData> {
+        std::mem::replace(&mut self.set_bindings, HashMap::new())
     }
 
-    pub fn bindings(&self) -> impl Iterator<Item = &Binding> {
-        self.data.values()
+    pub fn parse_uniform_name(
+        full_uniform_name: &str,
+    ) -> (/*set_name=*/ &str, /*param_path=*/ &str) {
+        let separator_index = full_uniform_name
+            .find(".")
+            .expect("Invalid uniform path, must be {set}.{path}(.)?");
+        let set_name = &full_uniform_name[0..separator_index];
+        let param_path = &full_uniform_name[(separator_index + 1)..full_uniform_name.len()];
+        (set_name, param_path)
     }
 
-    pub fn as_sets(
-        &self,
-        shader_set_bindings: &Vec<ShaderSetBinding>,
-    ) -> HashMap</*set_index=*/ u32, UniformSetData> {
-        let mut set_bindings = shader_set_bindings
+    pub fn use_set_cache(&mut self, set_name: impl ToString) {
+        let set_name = set_name.to_string();
+        let set_info = self
+            .shader_set_bindings
             .iter()
-            .map(|set| {
-                (
-                    set.set_index,
-                    UniformSetData {
-                        bindings: HashMap::new(),
-                    },
-                )
-            })
-            .collect::<HashMap<u32, UniformSetData>>();
+            .find(|set| set.name == set_name)
+            .expect(&format!("No set with the name `{}` exists.", set_name,));
+        let old = self
+            .set_bindings
+            .insert(set_info.set_index, ShaderSetData::Cached);
+        if old.is_some() {
+            panic!(
+                "Called use_set_cache() but set `{}` was written to prior which is not allowed.",
+                set_name
+            );
+        }
+    }
 
-        for (full_uniform_name, binding) in &self.data {
-            let parts = full_uniform_name.split(".").collect::<Vec<_>>();
-            let Some((set_index, binding_index)) = shader_set_bindings.iter().find_map(|set| {
-                if set.name != parts[0] {
-                    return None;
+    pub fn write_binding<T: 'static>(
+        &mut self,
+        full_uniform_name: impl ToString,
+        binding_resource: ResourceId<T>,
+    ) {
+        let full_uniform_name = full_uniform_name.to_string();
+        let (set_name, param_path) = Self::parse_uniform_name(&full_uniform_name);
+
+        let (set_index, binding_index, expected_type) = {
+            let set_info = self
+                .shader_set_bindings
+                .iter()
+                .find(|set| set.name == set_name)
+                .expect(&format!(
+                    "No set with the name `{}` exists for the submitted uniform `{}`",
+                    set_name, full_uniform_name,
+                ));
+
+            let (binding_index, expected_type) = set_info
+                .bindings
+                .iter()
+                .find_map(|(path, (binding, is_used))| {
+                    if path == param_path {
+                        if !is_used {
+                            panic!("Wrote uniform binding for `{}` but it is not used", full_uniform_name);
+                        }
+
+                        match binding {
+                            ShaderBinding::Slot {
+                                binding_index,
+                                binding_type,
+                            } => {
+                                return Some((binding_index, binding_type));
+                            },
+                            ShaderBinding::Uniform {
+                                ..
+                            } => panic!("write_binding shouldn't be called when the expected type is a uniform for `{}`", full_uniform_name),
+                        }
+                    }
+
+                    None
+                })
+                .expect(&format!(
+                    "No binding with the path `{}` exists for the submitted uniform `{}`",
+                    param_path, full_uniform_name
+                ));
+
+            (set_info.set_index, *binding_index, *expected_type)
+        };
+
+        let binding = match expected_type {
+            ShaderBindingType::Sampler => todo!(),
+            ShaderBindingType::SampledImage => {
+                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Image>(),
+                    "Expected type for uniform `{}` is a SampledImage, yet we recieved a ResourceId<{}>", 
+                    full_uniform_name,
+                    std::any::type_name::<T>());
+                Binding::SampledImage {
+                    image: ResourceId::new(binding_resource.id()),
+                }
+            }
+            ShaderBindingType::StorageImage => {
+                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Image>(),
+                    "Expected type for uniform `{}` is a StorageImage, yet we recieved a ResourceId<{}>", 
+                    full_uniform_name,
+                    std::any::type_name::<T>());
+                Binding::StorageImage {
+                    image: ResourceId::new(binding_resource.id()),
+                }
+            }
+            ShaderBindingType::UniformBuffer => {
+                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Buffer>(),
+                    "Expected type for uniform `{}` is a ConstantBuffer, yet we recieved a ResourceId<{}>", 
+                    full_uniform_name,
+                    std::any::type_name::<T>());
+                Binding::UniformBuffer {
+                    buffer: ResourceId::new(binding_resource.id()),
+                }
+            }
+            ShaderBindingType::StorageBuffer => {
+                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Buffer>(),
+                    "Expected type for uniform `{}` is a StorageBuffer, yet we recieved a ResourceId<{}>", 
+                    full_uniform_name,
+                    std::any::type_name::<T>());
+                Binding::StorageBuffer {
+                    buffer: ResourceId::new(binding_resource.id()),
+                }
+            }
+        };
+
+        let mut set = self
+            .set_bindings
+            .entry(set_index)
+            .or_insert(ShaderSetData::new());
+        if set.is_cached() {
+            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+        }
+        set.bindings_mut().insert(binding_index, binding);
+    }
+
+    pub fn write_uniform<T: 'static>(&mut self, full_uniform_name: impl ToString, val: T) {
+        let full_uniform_name = full_uniform_name.to_string();
+        let (set_name, param_path) = Self::parse_uniform_name(&full_uniform_name);
+
+        let set_info = self
+            .shader_set_bindings
+            .iter()
+            .find(|set| set.name == set_name)
+            .expect(&format!(
+                "No set with the name `{}` exists for the submitted uniform `{}`",
+                set_name, full_uniform_name,
+            ));
+        assert!(set_info.global_uniform_binding_index.is_some());
+
+        let (expected_type, size, offset) = set_info
+            .bindings
+            .iter()
+            .find_map(|(path, (binding, is_used))| {
+                if path == param_path {
+                        if !is_used {
+                            panic!("Wrote uniform data for `{}` but it is not used", full_uniform_name);
+                        }
+
+                    match binding {
+                        ShaderBinding::Slot {
+                            ..
+                        } => panic!("write_uniform shouldn't be called when the expected type is a binding for `{}`", full_uniform_name),
+                        ShaderBinding::Uniform {
+                            expected_type,
+                            size,
+                            offset,
+                        } => {
+                            return Some((*expected_type, *size, *offset));
+                        },
+                    }
                 }
 
-                let binding_idx = set.bindings.iter().find_map(|shader_binding| {
-                    (shader_binding.binding_name == parts[1])
-                        .then_some(shader_binding.binding_index)
-                });
+                None
+            })
+            .expect(&format!(
+                "No binding with the path `{}` exists for the submitted uniform `{}`",
+                param_path, full_uniform_name
+            ));
 
-                binding_idx.map(|binding_idx| (set.set_index, binding_idx))
-            }) else {
-                panic!("Loaded uniform `{}` but a uniform with that qualified name does not exist in the target shader.", full_uniform_name);
+        assert_eq!(expected_type, std::any::TypeId::of::<T>(), "Tried to write uniform with data type {}, but expected a different type for uniform `{}`", std::any::type_name::<T>(), full_uniform_name);
+        assert_eq!(size, std::mem::size_of::<T>() as u32);
+
+        let mut set = self
+            .set_bindings
+            .entry(set_info.set_index)
+            .or_insert(ShaderSetData::new());
+        if set.is_cached() {
+            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+        }
+
+        let UniformSetData {
+            data,
+            written_uniforms,
+        } = &mut set.uniform_data();
+        let required_size = (offset + size) as usize;
+        if data.len() < required_size {
+            data.resize(required_size, 0);
+        }
+
+        // Safety: We resize data to the required size and we copy the correct number of
+        // bytes since we assert above with `size`.
+        unsafe {
+            data[offset as usize..(offset + size) as usize].copy_from_slice(
+                std::slice::from_raw_parts(
+                    std::slice::from_ref(&val).as_ptr() as *const u8,
+                    size as usize,
+                ),
+            );
+        }
+        written_uniforms.insert(param_path.to_owned());
+    }
+
+    pub fn validate(&self) {
+        for set_info in self.shader_set_bindings {
+            let Some(set) = self.set_bindings.get(&set_info.set_index) else {
+                // We need to make sure we fill in all the shader uniforms if we are not writing
+                // globally.
+                if !self.global_writer {
+                    panic!(
+                        "Set `{}` was not defined in the ShaderWriter.",
+                        set_info.name
+                    );
+                }
+
+                continue;
             };
 
-            set_bindings
-                .get_mut(&set_index)
-                .unwrap()
-                .bindings
-                .insert(binding_index, binding.clone());
-        }
-
-        // Safety: We ensure each uniforms data has been provided for the given sets.
-        for set in shader_set_bindings {
-            for shader_set_binding in &set.bindings {
-                let binding_was_submitted = set_bindings.get(&set.set_index).map_or(false, |set| {
-                    set.bindings.contains_key(&shader_set_binding.binding_index)
-                });
-                if !binding_was_submitted {
-                    panic!("Did not supply uniform binding for set: {}, binding {}, uniform name `{}`.", set.set_index, shader_set_binding.binding_index, shader_set_binding.binding_name);
-                };
+            match set {
+                ShaderSetData::Defined {
+                    bindings,
+                    uniform_data,
+                } => {
+                    for (binding_name, (binding_info, is_used)) in &set_info.bindings {
+                        if *is_used {
+                            match &binding_info {
+                                ShaderBinding::Slot {
+                                    binding_index,
+                                    binding_type,
+                                } => {
+                                    if !bindings.contains_key(&binding_index) {
+                                        panic!("Uniform binding of type {:?} for `{}.{}` has not been set.", binding_type, set_info.name, binding_name);
+                                    }
+                                }
+                                ShaderBinding::Uniform {
+                                    expected_type,
+                                    size,
+                                    offset,
+                                } => {
+                                    if !uniform_data.written_uniforms.contains(binding_name) {
+                                        panic!(
+                                            "Uniform value of for `{}.{}` has not been set.",
+                                            set_info.name, binding_name
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ShaderSetData::Cached => {}
             }
         }
+    }
+}
 
-        set_bindings
+#[derive(PartialEq, Eq, Clone)]
+pub enum ShaderSetData {
+    Defined {
+        /// Set bindings ordered by backend binding index.
+        bindings: HashMap</*binding_index=*/ u32, Binding>,
+        uniform_data: UniformSetData,
+    },
+    Cached,
+}
+
+impl ShaderSetData {
+    pub fn new() -> ShaderSetData {
+        ShaderSetData::Defined {
+            bindings: HashMap::new(),
+            uniform_data: UniformSetData::new(),
+        }
+    }
+
+    pub fn bindings(&self) -> &HashMap<u32, Binding> {
+        match self {
+            ShaderSetData::Defined {
+                bindings,
+                uniform_data,
+            } => bindings,
+            ShaderSetData::Cached => {
+                panic!("Shouldn't call bindings() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn bindings_mut(&mut self) -> &mut HashMap<u32, Binding> {
+        match self {
+            ShaderSetData::Defined {
+                bindings,
+                uniform_data,
+            } => bindings,
+            ShaderSetData::Cached => {
+                panic!("Shouldn't call bindings_mut() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn take_bindings(&mut self) -> HashMap<u32, Binding> {
+        match self {
+            ShaderSetData::Defined {
+                ref mut bindings,
+                uniform_data,
+            } => std::mem::replace(bindings, HashMap::new()),
+            ShaderSetData::Cached => {
+                panic!("Shouldn't call take_bindings() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn set_bindings(&mut self, in_bindings: HashMap<u32, Binding>) {
+        match self {
+            ShaderSetData::Defined {
+                ref mut bindings,
+                uniform_data,
+            } => *bindings = in_bindings,
+            ShaderSetData::Cached => {
+                panic!("Shouldn't call set_bindings() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn take_uniform_data(&mut self) -> UniformSetData {
+        match self {
+            ShaderSetData::Defined {
+                bindings,
+                ref mut uniform_data,
+            } => std::mem::replace(uniform_data, UniformSetData::new()),
+            ShaderSetData::Cached => panic!("Shouldn't take uniform data on a cached set."),
+        }
+    }
+
+    pub fn set_uniform_data(&mut self, data: UniformSetData) {
+        match self {
+            ShaderSetData::Defined {
+                bindings,
+                ref mut uniform_data,
+            } => *uniform_data = data,
+            ShaderSetData::Cached => panic!("Shouldn't set uniform data on a cached set."),
+        }
+    }
+
+    pub fn uniform_data(&mut self) -> &mut UniformSetData {
+        match self {
+            ShaderSetData::Defined {
+                bindings,
+                uniform_data,
+            } => uniform_data,
+            ShaderSetData::Cached => {
+                panic!("Shouldn't call bindings() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn is_cached(&self) -> bool {
+        match self {
+            ShaderSetData::Defined { .. } => false,
+            ShaderSetData::Cached => true,
+        }
     }
 }
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct UniformSetData {
-    /// Set bindings ordered by backend binding index.
-    pub bindings: HashMap</*binding_index=*/ u32, Binding>,
+    pub data: Vec<u8>,
+    pub written_uniforms: HashSet<String>,
 }
 
-impl std::hash::Hash for UniformSetData {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for (idx, binding) in self.bindings.iter() {
-            idx.hash(state);
-            binding.hash(state);
+impl UniformSetData {
+    fn new() -> Self {
+        UniformSetData {
+            data: Vec::new(),
+            written_uniforms: HashSet::new(),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub trait BindingDataType {
+    fn hash(&self, hasher: &mut dyn std::hash::Hasher);
+    fn eq(&self, other: &dyn BindingDataType) -> bool;
+    fn clone(&self) -> Box<dyn BindingDataType>;
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Binding {
     StorageImage { image: ResourceId<Image> },
     SampledImage { image: ResourceId<Image> },

@@ -58,6 +58,19 @@ fn main() {
             "Unknown panic message type".to_owned()
         };
         log::error!("\x1b[1;31m{}\x1b[0m", panic_message);
+        log::error!("");
+
+        let backtrace_enabled = std::env::var("RUST_BACKTRACE").map_or(false, |env| env == "1");
+        if backtrace_enabled {
+            log::error!("\x1b[1;31mBacktrace:\x1b[0m");
+            let backtrace = std::backtrace::Backtrace::capture();
+            for line in backtrace.to_string().lines() {
+                log::error!("\x1b[1;31m{}\x1b[0m", line);
+            }
+        } else {
+            log::error!("\x1b[1;31mBacktrace is disabled, enable it with RUST_BACKTRACE=1\x1b[0m");
+        }
+
         std::process::exit(1);
     }));
 
