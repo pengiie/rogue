@@ -225,7 +225,7 @@ impl GameWorld {
         let player = ecs_world.spawn((
             Player::new(),
             Camera::new(90.0),
-            Transform::with_translation(Translation3::new(0.0, 8.0, 0.0)),
+            Transform::with_translation(Translation3::new(0.0, 0.0, 0.0)),
         ));
         main_camera.set_camera(player, "player_camera");
     }

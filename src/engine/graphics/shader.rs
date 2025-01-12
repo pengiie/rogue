@@ -212,6 +212,10 @@ impl ShaderCompiler {
                 "CONST_TERRAIN_CHUNK_VOXEL_LENGTH".to_owned(),
                 consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH.to_string(),
             );
+            map.insert(
+                "CONST_VOXEL_MODEL_SCHEMA_ESVO".to_owned(),
+                consts::voxel::MODEL_ESVO_SCHEMA.to_string(),
+            );
             map
         };
 
@@ -336,7 +340,7 @@ impl ShaderCompiler {
                 let linked_program = program.link().expect("Failed to link slang program.");
                 let kernel_blob = linked_program
                     .entry_point_code(0, 0)
-                    .expect("Failed to produce slang kernel blob.");
+                    .map_err(|err| anyhow!("Failed to produce slang kernel blob."))?;
 
                 let program_layout = program
                     .layout(0)
@@ -411,12 +415,7 @@ impl ShaderCompiler {
                     binding_offset += offset;
                 }
 
-                debug!(
-                    "Category: {:?}, offset: {}, binspace: {}",
-                    category,
-                    offset,
-                    var_layout.binding_space_with_category(category)
-                );
+                debug!("Category: {:?}, offset: {}", category, offset,);
             }
 
             let is_used_binding = metadata.map_or(true, |metadata| {
@@ -488,7 +487,6 @@ impl ShaderCompiler {
                     );
                 }
                 slang::TypeKind::ConstantBuffer => {
-                    debug!("Constant buffer");
                     set.bindings.insert(
                         var_name,
                         (
@@ -501,7 +499,6 @@ impl ShaderCompiler {
                     );
                 }
                 slang::TypeKind::Struct => {
-                    debug!("Struct");
                     for field in ty_layout.fields() {
                         process_var_layout(
                             metadata,
@@ -514,15 +511,26 @@ impl ShaderCompiler {
                     }
                 }
                 slang::TypeKind::Scalar => {
-                    let binding = match ty_layout.scalar_type() {
-                        slang::ScalarType::Uint32 => ShaderBinding::Uniform {
-                            expected_type: std::any::TypeId::of::<u32>(),
-                            size: ty_layout.size(slang::ParameterCategory::Uniform) as u32,
-                            offset: uniform_offset,
-                        },
+                    let size = ty_layout.size(slang::ParameterCategory::Uniform) as u32;
+                    let offset = uniform_offset;
+                    let expected_type = match ty_layout.scalar_type() {
+                        slang::ScalarType::Uint32 => std::any::TypeId::of::<u32>(),
+                        slang::ScalarType::Float32 => std::any::TypeId::of::<f32>(),
+
                         kind => todo!("Need to implement scalar kind {:?}", kind),
                     };
-                    set.bindings.insert(var_name, (binding, is_used_uniform));
+
+                    set.bindings.insert(
+                        var_name,
+                        (
+                            ShaderBinding::Uniform {
+                                expected_type,
+                                size,
+                                offset,
+                            },
+                            is_used_uniform,
+                        ),
+                    );
                 }
                 kind => {
                     warn!("Ignoring type with {:?}", kind);
@@ -604,60 +612,6 @@ impl ShaderCompiler {
                 }
                 _ => todo!(),
             }
-
-            // let fields = if ty_layout.kind() == slang::TypeKind::ParameterBlock {
-            //     ty_layout.element_type_layout().fields()
-            // } else {
-            //     ty_layout.fields()
-            // };
-            // for field in fields {
-            //     debug!(
-            //         "field bindings space {}",
-            //         field.offset(slang::ParameterCategory::Uniform)
-            //     );
-            //     let field_type = field.type_layout();
-            //     debug!("Encountered kind {:?}", field_type.kind());
-            //     if field_type.kind() == slang::TypeKind::Struct {
-            //         debug!("Processing struct {}", field.variable().name().unwrap());
-            //         process_global_scope(bindings, set_index, field);
-            //         continue;
-            //     }
-
-            //     let binding_type = match field_type.kind() {
-            //         slang::TypeKind::Resource => match field_type.resource_shape() {
-            //             slang::ResourceShape::SlangTexture2d => {
-            //                 let has_write = field_type.resource_access()
-            //                     == slang::ResourceAccess::Write
-            //                     || field_type.resource_access() == slang::ResourceAccess::ReadWrite;
-            //                 if has_write {
-            //                     ShaderBindingType::StorageImage
-            //                 } else {
-            //                     ShaderBindingType::SampledImage
-            //                 }
-            //             }
-            //             slang::ResourceShape::SlangStructuredBuffer
-            //             | slang::ResourceShape::SlangByteAddressBuffer => {
-            //                 ShaderBindingType::StorageBuffer
-            //             }
-            //             ty => todo!("Support reflection for shader resource type {:?}", ty),
-            //         },
-            //         slang::TypeKind::ConstantBuffer => ShaderBindingType::UniformBuffer,
-            //         type_kind => {
-            //             debug!("the space is {:?}", field.binding_space());
-            //             panic!("Encountered non-supported non-resource ParameterBlock field when of type {:?} when reflecting shader.", type_kind);
-            //         }
-            //     };
-            //     let binding_name = field
-            //         .variable()
-            //         .name()
-            //         .expect("Failed to get shader binding variable name");
-
-            //     bindings.push(ShaderBinding {
-            //         binding_name: binding_name.to_owned(),
-            //         binding_index: field.binding_index(),
-            //         binding_type,
-            //     });
-            // }
         }
 
         let global_var_layout = program_layout.global_params_var_layout();

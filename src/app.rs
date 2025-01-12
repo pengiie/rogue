@@ -204,10 +204,10 @@ impl winit::application::ApplicationHandler for App {
                         .resize_swapchain(new_size, false);
 
                     // TODO: Option to change between depending on window resize mode.
-                    self.resource_bank()
-                        .get_resource_mut::<Settings>()
-                        .graphics
-                        .rt_size = Vector2::new(new_size.width, new_size.height);
+                    //self.resource_bank()
+                    //    .get_resource_mut::<Settings>()
+                    //    .graphics
+                    //    .rt_size = Vector2::new(new_size.width, new_size.height);
                 }
             }
             WinitWindowEvent::CloseRequested => {

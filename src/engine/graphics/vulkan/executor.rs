@@ -46,7 +46,7 @@ struct VulkanExecutorResourceManager {
     cached_frame_buffers: Vec<(FrameGraphBufferInfo, ResourceId<Buffer>)>,
     cached_compute_pipelines: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
 
-    invalidate_pipeline_timer: Timer,
+    invalidate_shader_timer: Timer,
     shader_modification_tree: ShaderModificationTree,
 
     new_compute_pipeline: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
@@ -54,7 +54,7 @@ struct VulkanExecutorResourceManager {
     // have updated to the new pipeline.
     new_compute_pipeline_deletion_timeline: Vec<HashSet<GfxComputePipelineCreateInfo>>,
 
-    cached_library_bindings: Option<Vec<ShaderSetBinding>>,
+    cached_library_bindings: Option<(Vec<ShaderSetBinding>, bool)>,
 
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
@@ -85,7 +85,7 @@ impl VulkanExecutorResourceManager {
             cached_frame_images: HashMap::new(),
             cached_frame_buffers: Vec::new(),
             cached_compute_pipelines: HashMap::new(),
-            invalidate_pipeline_timer: Timer::new(Duration::from_millis(250)),
+            invalidate_shader_timer: Timer::new(Duration::from_millis(250)),
             shader_modification_tree: ShaderModificationTree::from_current_state(),
 
             new_compute_pipeline: HashMap::new(),
@@ -100,8 +100,8 @@ impl VulkanExecutorResourceManager {
         }
     }
 
-    fn try_invalidate_pipelines(&mut self, shader_compiler: &mut ShaderCompiler) {
-        if !self.invalidate_pipeline_timer.try_complete() {
+    fn try_invalidate_shaders(&mut self, shader_compiler: &mut ShaderCompiler) {
+        if !self.invalidate_shader_timer.try_complete() {
             return;
         }
 
@@ -114,7 +114,9 @@ impl VulkanExecutorResourceManager {
         debug!("Invalidating pipelines due to shader change.");
         shader_compiler.invalidate_cache();
         self.shader_modification_tree = curr_shader_state;
-        self.cached_library_bindings = None;
+        if let Some((_, lib_binding_invalid)) = &mut self.cached_library_bindings {
+            *lib_binding_invalid = true;
+        }
 
         let mut recreation_compute_pipelines = Vec::new();
         for (info, id) in self.cached_compute_pipelines.iter() {
@@ -366,12 +368,25 @@ impl VulkanFrameGraphExecutor {
     fn initialize_session_resources(&mut self, shader_compiler: &mut ShaderCompiler) {
         let session = self.session.as_mut().unwrap();
 
-        if self.resource_manager.cached_library_bindings.is_none() {
-            self.resource_manager.cached_library_bindings = Some(
+        // Re-reflect library module set bindings.
+        if let Some((old_bindings, invalid)) = &mut self.resource_manager.cached_library_bindings {
+            if *invalid {
+                match shader_compiler.get_library_bindings() {
+                    Ok(new_bindings) => *old_bindings = new_bindings,
+                    Err(err) => {
+                        log::error!("Got error compiling slang library module:");
+                        log::error!("{}", err)
+                    }
+                }
+                *invalid = false;
+            }
+        } else {
+            self.resource_manager.cached_library_bindings = Some((
                 shader_compiler
                     .get_library_bindings()
                     .expect("Failed to reflect library bindings."),
-            );
+                false,
+            ));
         }
 
         // Initialize compute pipelines.
@@ -589,7 +604,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         // Invalidate pipelines before initializing resources so we can ensure we have the most up
         // to date shader modification tree state.
         self.resource_manager
-            .try_invalidate_pipelines(shader_compiler);
+            .try_invalidate_shaders(shader_compiler);
         self.initialize_session_resources(shader_compiler);
     }
 
@@ -851,7 +866,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
     fn write_uniforms(&mut self, write_fn: &mut dyn FnMut(&mut ShaderWriter, &FrameGraphContext)) {
         let session = self.session.as_mut().unwrap();
 
-        let library_bindings = self
+        let (library_bindings, _) = self
             .resource_manager
             .cached_library_bindings
             .as_ref()

@@ -219,6 +219,10 @@ impl ChunkProcessingQueue {
                             finished_chunk.chunk_position,
                             ChunkData { voxel_model_id },
                         );
+                        debug!(
+                            "Recieved finished chunk {:?}",
+                            finished_chunk.chunk_position
+                        );
                     }
                 }
                 Err(err) => match err {

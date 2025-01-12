@@ -311,8 +311,14 @@ impl Renderer {
                     *voxel_world_gpu.world_data_buffer().unwrap(),
                 );
 
-                writer.write_uniform("u_frame.voxel.terrain.side_length", 16u32);
-                writer.write_uniform("u_frame.voxel.terrain.volume", 16u32 * 16 * 16);
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.side_length",
+                    voxel_world_gpu.terrain_side_length(),
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.volume",
+                    voxel_world_gpu.terrain_side_length().pow(3),
+                );
             });
     }
 
