@@ -1,8 +1,11 @@
 use nalgebra::{Rotation3, UnitQuaternion, Vector3};
 
-use crate::common::{aabb::AABB, obb::OBB};
+use crate::{
+    common::{aabb::AABB, obb::OBB},
+    consts,
+};
 
-use super::{voxel::VoxelModelImpl, voxel_constants};
+use super::voxel::VoxelModelImpl;
 
 pub enum VoxelModelRotationAnchor {
     Zero,
@@ -38,9 +41,7 @@ impl VoxelModelTransform {
     pub fn as_obb(&self, model_dimensions: Vector3<u32>) -> OBB {
         let min = self.position;
         let max = min
-            + model_dimensions.map(|x| x as f32)
-                * voxel_constants::VOXEL_WORLD_UNIT_LENGTH
-                * self.scale;
+            + model_dimensions.map(|x| x as f32) * consts::voxel::VOXEL_METER_LENGTH * self.scale;
 
         let rotation_anchor = match self.rotation_anchor {
             VoxelModelRotationAnchor::Zero => min,

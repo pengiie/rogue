@@ -93,6 +93,11 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
   return RayModelTest.miss();
 }
 
+struct ESVOStackItem {
+  uint node_index; 
+  uint octant;
+}
+
 public struct ESVO {
   AABB root_aabb;
   uint voxel_model_ptr;
@@ -154,6 +159,41 @@ public struct ESVO {
                                    octant_half_side_length);
   }
 
+  private static AABB next_octant_parent_aabb(AABB octant_aabb, uint octant_morton) {
+    let signs = float3(
+      ((float) (octant_morton & 1)) * -2.0 + 1.0,
+      ((float) (octant_morton & 2)) * -1.0 + 1.0,
+      ((float) (octant_morton & 4)) * -0.5 + 1.0,
+    );
+    let parent_half_side_length = octant_aabb.half_side_length * 2;
+    return AABB.new_center_extents(octant_aabb.center + octant_aabb.half_side_length * signs,
+                                   parent_half_side_length);
+  }
+
+  private static bool should_pop(Ray ray, uint octant_morton, uint advance_morton) {
+    if (ray.dir.x < 0 && ((advance_morton & 1) > (octant_morton & 1))) {
+      return (true);
+    }
+    if (ray.dir.y < 0 && ((advance_morton & 2) > (octant_morton & 2))) {
+      return true;
+    }
+    if (ray.dir.z < 0 && ((advance_morton & 4) > (octant_morton & 4))) {
+      return true;
+    }
+
+    if (ray.dir.x > 0 && ((advance_morton & 1) < (octant_morton & 1))) {
+      return true;
+    }
+    if (ray.dir.y > 0 && ((advance_morton & 2) < (octant_morton & 2))) {
+      return true;
+    }
+    if (ray.dir.z > 0 && ((advance_morton & 4) < (octant_morton & 4))) {
+      return true;
+    }
+
+    return false;
+  }
+
   public RayModelTest trace(Ray ray) {
     let root_hit_info = ray_aabb_test(ray, this.root_aabb);
 
@@ -161,24 +201,62 @@ public struct ESVO {
     var curr_aabb = ESVO.next_octant_aabb(this.root_aabb, curr_octant);
     var curr_node_index = 1u; // 0u is our page header.
     var curr_node_data = this.load_node(curr_node_index);
+    var curr_height = 0;
+    var should_push = true;
+    ESVOStackItem stack[8];
 
-    for (uint i = 0; i < 6; i++) {
-      let value_mask = (curr_node_data >> 8);
+    for (uint i = 0; i < 1028; i++) {
+      if (curr_height >= 8) {
+        // Break early so we don't overwrite the bounds of our stack.
+        return RayModelTest.hit(float3(1.0, 0.0, 0.0));
+      }
+      let octant_hit_info = ray_aabb_test(ray, curr_aabb);
+
+      let value_mask = (curr_node_data >> 8) & 0xFF;
       let is_octant_present = (value_mask & (0x1u << curr_octant)) > 0;
-      if (is_octant_present) {
+      if (should_push && is_octant_present) {
         let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
         if (is_leaf) {
-          return RayModelTest.hit(float3(0.3));
+          // More vibrant.
+          //return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 8.0) / 1028.0)));
+          return RayModelTest.hit(float3(i / 1028.0));
         }
 
-        let octant_hit_info = ray_aabb_test(ray, curr_aabb);
         let children_offset = curr_node_data >> 17;
         let child_offset = countbits(((1 << curr_octant) - 1) & value_mask);
+
+        stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
 
         curr_octant = ESVO.next_octant_morton(ray, curr_aabb.center, octant_hit_info.t_enter);
         curr_aabb = ESVO.next_octant_aabb(curr_aabb, curr_octant);
         curr_node_index = curr_node_index + children_offset + child_offset;
         curr_node_data = this.load_node(curr_node_index);
+        curr_height += 1;
+
+        continue;
+      }
+
+      let exit_axis: bool3 = octant_hit_info.t_exit == octant_hit_info.t_max;
+      let exit_morton = (uint) exit_axis.x | (((uint) exit_axis.y) << 1)
+                                           | (((uint) exit_axis.z) << 2);
+      let advance_morton = curr_octant ^ exit_morton;
+      should_push = !ESVO.should_pop(ray, curr_octant, advance_morton);
+      if (!should_push) {
+        if (curr_height == 0) {
+          break;
+        }
+
+        curr_height -= 1;
+        let item = stack[curr_height];
+
+        curr_aabb = ESVO.next_octant_parent_aabb(curr_aabb, curr_octant);
+        curr_octant = item.octant;
+        curr_node_index = item.node_index;
+        curr_node_data = this.load_node(curr_node_index);
+      } else {
+        let advance_sign = (float3) exit_axis * sign(ray.dir);
+        curr_aabb.center = curr_aabb.center + curr_aabb.side_length() * advance_sign;
+        curr_octant = advance_morton;
       }
     }
 
@@ -193,7 +271,7 @@ public struct ESVO {
       color.b = 1.0;
     }
 
-    return RayModelTest.hit(color);
+    return RayModelTest.miss();
   }
 
   private uint load_node(uint node_index) {

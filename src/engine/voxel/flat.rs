@@ -13,6 +13,7 @@ use nalgebra::Vector3;
 
 use crate::{
     common::{bitset::Bitset, morton::morton_decode},
+    consts,
     engine::graphics::{
         device::{DeviceResource, GfxDevice},
         gpu_allocator::{Allocation, GpuBufferAllocator},
@@ -26,7 +27,6 @@ use super::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema,
     },
-    voxel_constants,
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -356,7 +356,7 @@ impl FlatESVONode {
 
     pub fn empty() -> Self {
         FlatESVONode {
-            child_ptr: 0,
+            child_ptr: u32::MAX,
             info: 0x8000_0000,
         }
     }
@@ -496,6 +496,12 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
             let children_allocation_esvo_ptr = if curr_flat_node.child_ptr == u32::MAX {
                 0
             } else {
+                let child_count = curr_flat_node.child_node_count();
+                assert!(
+                    child_count != 0,
+                    "Child count should not be 0 here, leaf count: {}",
+                    curr_flat_node.leaf_mask().count_ones()
+                );
                 esvo.allocate_node_children(curr_esvo_node_index, curr_flat_node.child_node_count())
             };
 
@@ -587,7 +593,7 @@ impl VoxelModelImpl for VoxelModelFlat {
     }
 
     fn schema(&self) -> VoxelModelSchema {
-        voxel_constants::MODEL_FLAT_SCHEMA
+        consts::voxel::MODEL_FLAT_SCHEMA
     }
 
     fn length(&self) -> Vector3<u32> {

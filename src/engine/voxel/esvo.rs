@@ -14,6 +14,7 @@ use nalgebra::{ComplexField, Vector3};
 
 use crate::{
     common::morton::{morton_decode, morton_encode},
+    consts,
     engine::graphics::{
         device::{DeviceResource, GfxDevice},
         gpu_allocator::{Allocation, GpuBufferAllocator},
@@ -26,7 +27,6 @@ use super::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelRange, VoxelRangeData,
     },
-    voxel_constants,
 };
 
 #[derive(Clone)]
@@ -210,7 +210,11 @@ impl VoxelModelESVO {
         size: u32,
         maximum_distance: u32,
     ) -> u32 {
-        assert!(size > 0 && size <= 8);
+        assert!(
+            size > 0 && size <= 8,
+            "Size can only be between 1-8 and we got {}",
+            size
+        );
 
         let free_bucket_index = self
             .bucket_metadata
@@ -814,7 +818,7 @@ impl VoxelModelImpl for VoxelModelESVO {
     }
 
     fn schema(&self) -> VoxelModelSchema {
-        voxel_constants::MODEL_ESVO_SCHEMA
+        consts::voxel::MODEL_ESVO_SCHEMA
     }
 
     fn length(&self) -> Vector3<u32> {

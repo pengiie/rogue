@@ -33,7 +33,7 @@ impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
             // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
-            rt_size: Vector2::new(720, 480),
+            rt_size: Vector2::new(1280, 720),
             antialiasing: Antialiasing::None,
             present_mode: GfxPresentMode::Vsync,
             triple_buffering: true,
@@ -63,9 +63,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             camera_fov: consts::FRAC_PI_2,
-            mouse_sensitivity: 0.002,
+            mouse_sensitivity: 0.001,
 
-            chunk_render_distance: 12,
+            chunk_render_distance: 8,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,

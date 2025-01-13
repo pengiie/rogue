@@ -13,6 +13,7 @@ use rogue_macros::Resource;
 
 use crate::{
     common::{aabb::AABB, color::Color, morton, ring_queue::RingQueue},
+    consts,
     engine::{
         ecs::ecs_world::ECSWorld,
         event::Events,
@@ -30,7 +31,6 @@ use crate::{
 
 use super::{
     chunk_generator::ChunkGenerator,
-    voxel_constants,
     voxel_transform::VoxelModelTransform,
     voxel_world::{VoxelModelId, VoxelWorld},
 };
@@ -172,7 +172,7 @@ impl ChunkProcessingQueue {
         let (finished_chunk_send, finished_chunk_recv) = std::sync::mpsc::channel();
         Self {
             chunk_queue: RingQueue::with_capacity(settings.chunk_queue_capacity as usize),
-            chunk_generator: ChunkGenerator::new(),
+            chunk_generator: ChunkGenerator::new(0),
             chunk_handler_pool: rayon::ThreadPoolBuilder::new()
                 .num_threads(settings.chunk_queue_capacity as usize)
                 .build()
@@ -197,8 +197,9 @@ impl ChunkProcessingQueue {
         chunk_tree: &mut ChunkTree,
         voxel_world: &mut VoxelWorld,
     ) {
+        const RECIEVED_CHUNKS_PER_FRAME: usize = 1;
         // Loops until the reciever is empty.
-        'lp: loop {
+        'lp: for _ in 0..RECIEVED_CHUNKS_PER_FRAME {
             match self.finished_chunk_recv.try_recv() {
                 Ok(finished_chunk) => {
                     self.chunk_handler_count -= 1;
@@ -239,11 +240,14 @@ impl ChunkProcessingQueue {
         if !self.chunk_queue.is_empty()
             && self.chunk_handler_count < self.chunk_handler_pool.current_num_threads() as u32
         {
+            // TODO: Cache chunk generator perlin noise as some global thing or something idk.
+            let mut generator = self.chunk_generator.clone();
+
             let ticket = self.chunk_queue.try_pop().unwrap();
             let send = self.finished_chunk_send.clone();
             self.chunk_handler_count += 1;
             self.chunk_handler_pool.spawn(move || {
-                let flat = ChunkGenerator::generate_chunk(ticket.chunk_position);
+                let flat = generator.generate_chunk(ticket.chunk_position);
                 send.send(FinishedChunk {
                     chunk_position: ticket.chunk_position,
                     esvo: flat.map(|flat| flat.into()),
@@ -463,7 +467,7 @@ struct ChunkData {
 // chunk voxel length but the chunk will have double the scaling.
 impl ChunkData {
     fn world_length(lod: u32) -> f32 {
-        voxel_constants::TERRAIN_CHUNK_WORLD_UNIT_LENGTH * (lod + 1) as f32
+        consts::voxel::TERRAIN_CHUNK_METER_LENGTH * (lod + 1) as f32
     }
 }
 
