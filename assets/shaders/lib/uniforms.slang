@@ -10,8 +10,8 @@ public ParameterBlock<uniforms::FrameUniforms> u_frame;
 namespace uniforms {
 
   public struct FrameUniforms {
-    public ConstantBuffer<FrameInfo> frame_info;
-    public ConstantBuffer<FrameWorldInfo> world_info;
+    public FrameInfo frame_info;
+    public FrameWorldInfo world_info;
     public VoxelUniforms voxel;
   }
 

@@ -12,11 +12,13 @@ use crate::common::dyn_vec::TypeInfo;
 
 use super::{
     backend::{
-        Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
-        GfxImageFormat, GfxImageType, GraphicsBackendDevice, GraphicsBackendRecorder, Image,
-        ResourceId, Untyped,
+        Binding, Buffer, ComputePipeline, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
+        GfxCullMode, GfxFrontFace, GfxImageFormat, GfxImageType,
+        GfxRasterPipelineBlendStateAttachmentInfo, GfxRasterPipelineBlendStateCreateInfo,
+        GfxRasterPipelineCreateInfo, GfxVertexAttribute, GfxVertexFormat, GraphicsBackendDevice,
+        GraphicsBackendRecorder, Image, RasterPipeline, ResourceId, UniformSetData, Untyped,
     },
-    shader::ShaderPath,
+    shader::{ShaderBinding, ShaderBindingType, ShaderPath, ShaderSetBinding},
 };
 
 pub struct Baked;
@@ -34,7 +36,10 @@ pub struct FrameGraphBuilder {
     frame_image_infos_delayed:
         HashMap<FrameGraphResource<Image>, Box<dyn Fn(&FrameGraphContext) -> FrameGraphImageInfo>>,
     frame_buffers: HashSet<FrameGraphResource<Buffer>>,
-    compute_pipelines: HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
+    compute_pipelines: HashMap<FrameGraphResource<ComputePipeline>, FrameGraphComputePipelineInfo>,
+    // We can't store the graphics raster pipeline info itself since we can't resolve all our
+    // image formats until we know them during execution for image inputs and delayed frame images.
+    raster_pipelines: HashMap<FrameGraphResource<RasterPipeline>, FrameGraphRasterPipelineInfo>,
     swapchain_image: Option<FrameGraphResource<Image>>,
 }
 
@@ -47,8 +52,8 @@ pub struct FrameGraphResourceInfo {
 
 pub struct FrameGraphPass {
     pub id: FrameGraphResource<Pass>,
-    pub inputs: Vec<FrameGraphResource<Untyped>>,
-    pub outputs: Vec<FrameGraphResource<Untyped>>,
+    pub inputs: HashSet<FrameGraphResource<Untyped>>,
+    pub outputs: HashSet<FrameGraphResource<Untyped>>,
     pub pass: Option<Box<dyn Fn(&mut dyn GraphicsBackendRecorder, &FrameGraphContext)>>,
 }
 
@@ -59,12 +64,41 @@ pub struct FrameGraphImageInfo {
     pub extent: Vector2<u32>,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct FrameGraphBufferInfo {
     pub size: u64,
 }
 
+pub struct FrameGraphComputePipelineInfo {
+    pub shader_path: ShaderPath,
+    pub entry_point_fn: String,
+}
+
+pub struct FrameGraphRasterPipelineInfo {
+    pub vertex_shader_path: ShaderPath,
+    pub vertex_entry_point_fn: String,
+
+    pub fragment_shader_path: ShaderPath,
+    pub fragment_entry_point_fn: String,
+
+    pub vertex_format: GfxVertexFormat,
+    pub cull_mode: GfxCullMode,
+    pub front_face: GfxFrontFace,
+    pub blend_state: GfxRasterPipelineBlendStateCreateInfo,
+
+    pub color_attachments: Vec<FrameGraphResource<Image>>,
+    pub depth_attachment: Option<FrameGraphResource<Image>>,
+}
+
 impl FrameGraphImageInfo {
+    pub fn new_r16float(extent: Vector2<u32>) -> Self {
+        Self {
+            image_type: GfxImageType::D2,
+            format: GfxImageFormat::R16Float,
+            extent,
+        }
+    }
+
     pub fn new_rgba32float(extent: Vector2<u32>) -> Self {
         Self {
             image_type: GfxImageType::D2,
@@ -102,6 +136,7 @@ impl FrameGraphBuilder {
             frame_image_infos_delayed: HashMap::new(),
             frame_buffers: HashSet::new(),
             compute_pipelines: HashMap::new(),
+            raster_pipelines: HashMap::new(),
             swapchain_image: None,
         }
     }
@@ -225,7 +260,7 @@ impl FrameGraphBuilder {
         create_info: FrameGraphComputeInfo<'_>,
     ) -> FrameGraphResource<ComputePipeline> {
         let resource_handle = self.next_id(name.to_string());
-        let create_info = GfxComputePipelineCreateInfo {
+        let create_info = FrameGraphComputePipelineInfo {
             shader_path: ShaderPath::new(create_info.shader_path.to_owned()).expect(&format!(
                 "Invalid shader path `{}`.",
                 create_info.shader_path
@@ -233,6 +268,67 @@ impl FrameGraphBuilder {
             entry_point_fn: create_info.entry_point_fn.to_owned(),
         };
         self.compute_pipelines.insert(resource_handle, create_info);
+        resource_handle
+    }
+
+    pub fn create_raster_pipeline(
+        &mut self,
+        name: &str,
+        create_info: FrameGraphRasterInfo<'_>,
+        color_attachments: &[&dyn IntoFrameGraphResourceUntyped],
+        depth_attachment: Option<&dyn IntoFrameGraphResourceUntyped>,
+    ) -> FrameGraphResource<RasterPipeline> {
+        let resource_handle = self.next_id(name.to_string());
+
+        let color_attachment_handles = color_attachments
+            .into_iter()
+            .map(|id| {
+                let handle = id.handle_untyped(self);
+                let info = &self.resource_infos[handle.id as usize];
+                assert_eq!(
+                    info.type_id,
+                    std::any::TypeId::of::<Image>(),
+                    "Expected color attachment input `{}`, to be an image type.",
+                    info.name
+                );
+
+                handle.as_typed::<Image>()
+            })
+            .collect::<Vec<_>>();
+        let depth_attachment_handle = depth_attachment.map(|id| {
+            let handle = id.handle_untyped(self);
+            let info = &self.resource_infos[handle.id as usize];
+            assert_eq!(
+                info.type_id,
+                std::any::TypeId::of::<Image>(),
+                "Expected depth attachment input `{}`, to be an image type.",
+                info.name
+            );
+
+            handle.as_typed::<Image>()
+        });
+        let create_info = FrameGraphRasterPipelineInfo {
+            vertex_shader_path: ShaderPath::new(create_info.vertex_shader_path.to_owned()).expect(
+                &format!(
+                    "Invalid vertex shader path `{}`.",
+                    create_info.vertex_shader_path
+                ),
+            ),
+            vertex_entry_point_fn: create_info.vertex_entry_point_fn.to_owned(),
+            fragment_shader_path: ShaderPath::new(create_info.fragment_shader_path.to_owned())
+                .expect(&format!(
+                    "Invalid fragment shader path `{}`.",
+                    create_info.vertex_shader_path
+                )),
+            fragment_entry_point_fn: create_info.fragment_entry_point_fn.to_owned(),
+            vertex_format: create_info.vertex_format.into(),
+            cull_mode: create_info.cull_mode,
+            front_face: create_info.front_face,
+            blend_state: create_info.blend_state.into(),
+            color_attachments: color_attachment_handles,
+            depth_attachment: depth_attachment_handle,
+        };
+        self.raster_pipelines.insert(resource_handle, create_info);
         resource_handle
     }
 
@@ -264,7 +360,8 @@ pub struct FrameGraph {
     pub passes: Vec<FrameGraphPass>,
 
     pub compute_pipelines:
-        HashMap<FrameGraphResource<ComputePipeline>, GfxComputePipelineCreateInfo>,
+        HashMap<FrameGraphResource<ComputePipeline>, FrameGraphComputePipelineInfo>,
+    pub raster_pipelines: HashMap<FrameGraphResource<RasterPipeline>, FrameGraphRasterPipelineInfo>,
 
     pub frame_image_infos: HashMap<FrameGraphResource<Image>, FrameGraphImageInfo>,
     pub frame_image_infos_delayed:
@@ -290,16 +387,30 @@ impl FrameGraph {
 
         let mut used_passes = vec![];
         for pass_handle in builder.pass_order.iter().rev() {
-            let pass_info = builder.passes.remove(&pass_handle).unwrap();
+            let mut pass_info = builder.passes.remove(&pass_handle).unwrap();
             if pass_info
                 .outputs
                 .iter()
                 .find(|output| required_resources.contains(*output))
                 .is_some()
             {
+                // Additional implicit inputs due to any raster pipeline inputs.
+                let mut raster_image_inputs = Vec::new();
                 for pass_input in &pass_info.inputs {
+                    if let Some(raster_info) = builder
+                        .raster_pipelines
+                        .get(&pass_input.as_typed::<RasterPipeline>())
+                    {
+                        for input_image in &raster_info.color_attachments {
+                            raster_image_inputs.push(*input_image);
+                        }
+                    }
                     required_resources.insert(*pass_input);
                 }
+                for image_input in raster_image_inputs {
+                    pass_info.inputs.insert(image_input.as_untyped());
+                }
+
                 debug!(
                     "Using pass `{}`.",
                     builder.resource_infos[pass_info.id.id as usize].name
@@ -324,6 +435,7 @@ impl FrameGraph {
             inputs: builder.inputs,
             passes: used_passes,
             compute_pipelines: builder.compute_pipelines,
+            raster_pipelines: builder.raster_pipelines,
             frame_buffers: builder.frame_buffers,
             frame_image_infos: builder.frame_image_infos,
             frame_image_infos_delayed: builder.frame_image_infos_delayed,
@@ -335,7 +447,10 @@ impl FrameGraph {
 impl FrameGraphContextImpl for FrameGraph {
     fn get_handle_untyped(&self, name: &str) -> FrameGraphResource<Untyped> {
         let Some(resource_info) = self.resource_name_map.get(name) else {
-            panic!("Resource does not exist in frame graph.")
+            panic!(
+                "Resource `{}` does not exist in the frame graph definition.",
+                name
+            );
         };
         FrameGraphResource::new(resource_info.id)
     }
@@ -346,7 +461,10 @@ impl FrameGraphContextImpl for FrameGraph {
         expected_type: std::any::TypeId,
     ) -> FrameGraphResource<Untyped> {
         let Some(resource_info) = self.resource_name_map.get(name) else {
-            panic!("Resource does not exist in frame graph.")
+            panic!(
+                "Resource `{}` does not exist in the frame graph definition.",
+                name
+            );
         };
         assert_eq!(resource_info.type_id, expected_type);
         FrameGraphResource::new(resource_info.id)
@@ -557,6 +675,13 @@ impl<'a> FrameGraphContext<'a> {
         self.get_resource_id(resource)
     }
 
+    pub fn get_raster_pipeline(
+        &self,
+        resource: impl IntoFrameGraphResource<RasterPipeline>,
+    ) -> ResourceId<RasterPipeline> {
+        self.get_resource_id(resource)
+    }
+
     pub fn get_vec2<T: Clone + 'static>(
         &self,
         resource: impl IntoFrameGraphResource<Vector2<T>>,
@@ -575,4 +700,39 @@ pub struct FrameGraphComputeInfo<'a> {
     /// So a valid path would be `pass::blit`.
     pub shader_path: &'a str,
     pub entry_point_fn: &'a str,
+}
+
+pub struct FrameGraphRasterInfo<'a> {
+    pub vertex_shader_path: &'a str,
+    pub vertex_entry_point_fn: &'a str,
+    pub fragment_shader_path: &'a str,
+    pub fragment_entry_point_fn: &'a str,
+    pub blend_state: FrameGraphRasterBlendInfo<'a>,
+    pub vertex_format: FrameGraphVertexFormat<'a>,
+    pub cull_mode: GfxCullMode,
+    pub front_face: GfxFrontFace,
+}
+
+pub struct FrameGraphVertexFormat<'a> {
+    pub attributes: &'a [GfxVertexAttribute],
+}
+
+impl From<FrameGraphVertexFormat<'_>> for GfxVertexFormat {
+    fn from(value: FrameGraphVertexFormat<'_>) -> Self {
+        GfxVertexFormat {
+            attributes: value.attributes.to_vec(),
+        }
+    }
+}
+
+pub struct FrameGraphRasterBlendInfo<'a> {
+    pub attachments: &'a [GfxRasterPipelineBlendStateAttachmentInfo],
+}
+
+impl From<FrameGraphRasterBlendInfo<'_>> for GfxRasterPipelineBlendStateCreateInfo {
+    fn from(value: FrameGraphRasterBlendInfo<'_>) -> Self {
+        GfxRasterPipelineBlendStateCreateInfo {
+            attachments: value.attachments.to_vec(),
+        }
+    }
 }

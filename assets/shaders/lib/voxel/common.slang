@@ -24,9 +24,9 @@ public struct Terrain {
     let terrain_aabb = terrain.aabb();
 
     let ray_terrain = ray.test_aabb(terrain_aabb);
-    if (!ray_terrain.hit) {
-      return RayTerrainTest.miss();
-    }
+    //if (!ray_terrain.hit) {
+    //  return RayTerrainTest.miss();
+    //}
 
     var dda = RayDDA(ray.advance_clone(ray_terrain.t_enter),
                      terrain_aabb,
@@ -43,7 +43,7 @@ public struct Terrain {
 
         let model_test = trace_model(ray, chunk_aabb, chunk_model_ptr);
         if (model_test.did_hit) {
-          return RayTerrainTest.hit(model_test.color);
+          return RayTerrainTest.hit(model_test.color, model_test.depth_t);
         }
       }
       dda.step();
@@ -57,26 +57,28 @@ public struct Terrain {
 public struct RayTerrainTest {
   public bool did_hit;
   public float3 color;
+  public float depth_t;
 
   static RayTerrainTest miss() {
-    return RayTerrainTest(false, float3(0.0));
+    return RayTerrainTest(false, float3(0.0), 0.0);
   }
 
-  static RayTerrainTest hit(float3 color) {
-    return RayTerrainTest(true, color);
+  static RayTerrainTest hit(float3 color, float depth_t) {
+    return RayTerrainTest(true, color, depth_t);
   }
 }
 
 public struct RayModelTest {
   public bool did_hit;
   public float3 color;
+  public float depth_t;
 
   static RayModelTest miss() {
-    return RayModelTest(false, float3(0.0));
+    return RayModelTest(false, float3(0.0), 0.0);
   }
 
-  static RayModelTest hit(float3 color) {
-    return RayModelTest(true, color);
+  static RayModelTest hit(float3 color, float depth_t) {
+    return RayModelTest(true, color, depth_t);
   }
 }
 
@@ -208,7 +210,7 @@ public struct ESVO {
     for (uint i = 0; i < 1028; i++) {
       if (curr_height >= 8) {
         // Break early so we don't overwrite the bounds of our stack.
-        return RayModelTest.hit(float3(1.0, 0.0, 0.0));
+        return RayModelTest.hit(float3(1.0, 0.0, 0.0), 1.0);
       }
       let octant_hit_info = ray_aabb_test(ray, curr_aabb);
 
@@ -217,9 +219,10 @@ public struct ESVO {
       if (should_push && is_octant_present) {
         let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
         if (is_leaf) {
+          let depth_t = octant_hit_info.t_enter;
           // More vibrant.
-          //return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 8.0) / 1028.0)));
-          return RayModelTest.hit(float3(i / 1028.0));
+          return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 12.0) / 1028.0, log((i * 16.0) / 1028.0), (i * 8.0) / 1028.0)), depth_t);
+          //return RayModelTest.hit(float3(i / 1028.0), depth_t);
         }
 
         let children_offset = curr_node_data >> 17;

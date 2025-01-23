@@ -1,7 +1,7 @@
 use log::debug;
 use rogue_macros::Resource;
 
-use crate::engine::ecs::ecs_world::Entity;
+use crate::{consts, engine::ecs::ecs_world::Entity};
 
 use super::renderer;
 
@@ -30,14 +30,22 @@ impl MainCamera {
 
 pub struct Camera {
     fov: f32,
+    far_plane: f32,
 }
 
 impl Camera {
     pub fn new(fov: f32) -> Self {
-        Self { fov }
+        Self {
+            fov,
+            far_plane: consts::gfx::CAMERA_FAR_PLANE,
+        }
     }
 
     pub fn fov(&self) -> f32 {
         self.fov
+    }
+
+    pub fn far_plane(&self) -> f32 {
+        self.far_plane
     }
 }

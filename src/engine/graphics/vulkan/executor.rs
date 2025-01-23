@@ -14,15 +14,21 @@ use crate::engine::{
     graphics::{
         backend::{
             Buffer, ComputePipeline, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
-            GfxComputePipelineInfo, GfxImageCreateInfo, GfxPassOnceImpl,
-            GraphicsBackendFrameGraphExecutor, Image, ResourceId, ShaderWriter, Untyped,
+            GfxComputePipelineInfo, GfxCullMode, GfxFrontFace, GfxImageCreateInfo, GfxImageFormat,
+            GfxPassOnceImpl, GfxRasterPipelineBlendStateCreateInfo, GfxRasterPipelineCreateInfo,
+            GfxVertexFormat, GraphicsBackendFrameGraphExecutor, Image, RasterPipeline, ResourceId,
+            ShaderWriter, Untyped,
         },
         frame_graph::{
-            self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo, FrameGraphContext,
-            FrameGraphContextImpl, FrameGraphImageInfo, FrameGraphPass, FrameGraphResource,
+            self, FGResourceBackendId, FrameGraph, FrameGraphBufferInfo,
+            FrameGraphComputePipelineInfo, FrameGraphContext, FrameGraphContextImpl,
+            FrameGraphImageInfo, FrameGraphPass, FrameGraphRasterPipelineInfo, FrameGraphResource,
             IntoFrameGraphResource, Pass,
         },
-        shader::{ShaderCompiler, ShaderModificationTree, ShaderSetBinding},
+        shader::{
+            Shader, ShaderCompilationOptions, ShaderCompilationTarget, ShaderCompiler, ShaderDesc,
+            ShaderModificationTree, ShaderSetBinding, ShaderStage,
+        },
     },
     window::time::{Instant, Timer},
 };
@@ -40,67 +46,111 @@ pub struct VulkanFrameGraphExecutor {
     resource_manager: VulkanExecutorResourceManager,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct VulkanExecutorComputePipelineDesc {
+    shader_desc: ShaderDesc,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct VulkanExecutorRasterPipelineDesc {
+    vertex_shader_desc: ShaderDesc,
+    fragment_shader_desc: ShaderDesc,
+
+    vertex_format: GfxVertexFormat,
+    cull_mode: GfxCullMode,
+    front_face: GfxFrontFace,
+    blend_state: GfxRasterPipelineBlendStateCreateInfo,
+    color_formats: Vec<GfxImageFormat>,
+    depth_format: Option<GfxImageFormat>,
+}
+
 struct VulkanExecutorResourceManager {
     ctx: Arc<VulkanContext>,
-    cached_frame_images: HashMap<FrameGraphImageInfo, ResourceId<Image>>,
-    cached_frame_buffers: Vec<(FrameGraphBufferInfo, ResourceId<Buffer>)>,
-    cached_compute_pipelines: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
+    // Usable images to use in a frame, since they can't be directly mapped on the cpu we don't
+    // have to worry about frames in flight since images are only used during a gpu frame.
+    frame_images: HashMap<FrameGraphImageInfo, Vec<ResourceId<Image>>>,
+    // Usable buffers to use in a frame, since they can't be directly mapped on the cpu since we
+    // upload data through staging buffers, we dont have to worry about synchronization and frames
+    // in flight since these buffers are only references during a gpu frame.
+    frame_buffers: Vec<(FrameGraphBufferInfo, ResourceId<Buffer>)>,
+    compute_pipelines: HashMap<VulkanExecutorComputePipelineDesc, ResourceId<ComputePipeline>>,
+    raster_pipelines: HashMap<VulkanExecutorRasterPipelineDesc, ResourceId<RasterPipeline>>,
+    // Holds the in use buffers and images during the current execution context to prevent using
+    // the same image or buffer accidentally since we don't have proper aliasing yet.
+    in_use_resources: HashSet<ResourceId<Untyped>>,
 
     invalidate_shader_timer: Timer,
     shader_modification_tree: ShaderModificationTree,
-
-    new_compute_pipeline: HashMap<GfxComputePipelineCreateInfo, ResourceId<ComputePipeline>>,
-    // The timeline in which the new compute pipeline is old news, meaning all the frames in flight
-    // have updated to the new pipeline.
-    new_compute_pipeline_deletion_timeline: Vec<HashSet<GfxComputePipelineCreateInfo>>,
-
+    shader_compiler: ShaderCompiler,
     cached_library_bindings: Option<(Vec<ShaderSetBinding>, bool)>,
+    // new_compute_pipeline: HashMap<VulkanExecutorComputePipelineDesc, ResourceId<ComputePipeline>>,
+    // // The timeline in which the new compute pipeline is old news, meaning all the frames in flight
+    // // have updated to the new pipeline.
+    // new_compute_pipeline_deletion_timeline: Vec<HashSet<GfxComputePipelineCreateInfo>>,
 
+    // new_raster_pipeline: HashMap<GfxRasterPipelineCreateInfo, ResourceId<RasterPipeline>>,
+    // // The timeline in which the new raster pipeline is old news, meaning all the frames in flight
+    // // have updated to the new pipeline.
+    // new_raster_pipeline_deletion_timeline: Vec<HashSet<GfxRasterPipelineCreateInfo>>,
     // Resources that can be safely cached when the gpu finishes their frame index.
     // E.g: We use image 1 so on frame 0 so whenever we begin execution of a frame graph, we check
     // if we can move resources to the cache for reuse.
-    cache_timeline: Vec<Vec<VulkanExecutorCachedResource>>,
+    // cache_timeline: Vec<Vec<VulkanExecutorCachedResource>>,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-enum VulkanExecutorCachedResource {
-    Image {
-        id: ResourceId<Image>,
-        image_info: FrameGraphImageInfo,
-    },
-    Buffer {
-        id: ResourceId<Buffer>,
-        buffer_info: FrameGraphBufferInfo,
-    },
-    ComputePipeline {
-        id: ResourceId<ComputePipeline>,
-        info: GfxComputePipelineCreateInfo,
-    },
-}
+// #[derive(PartialEq, Eq, Hash)]
+// enum VulkanExecutorCachedResource {
+//     Image {
+//         id: ResourceId<Image>,
+//         image_info: FrameGraphImageInfo,
+//     },
+//     Buffer {
+//         id: ResourceId<Buffer>,
+//         buffer_info: FrameGraphBufferInfo,
+//     },
+//     ComputePipeline {
+//         id: ResourceId<ComputePipeline>,
+//         info: GfxComputePipelineCreateInfo,
+//     },
+//     RasterPipeline {
+//         id: ResourceId<RasterPipeline>,
+//         info: GfxRasterPipelineCreateInfo,
+//     },
+// }
 
 impl VulkanExecutorResourceManager {
     fn new(ctx: &Arc<VulkanContext>) -> Self {
         Self {
             ctx: ctx.clone(),
-            cached_frame_images: HashMap::new(),
-            cached_frame_buffers: Vec::new(),
-            cached_compute_pipelines: HashMap::new(),
+            //            cached_frame_images: HashMap::new(),
+            //            cached_frame_buffers: Vec::new(),
+            //            cached_compute_pipelines: HashMap::new(),
+            //            cached_raster_pipelines: HashMap::new(),
+            frame_images: HashMap::new(),
+            frame_buffers: Vec::new(),
+            compute_pipelines: HashMap::new(),
+            raster_pipelines: HashMap::new(),
+            in_use_resources: HashSet::new(),
+
+            shader_compiler: ShaderCompiler::new(),
             invalidate_shader_timer: Timer::new(Duration::from_millis(250)),
             shader_modification_tree: ShaderModificationTree::from_current_state(),
-
-            new_compute_pipeline: HashMap::new(),
-            new_compute_pipeline_deletion_timeline: (0..ctx.frames_in_flight())
-                .map(|_| HashSet::new())
-                .collect::<Vec<_>>(),
             cached_library_bindings: None,
-
-            cache_timeline: (0..ctx.frames_in_flight())
-                .map(|_| Vec::new())
-                .collect::<Vec<_>>(),
+            //             new_compute_pipeline: HashMap::new(),
+            //             new_compute_pipeline_deletion_timeline: (0..ctx.frames_in_flight())
+            //                 .map(|_| HashSet::new())
+            //                 .collect::<Vec<_>>(),
+            //             new_raster_pipeline: HashMap::new(),
+            //             new_raster_pipeline_deletion_timeline: (0..ctx.frames_in_flight())
+            //                 .map(|_| HashSet::new())
+            //                 .collect::<Vec<_>>(),
+            //             cache_timeline: (0..ctx.frames_in_flight())
+            //                 .map(|_| Vec::new())
+            //                 .collect::<Vec<_>>(),
         }
     }
 
-    fn try_invalidate_shaders(&mut self, shader_compiler: &mut ShaderCompiler) {
+    fn try_invalidate_shaders(&mut self) {
         if !self.invalidate_shader_timer.try_complete() {
             return;
         }
@@ -112,75 +162,136 @@ impl VulkanExecutorResourceManager {
 
         // Invalidate available pipelines.
         debug!("Invalidating pipelines due to shader change.");
-        shader_compiler.invalidate_cache();
+        self.shader_compiler.invalidate_cache();
         self.shader_modification_tree = curr_shader_state;
         if let Some((_, lib_binding_invalid)) = &mut self.cached_library_bindings {
             *lib_binding_invalid = true;
         }
 
-        let mut recreation_compute_pipelines = Vec::new();
-        for (info, id) in self.cached_compute_pipelines.iter() {
-            recreation_compute_pipelines.push((*id, info.clone()));
-        }
-        for timeline in self.cache_timeline.iter() {
-            for resource in timeline {
-                match resource {
-                    VulkanExecutorCachedResource::ComputePipeline { id, info } => {
-                        recreation_compute_pipelines.push((*id, info.clone()))
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // let mut recreation_compute_pipelines = Vec::new();
+        // for (info, id) in self.cached_compute_pipelines.iter() {
+        //     recreation_compute_pipelines.push((*id, info.clone()));
+        // }
+        // for timeline in self.cache_timeline.iter() {
+        //     for resource in timeline {
+        //         match resource {
+        //             VulkanExecutorCachedResource::ComputePipeline { id, info } => {
+        //                 recreation_compute_pipelines.push((*id, info.clone()))
+        //             }
+        //             _ => {}
+        //         }
+        //     }
+        // }
 
-        for (id, info) in recreation_compute_pipelines {
-            match self
-                .ctx
-                .create_compute_pipeline(shader_compiler, info.clone())
-            {
-                Ok(pipeline) => {
-                    self.new_compute_pipeline.insert(info.clone(), pipeline);
-                    self.new_compute_pipeline_deletion_timeline
-                        [self.ctx.curr_cpu_frame_index() as usize]
-                        .insert(info);
+        // Compute pipeline updates.
+        let mut new_pipelines = Vec::new();
+        for (desc, compute_id) in &self.compute_pipelines {
+            let opts = Self::create_shader_compilation_options(
+                desc.shader_desc.clone(),
+                ShaderStage::Compute,
+            );
+            match self.shader_compiler.compile_shader(opts) {
+                Ok(shader) => {
+                    let new_pipeline = self
+                        .ctx
+                        .create_compute_pipeline(GfxComputePipelineCreateInfo { shader })
+                        .expect("Failed to create new compute pipeline.");
+
+                    new_pipelines.push((desc.clone(), new_pipeline));
+                    // TODO: Destroy pipeline.
                 }
                 Err(err) => {
-                    log::error!("Got error compiling slang shader:");
+                    log::error!("Got error compiling new slang compute shader:");
                     log::error!("{}", err)
                 }
             }
         }
+
+        for (desc, new_pipeline) in new_pipelines {
+            let old_pipeline = self.compute_pipelines.get_mut(&desc).unwrap();
+            *old_pipeline = new_pipeline;
+        }
+
+        // Raster pipeline updates.
+        let mut new_pipelines = Vec::new();
+        for (desc, raster_id) in &self.raster_pipelines {
+            let vertex_opts = Self::create_shader_compilation_options(
+                desc.vertex_shader_desc.clone(),
+                ShaderStage::Vertex,
+            );
+            let fragment_opts = Self::create_shader_compilation_options(
+                desc.fragment_shader_desc.clone(),
+                ShaderStage::Fragment,
+            );
+            let (vertex_shader, fragment_shader) = match self
+                .shader_compiler
+                .compile_shader_pair(vertex_opts, fragment_opts)
+            {
+                Ok(shaders) => shaders,
+                Err(err) => {
+                    log::error!("Got error compiling new slang shaders:");
+                    log::error!("{}", err);
+                    continue;
+                }
+            };
+
+            let new_pipeline = self
+                .ctx
+                .create_raster_pipeline(GfxRasterPipelineCreateInfo {
+                    vertex_shader,
+                    fragment_shader,
+                    cull_mode: desc.cull_mode,
+                    front_face: desc.front_face,
+                    vertex_format: desc.vertex_format.clone(),
+                    blend_state: desc.blend_state.clone(),
+                    color_formats: desc.color_formats.clone(),
+                    depth_format: desc.depth_format,
+                })
+                .expect("Failed to create graphics raster pipeline.");
+
+            new_pipelines.push((desc.clone(), new_pipeline));
+            // TODO: Destroy old raster pipeline.
+        }
+
+        for (desc, new_pipeline) in new_pipelines {
+            let old_pipeline = self.raster_pipelines.get_mut(&desc).unwrap();
+            *old_pipeline = new_pipeline;
+        }
     }
 
     fn retire_resources(&mut self) {
-        for resource in self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].drain(..) {
-            match resource {
-                VulkanExecutorCachedResource::Image { id, image_info } => {
-                    self.cached_frame_images.insert(image_info, id);
-                }
-                VulkanExecutorCachedResource::Buffer { id, buffer_info } => {
-                    self.cached_frame_buffers.push((buffer_info, id));
-                }
-                VulkanExecutorCachedResource::ComputePipeline { id, info } => {
-                    if let Some(new_pipeline) = self.new_compute_pipeline.get(&info) {
-                        self.cached_compute_pipelines.insert(info, *new_pipeline);
-                        self.ctx.destroy_compute_pipeline(id);
-                    } else {
-                        self.cached_compute_pipelines.insert(info, id);
-                    }
-                }
-            }
-        }
+        self.in_use_resources.clear();
+        // for resource in self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].drain(..) {
+        //     match resource {
+        //         VulkanExecutorCachedResource::Image { id, image_info } => {
+        //             self.cached_frame_images.insert(image_info, id);
+        //         }
+        //         VulkanExecutorCachedResource::Buffer { id, buffer_info } => {
+        //             self.cached_frame_buffers.push((buffer_info, id));
+        //         }
+        //         VulkanExecutorCachedResource::ComputePipeline { id, info } => {
+        //             if let Some(new_pipeline) = self.new_compute_pipeline.get(&info) {
+        //                 self.cached_compute_pipelines.insert(info, *new_pipeline);
+        //                 self.ctx.destroy_compute_pipeline(id);
+        //             } else {
+        //                 self.cached_compute_pipelines.insert(info, id);
+        //             }
+        //         }
+        //         VulkanExecutorCachedResource::RasterPipeline { id, info } => {
+        //             todo!("Retire cached raster pipeline.")
+        //         }
+        //     }
+        // }
 
-        // If this was the frame index the pipeline invalidation was submitted, then that means
-        // since we retired that frame, we have updated all the frames in flight and can no longer
-        // qualify this as a "new" pipeline.
-        for info in self.new_compute_pipeline_deletion_timeline
-            [self.ctx.curr_cpu_frame_index() as usize]
-            .drain()
-        {
-            self.new_compute_pipeline.remove(&info);
-        }
+        // // If this was the frame index the pipeline invalidation was submitted, then that means
+        // // since we retired that frame, we have updated all the frames in flight and can no longer
+        // // qualify this as a "new" pipeline.
+        // for info in self.new_compute_pipeline_deletion_timeline
+        //     [self.ctx.curr_cpu_frame_index() as usize]
+        //     .drain()
+        // {
+        //     self.new_compute_pipeline.remove(&info);
+        // }
     }
 
     /// Gets an image which is only valid for the context of the
@@ -190,33 +301,33 @@ impl VulkanExecutorResourceManager {
         resource_name: &str,
         create_info: FrameGraphImageInfo,
     ) -> ResourceId<Image> {
-        let (create_info, image_id) = self
-            .cached_frame_images
-            .remove_entry(&create_info)
-            .take()
-            .unwrap_or_else(|| {
-                let gfx_create_info = GfxImageCreateInfo {
-                    name: format!("frame_image_{}", resource_name),
-                    image_type: create_info.image_type,
-                    format: create_info.format,
-                    extent: create_info.extent,
-                };
-                let new_image = self.ctx.create_image(gfx_create_info).expect(&format!(
-                    "Failed to create frame image for resource {}.",
-                    resource_name
-                ));
+        let frame_images = self
+            .frame_images
+            .entry(create_info.clone())
+            .or_insert(Vec::new());
 
-                (create_info, new_image)
-            });
+        for image in frame_images.iter() {
+            let untyped_id = image.as_untyped();
+            if !self.in_use_resources.contains(&untyped_id) {
+                self.in_use_resources.insert(untyped_id);
+                return *image;
+            }
+        }
 
-        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
-            VulkanExecutorCachedResource::Image {
-                id: image_id,
-                image_info: create_info,
-            },
-        );
+        let gfx_create_info = GfxImageCreateInfo {
+            name: format!("frame_image_{}", resource_name),
+            image_type: create_info.image_type,
+            format: create_info.format,
+            extent: create_info.extent,
+        };
+        let new_image = self.ctx.create_image(gfx_create_info).expect(&format!(
+            "Failed to create frame image for resource {}.",
+            resource_name
+        ));
+        frame_images.push(new_image);
+        self.in_use_resources.insert(new_image.as_untyped());
 
-        image_id
+        new_image
     }
 
     /// Gets an buffer which is only valid for the context of the
@@ -226,21 +337,21 @@ impl VulkanExecutorResourceManager {
         resource_name: &str,
         create_info: FrameGraphBufferInfo,
     ) -> ResourceId<Buffer> {
-        let cached_buffer_index = self.cached_frame_buffers.iter().enumerate().find_map(
-            |(index, (frame_buffer_info, frame_buffer))| {
-                if frame_buffer_info.size >= create_info.size
-                    && frame_buffer_info.size <= (create_info.size * 10)
+        let buffer_id = self
+            .frame_buffers
+            .iter()
+            .find_map(|(frame_buffer_info, frame_buffer)| {
+                if !self.in_use_resources.contains(&frame_buffer.as_untyped())
+                    && frame_buffer_info.size >= create_info.size
+                    && frame_buffer_info.size <= create_info.size * 2
                 {
-                    return Some(index);
+                    return Some(*frame_buffer);
                 }
 
                 None
-            },
-        );
+            });
 
-        let (buffer_info, buffer_id) = if let Some(cached_buffer_index) = cached_buffer_index {
-            self.cached_frame_buffers.remove(cached_buffer_index)
-        } else {
+        let buffer_id = buffer_id.unwrap_or_else(|| {
             let gfx_create_info = GfxBufferCreateInfo {
                 name: format!("frame_buffer_{}", resource_name),
                 size: create_info.size,
@@ -249,46 +360,128 @@ impl VulkanExecutorResourceManager {
                 "Failed to create frame game for resource {}.",
                 resource_name
             ));
+            self.frame_buffers.push((create_info, new_buffer));
 
-            (create_info, new_buffer)
-        };
-
-        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
-            VulkanExecutorCachedResource::Buffer {
-                id: buffer_id,
-                buffer_info,
-            },
-        );
+            new_buffer
+        });
+        self.in_use_resources.insert(buffer_id.as_untyped());
 
         buffer_id
     }
 
     fn get_or_create_compute_pipeline(
         &mut self,
-        shader_compiler: &mut ShaderCompiler,
-        create_info: &GfxComputePipelineCreateInfo,
+        create_info: &FrameGraphComputePipelineInfo,
     ) -> ResourceId<ComputePipeline> {
-        let (create_info, compute_pipeline) = self
-            .cached_compute_pipelines
-            .remove_entry(&create_info)
-            .take()
-            .unwrap_or_else(|| {
-                let compute_pipeline = self
-                    .ctx
-                    .create_compute_pipeline(shader_compiler, create_info.clone())
-                    .expect("Failed to create graphics compute pipeline.");
-
-                (create_info.clone(), compute_pipeline)
-            });
-
-        self.cache_timeline[self.ctx.curr_cpu_frame_index() as usize].push(
-            VulkanExecutorCachedResource::ComputePipeline {
-                id: compute_pipeline,
-                info: create_info,
+        let compute_desc = VulkanExecutorComputePipelineDesc {
+            shader_desc: ShaderDesc {
+                module: create_info.shader_path.clone(),
+                entry_point_name: create_info.entry_point_fn.clone(),
             },
-        );
+        };
 
-        compute_pipeline
+        if !self.compute_pipelines.contains_key(&compute_desc) {
+            let opts = Self::create_shader_compilation_options(
+                compute_desc.shader_desc.clone(),
+                ShaderStage::Compute,
+            );
+            let shader = self
+                .shader_compiler
+                .compile_shader(opts)
+                .expect("Failed to compile pipeline shader.");
+
+            let compute_pipeline = self
+                .ctx
+                .create_compute_pipeline(GfxComputePipelineCreateInfo { shader })
+                .expect("Failed to create graphics compute pipeline.");
+
+            self.compute_pipelines
+                .insert(compute_desc.clone(), compute_pipeline);
+
+            return compute_pipeline;
+        }
+
+        *self.compute_pipelines.get(&compute_desc).unwrap()
+    }
+
+    fn get_or_create_raster_pipeline(
+        &mut self,
+        create_info: &FrameGraphRasterPipelineInfo,
+        color_attachment_ids: Vec<ResourceId<Image>>,
+        depth_attachment_id: Option<ResourceId<Image>>,
+    ) -> ResourceId<RasterPipeline> {
+        let color_formats = color_attachment_ids
+            .into_iter()
+            .map(|attachment| self.ctx.get_image_info(&attachment).format)
+            .collect::<Vec<_>>();
+        let depth_format =
+            depth_attachment_id.map(|attachment| self.ctx.get_image_info(&attachment).format);
+
+        let raster_desc = VulkanExecutorRasterPipelineDesc {
+            vertex_shader_desc: ShaderDesc {
+                module: create_info.vertex_shader_path.clone(),
+                entry_point_name: create_info.vertex_entry_point_fn.clone(),
+            },
+            fragment_shader_desc: ShaderDesc {
+                module: create_info.fragment_shader_path.clone(),
+                entry_point_name: create_info.fragment_entry_point_fn.clone(),
+            },
+            vertex_format: create_info.vertex_format.clone(),
+            cull_mode: create_info.cull_mode,
+            front_face: create_info.front_face,
+            blend_state: create_info.blend_state.clone(),
+            color_formats,
+            depth_format,
+        };
+
+        if !self.raster_pipelines.contains_key(&raster_desc) {
+            let vertex_opts = Self::create_shader_compilation_options(
+                raster_desc.vertex_shader_desc.clone(),
+                ShaderStage::Vertex,
+            );
+            let fragment_opts = Self::create_shader_compilation_options(
+                raster_desc.fragment_shader_desc.clone(),
+                ShaderStage::Fragment,
+            );
+            let (vertex_shader, fragment_shader) = self
+                .shader_compiler
+                .compile_shader_pair(vertex_opts, fragment_opts)
+                .expect("Failed to compile raster pipeline shaders.");
+
+            let raster_pipeline = self
+                .ctx
+                .create_raster_pipeline(GfxRasterPipelineCreateInfo {
+                    vertex_shader,
+                    fragment_shader,
+                    cull_mode: raster_desc.cull_mode,
+                    front_face: raster_desc.front_face,
+                    vertex_format: raster_desc.vertex_format.clone(),
+                    blend_state: raster_desc.blend_state.clone(),
+                    color_formats: raster_desc.color_formats.clone(),
+                    depth_format: raster_desc.depth_format,
+                })
+                .expect("Failed to create graphics raster pipeline.");
+
+            self.raster_pipelines
+                .insert(raster_desc.clone(), raster_pipeline);
+
+            return raster_pipeline;
+        }
+
+        *self.raster_pipelines.get(&raster_desc).unwrap()
+    }
+
+    fn create_shader_compilation_options(
+        desc: ShaderDesc,
+        stage: ShaderStage,
+    ) -> ShaderCompilationOptions {
+        ShaderCompilationOptions {
+            module: desc.module.module(),
+            entry_point: desc.entry_point_name.clone(),
+            stage,
+            target: ShaderCompilationTarget::SpirV,
+            macro_defines: HashMap::new(),
+        }
     }
 }
 
@@ -365,13 +558,13 @@ impl VulkanFrameGraphExecutor {
             .expect("Tried to access frame session but no session exists currently.")
     }
 
-    fn initialize_session_resources(&mut self, shader_compiler: &mut ShaderCompiler) {
+    fn initialize_session_resources(&mut self) {
         let session = self.session.as_mut().unwrap();
 
         // Re-reflect library module set bindings.
         if let Some((old_bindings, invalid)) = &mut self.resource_manager.cached_library_bindings {
             if *invalid {
-                match shader_compiler.get_library_bindings() {
+                match self.resource_manager.shader_compiler.get_library_bindings() {
                     Ok(new_bindings) => *old_bindings = new_bindings,
                     Err(err) => {
                         log::error!("Got error compiling slang library module:");
@@ -382,18 +575,19 @@ impl VulkanFrameGraphExecutor {
             }
         } else {
             self.resource_manager.cached_library_bindings = Some((
-                shader_compiler
+                self.resource_manager
+                    .shader_compiler
                     .get_library_bindings()
                     .expect("Failed to reflect library bindings."),
                 false,
             ));
         }
 
-        // Initialize compute pipelines.
+        // Initialize compute pipelines since they don't rely on any graph dependencies.
         for (frame_resource, compute_pipeline_info) in &session.frame_graph.compute_pipelines {
             let compute_pipeline = self
                 .resource_manager
-                .get_or_create_compute_pipeline(shader_compiler, compute_pipeline_info);
+                .get_or_create_compute_pipeline(compute_pipeline_info);
             session.resource_map.insert(
                 frame_resource.as_untyped(),
                 FGResourceBackendId {
@@ -492,9 +686,10 @@ impl VulkanFrameGraphExecutor {
                     .frame_buffers
                     .contains(&input.as_typed::<Buffer>())
                 {
-                    panic!(
+                    log::warn!(
                         "Frame graph frame buffer `{}` hasn't been written to yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
                     );
+                    continue;
                 } else if frame_graph.inputs.contains_key(&input) {
                     panic!(
                         "User defined buffer input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
@@ -506,10 +701,93 @@ impl VulkanFrameGraphExecutor {
                 }
             }
 
+            if input_info.type_id == std::any::TypeId::of::<ComputePipeline>() {
+                if let Some(info) = frame_graph
+                    .compute_pipelines
+                    .get(&input.as_typed::<ComputePipeline>())
+                {
+                    let compute_pipeline = resource_manager.get_or_create_compute_pipeline(info);
+                    resource_map.insert(
+                        input.as_untyped(),
+                        FGResourceBackendId {
+                            resource_id: compute_pipeline.as_untyped(),
+                            expected_type: std::any::TypeId::of::<ComputePipeline>(),
+                        },
+                    );
+
+                    continue;
+                } else {
+                    panic!(
+                        "Pass has a compute
+                        pipeline input that is somehow not contained in the executor's session frame graph definition."
+)
+                }
+            }
+
+            // Process raster pipeline later since we need to process all image inputs first.
+            if input_info.type_id == std::any::TypeId::of::<RasterPipeline>() {
+                continue;
+            }
+
             panic!(
                 "Unknown frame graph input type for input name `{}` and type {:?}.",
                 input_info.name, input_info.type_id
             );
+        }
+
+        // Iterate raster pipeline inputs since we need to ensure all other image inputs have been
+        // made, since the raster pipeline input attachments implicity define those images as an
+        // input to this pass.
+        for input in pass.inputs.iter() {
+            let input_info = &frame_graph.resource_infos[input.id() as usize];
+            if input_info.type_id == std::any::TypeId::of::<RasterPipeline>() {
+                let Some(info) = frame_graph
+                    .raster_pipelines
+                    .get(&input.as_typed::<RasterPipeline>())
+                else {
+                    panic!(
+                        "Pass has a raster 
+                        pipeline input that is somehow not contained in the executor's session frame graph definition."
+);
+                };
+                let color_attachment_ids = info
+                    .color_attachments
+                    .iter()
+                    .map(|attachment| {
+                        let Some(image_id) = resource_map.get(&attachment.as_untyped()) else {
+                            panic!("Somehow we have a raster pipeline color attachment that wasn't initialized as an implicit input prior.");
+                        };
+                        assert_eq!(image_id.expected_type, std::any::TypeId::of::<Image>());
+
+                        image_id.resource_id.as_typed::<Image>()
+                    })
+                    .collect::<Vec<_>>();
+                let depth_attachment_id = info.depth_attachment.map(|attachment| {
+
+                        let Some(image_id) = resource_map.get(&attachment.as_untyped()) else {
+                            panic!("Somehow we have a raster pipeline depth attachment that wasn't initialized as an implicit input prior.");
+                        };
+                        assert_eq!(image_id.expected_type, std::any::TypeId::of::<Image>());
+
+                        image_id.resource_id.as_typed::<Image>()
+                });
+
+                // TODO: make color attachments an input to this pass and then process the
+                // raster pipeline last so we know we have all the required images loaded in
+                // the resource map.
+                let raster_pipeline = resource_manager.get_or_create_raster_pipeline(
+                    info,
+                    color_attachment_ids,
+                    depth_attachment_id,
+                );
+                resource_map.insert(
+                    input.as_untyped(),
+                    FGResourceBackendId {
+                        resource_id: raster_pipeline.as_untyped(),
+                        expected_type: std::any::TypeId::of::<RasterPipeline>(),
+                    },
+                );
+            }
         }
     }
 
@@ -585,7 +863,7 @@ impl Drop for VulkanFrameGraphExecutor {
 }
 
 impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
-    fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph) {
+    fn begin_frame(&mut self, frame_graph: FrameGraph) {
         let curr_cmd_pool = &mut self.command_pools[self.ctx.curr_cpu_frame_index() as usize];
         //debug!("Resetting command pool {:?}", curr_cmd_pool.command_pool);
         unsafe {
@@ -603,9 +881,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         // Invalidate pipelines before initializing resources so we can ensure we have the most up
         // to date shader modification tree state.
-        self.resource_manager
-            .try_invalidate_shaders(shader_compiler);
-        self.initialize_session_resources(shader_compiler);
+        self.resource_manager.try_invalidate_shaders();
+        self.initialize_session_resources();
     }
 
     fn end_frame(&mut self) -> FrameGraph {
@@ -643,6 +920,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
                         new_layout: ash::vk::ImageLayout::PRESENT_SRC_KHR,
                         new_access_flags: ash::vk::AccessFlags::empty(),
                     }],
+                    None,
                     ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                 );
             }
@@ -704,7 +982,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         session.frame_graph
     }
 
-    fn write_buffer(&mut self, name: &str, size: u64, write_fn: &mut dyn FnMut(&mut [u8])) {
+    fn write_buffer(&mut self, name: &str, size: u64) -> &mut [u8] {
         let session = self.session.as_mut().unwrap();
         let Some(resource_info) = session.frame_graph.resource_name_map.get(name) else {
             panic!(
@@ -739,7 +1017,8 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             },
         );
 
-        self.ctx.write_buffer(&frame_buffer_id, 0, size, write_fn);
+        let write_ptr = self.ctx.write_buffer(&frame_buffer_id, 0, size);
+        unsafe { std::slice::from_raw_parts_mut(write_ptr, size as usize) }
     }
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>) {
@@ -790,7 +1069,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         }
     }
 
-    fn supply_pass_ref(&mut self, name: &str, mut pass: Box<dyn GfxPassOnceImpl>) {
+    fn supply_pass_ref(&mut self, name: &str, mut pass: &mut dyn GfxPassOnceImpl) {
         let command_buffer = Self::acquire_command_buffer(&self.ctx, &mut self.command_pools)
             .expect("Failed to acquire command buffer.");
 
@@ -884,7 +1163,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
                     .iter()
                     .find(|s| s.set_index == set_index)
                     .unwrap();
-                (set_index, (set_info, set))
+                (set_info, set)
             })
             .collect::<HashMap<_, _>>();
         self.ctx.write_shader_sets(writes);

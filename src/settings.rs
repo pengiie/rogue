@@ -51,6 +51,7 @@ pub struct Settings {
 
     /// The chunk render distance.
     pub chunk_render_distance: u32,
+
     /// The amount of chunk that can be enqueued at a time.
     /// The current default is number of logical CPUs.
     pub chunk_queue_capacity: u32,
@@ -65,7 +66,7 @@ impl Default for Settings {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: 0.001,
 
-            chunk_render_distance: 8,
+            chunk_render_distance: 16,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,

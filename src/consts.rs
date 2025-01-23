@@ -16,4 +16,6 @@ pub mod gfx {
     /// Pipeline invalidation is just checking if any shader files were modified, and invalidating
     /// the the entire pipeline cache.
     pub const PIPELINE_INVALIDATION_TIMER_MS: u32 = 250;
+
+    pub const CAMERA_FAR_PLANE: f32 = 10_000.0;
 }

@@ -67,13 +67,14 @@ public struct RayDDA {
   }
 
   public uint curr_morton() {
-    return morton::encode(this.curr_grid);
+    return morton::encode(abs(this.curr_grid % this.bounds));
   }
 
   public bool in_bounds() {
-    return this.curr_grid.x >= 0 && this.curr_grid.y >= 0 && 
-           this.curr_grid.z >= 0 && this.curr_grid.x < this.bounds.x && 
-           this.curr_grid.y < this.bounds.y && this.curr_grid.z < this.bounds.z;
+    return true;
+    // return this.curr_grid.x >= 0 && this.curr_grid.y >= 0 && 
+    //        this.curr_grid.z >= 0 && this.curr_grid.x < this.bounds.x && 
+    //        this.curr_grid.y < this.bounds.y && this.curr_grid.z < this.bounds.z;
   }
 
   public uint3 curr_grid_pos() {
@@ -86,6 +87,11 @@ public struct RayDDA {
     this.curr_grid += int3(mask) * this.unit_grid;
     this.curr_t += float3(mask) * this.unit_t;
   }
+}
+
+public struct OBB {
+  public AABB aabb;
+  public matrix3x3 rotation;
 }
 
 public struct AABB {

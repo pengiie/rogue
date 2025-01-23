@@ -16,10 +16,12 @@ use crate::{
         aabb::AABB,
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
+        ray::Ray,
     },
     consts::voxel::VOXEL_METER_LENGTH,
     engine::{
         ecs::ecs_world::ECSWorld,
+        event::Events,
         graphics::{
             backend::{Buffer, GfxBufferCreateInfo, ResourceId},
             device::DeviceResource,
@@ -27,8 +29,9 @@ use crate::{
         },
         physics::transform::Transform,
         resource::{Res, ResMut},
-        voxel::voxel_world,
+        voxel::{voxel_terrain::ChunkData, voxel_world},
     },
+    settings::Settings,
 };
 
 use super::{
@@ -75,19 +78,104 @@ pub struct VoxelWorld {
     // Maps model_type to the vtable for dyn VoxelModelImpl and
     // maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
     type_vtables: HashMap<TypeId, *mut ()>,
-
     id_counter: u64,
+
+    terrain: VoxelTerrain,
 }
 
 impl VoxelWorld {
-    pub fn new() -> Self {
+    pub fn new(settings: &Settings) -> Self {
         Self {
             renderable_voxel_model_archtypes: HashMap::new(),
             standalone_voxel_model_archtypes: HashMap::new(),
             voxel_model_info: Vec::new(),
             type_vtables: HashMap::new(),
             id_counter: 0,
+
+            terrain: VoxelTerrain::new(settings),
         }
+    }
+
+    pub fn update_post_physics(
+        events: Res<Events>,
+        settings: Res<Settings>,
+        mut ecs_world: ResMut<ECSWorld>,
+        mut voxel_world: ResMut<VoxelWorld>,
+    ) {
+        let terrain: &mut VoxelTerrain = &mut voxel_world.terrain;
+
+        if terrain.chunk_tree.is_none() {
+            terrain.initialize_chunk_tree();
+        };
+
+        // Try enqueue any non enqueued chunks.
+        if terrain.queue_timer.try_complete() && !terrain.chunk_queue.chunk_queue.is_full() {
+            terrain.chunk_loader.enqueue_next_chunk(
+                terrain.chunk_tree.as_mut().unwrap(),
+                &mut terrain.chunk_queue,
+            );
+        }
+
+        // Process next chunk.
+        terrain.chunk_tree.as_mut().unwrap().is_dirty = false;
+        terrain.chunk_queue.handle_enqueued_chunks();
+
+        const RECIEVED_CHUNKS_PER_FRAME: usize = 1;
+        // Loops until the reciever is empty.
+        'lp: for _ in 0..RECIEVED_CHUNKS_PER_FRAME {
+            match voxel_world
+                .terrain
+                .chunk_queue
+                .finished_chunk_recv
+                .try_recv()
+            {
+                Ok(finished_chunk) => {
+                    voxel_world.terrain.chunk_queue.chunk_handler_count -= 1;
+                    if finished_chunk.is_empty() {
+                        voxel_world
+                            .terrain
+                            .chunk_tree
+                            .as_mut()
+                            .unwrap()
+                            .set_world_chunk_empty(finished_chunk.chunk_position);
+                    } else {
+                        let chunk_name = format!(
+                            "chunk_{}_{}_{}",
+                            finished_chunk.chunk_position.x,
+                            finished_chunk.chunk_position.y,
+                            finished_chunk.chunk_position.z
+                        );
+                        let voxel_model_id = voxel_world.register_renderable_voxel_model(
+                            chunk_name,
+                            VoxelModel::new(finished_chunk.esvo.unwrap()),
+                        );
+                        voxel_world
+                            .terrain
+                            .chunk_tree
+                            .as_mut()
+                            .unwrap()
+                            .set_world_chunk_data(
+                                finished_chunk.chunk_position,
+                                ChunkData { voxel_model_id },
+                            );
+                        debug!(
+                            "Recieved finished chunk {:?}",
+                            finished_chunk.chunk_position
+                        );
+                    }
+                }
+                Err(err) => match err {
+                    std::sync::mpsc::TryRecvError::Disconnected => {
+                        panic!("Shouldn't be disconnected")
+                    }
+                    _ => break 'lp,
+                },
+            }
+        }
+    }
+
+    pub fn trace(&self, ray: &Ray) {
+        todo!("trace voxel world.");
     }
 
     pub fn next_id(&mut self) -> VoxelModelId {
@@ -531,7 +619,6 @@ impl VoxelWorldGpu {
     pub fn write_render_data(
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
-        voxel_terrain: Res<VoxelTerrain>,
         ecs_world: Res<ECSWorld>,
         mut device: ResMut<DeviceResource>,
     ) {
@@ -612,13 +699,13 @@ impl VoxelWorldGpu {
         }
 
         // Write voxel terrain acceleration buffer data.
-        if voxel_terrain.is_chunk_tree_dirty()
+        if voxel_world.terrain.is_chunk_tree_dirty()
             || !voxel_world_gpu
                 .frame_state
                 .voxel_model_info_copies
                 .is_empty()
         {
-            let chunk_tree = voxel_terrain.chunk_tree();
+            let chunk_tree = voxel_world.terrain.chunk_tree();
             voxel_world_gpu.terrain_side_length = chunk_tree.chunk_side_length();
             let chunk_tree_gpu = ChunkTreeGpu::build(
                 chunk_tree,

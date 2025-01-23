@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -25,7 +26,7 @@ use crate::{
 
 use super::{
     frame_graph::{FrameGraph, FrameGraphContext, FrameGraphContextImpl},
-    shader::{ShaderCompiler, ShaderPath, ShaderSetBinding},
+    shader::{Shader, ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
 
 pub enum GraphicsBackendEvent {
@@ -50,27 +51,21 @@ pub trait GraphicsBackendDevice {
     ) -> ResourceId<ComputePipeline>;
     fn register_raster_pipeline(
         &mut self,
-        create_info: RasterPipelineCreateInfo,
+        create_info: GfxRasterPipelineCreateInfo,
     ) -> ResourceId<RasterPipeline>;
 
     fn create_image(&mut self, create_info: GfxImageCreateInfo) -> ResourceId<Image>;
     fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo;
+    fn write_image(&mut self, write_info: GfxImageWrite);
 
     fn create_buffer(&mut self, create_info: GfxBufferCreateInfo) -> ResourceId<Buffer>;
-
-    fn write_buffer(
-        &mut self,
-        buffer: &ResourceId<Buffer>,
-        offset: u64,
-        write_len: u64,
-        write_fn: &mut dyn FnMut(&mut [u8]),
-    );
-
+    fn write_buffer(&mut self, buffer: &ResourceId<Buffer>, offset: u64, size: u64) -> &mut [u8];
     fn write_buffer_slice(&mut self, buffer: &ResourceId<Buffer>, offset: u64, data: &[u8]) {
-        self.write_buffer(buffer, offset, data.len() as u64, &mut |mut write_ptr| {
-            write_ptr.copy_from_slice(data);
-        });
+        self.write_buffer(buffer, offset, data.len() as u64)
+            .copy_from_slice(data);
     }
+
+    fn create_sampler(&mut self, create_info: GfxSamplerCreateInfo) -> ResourceId<Sampler>;
 
     fn end_frame(&mut self);
 
@@ -94,6 +89,12 @@ pub trait GraphicsBackendRecorder {
     // TODO: Support blitting specific image regions.
     fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode);
     fn begin_compute_pass(&mut self, compute_pipeline: ResourceId<ComputePipeline>) -> ComputePass;
+    fn begin_render_pass(
+        &mut self,
+        raster_pipeline: ResourceId<RasterPipeline>,
+        color_attachments: &[GfxRenderPassAttachment],
+        depth_attachment: Option<GfxRenderPassAttachment>,
+    ) -> RenderPass;
 
     fn get_image_info(&self, image: &ResourceId<Image>) -> GfxImageInfo;
 }
@@ -106,7 +107,46 @@ pub trait GraphicsBackendComputePass {
     fn workgroup_size(&self) -> Vector3<u32>;
 }
 
+pub trait GraphicsBackendRenderPass {
+    /// Expects all uniforms listed in the shader to be present in UniformData, however that
+    /// doesn't mean the backend will constantly rebind the same descriptor set.
+    fn bind_uniforms(&mut self, writer_fn: &mut dyn FnMut(&mut ShaderWriter));
+    fn bind_vertex_buffer(&mut self, vertex_buffer: ResourceId<Buffer>, offset: u64);
+    fn bind_index_buffer(&mut self, index_buffer: ResourceId<Buffer>, offset: u64);
+    fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
+    fn draw_indexed(&mut self, vertex_count: u32);
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+pub struct GfxRenderPassAttachment {
+    pub image: ResourceId<Image>,
+    pub load_op: GfxLoadOp,
+}
+
+impl GfxRenderPassAttachment {
+    pub fn new_clear(image: ResourceId<Image>) -> Self {
+        Self {
+            image,
+            load_op: GfxLoadOp::Clear,
+        }
+    }
+
+    pub fn new_load(image: ResourceId<Image>) -> Self {
+        Self {
+            image,
+            load_op: GfxLoadOp::Load,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum GfxLoadOp {
+    Clear,
+    Load,
+}
+
 pub type ComputePass<'a> = Box<dyn GraphicsBackendComputePass + 'a>;
+pub type RenderPass<'a> = Box<dyn GraphicsBackendRenderPass + 'a>;
 
 pub trait GraphicsBackendSwapchain {
     /// Gets the next available image in the swapchain.
@@ -114,23 +154,19 @@ pub trait GraphicsBackendSwapchain {
     fn present(&mut self);
 }
 
-pub trait GraphicsBackendPipelineManager {}
-
 pub trait GraphicsBackendFrameGraphExecutor {
-    fn begin_frame(&mut self, shader_compiler: &mut ShaderCompiler, frame_graph: FrameGraph);
+    fn begin_frame(&mut self, frame_graph: FrameGraph);
     fn end_frame(&mut self) -> FrameGraph;
 
-    fn write_buffer(&mut self, name: &str, size: u64, write_fn: &mut dyn FnMut(&mut [u8]));
-
+    fn write_buffer(&mut self, name: &str, size: u64) -> &mut [u8];
     fn write_buffer_slice(&mut self, name: &str, data: &[u8]) {
-        self.write_buffer(name, data.len() as u64, &mut |mut write_ptr| {
-            write_ptr.copy_from_slice(data);
-        });
+        self.write_buffer(name, data.len() as u64)
+            .copy_from_slice(data);
     }
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
     fn supply_buffer_ref(&mut self, name: &str, buffer: &ResourceId<Buffer>);
-    fn supply_pass_ref(&mut self, name: &str, pass: Box<dyn GfxPassOnceImpl>);
+    fn supply_pass_ref(&mut self, name: &str, pass: &mut dyn GfxPassOnceImpl);
 
     fn write_uniforms(&mut self, write_fn: &mut dyn FnMut(&mut ShaderWriter, &FrameGraphContext));
 
@@ -192,6 +228,13 @@ impl<T> ResourceId<T> {
     }
 
     pub fn as_untyped(&self) -> ResourceId<Untyped> {
+        ResourceId {
+            id: self.id,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_typed<S>(&self) -> ResourceId<S> {
         ResourceId {
             id: self.id,
             _marker: std::marker::PhantomData,
@@ -310,7 +353,7 @@ impl<'a> ShaderWriter<'a> {
         (set_name, param_path)
     }
 
-    pub fn use_set_cache(&mut self, set_name: impl ToString) {
+    pub fn use_set_cache(&mut self, set_name: impl ToString, cache_slot: u32) {
         let set_name = set_name.to_string();
         let set_info = self
             .shader_set_bindings
@@ -319,8 +362,35 @@ impl<'a> ShaderWriter<'a> {
             .expect(&format!("No set with the name `{}` exists.", set_name,));
         let old = self
             .set_bindings
-            .insert(set_info.set_index, ShaderSetData::Cached);
+            .insert(set_info.set_index, ShaderSetData::CacheSlot(cache_slot));
         if old.is_some() {
+            panic!(
+                "Called use_set_cache() but set `{}` was written to prior which is not allowed.",
+                set_name
+            );
+        }
+    }
+
+    pub fn write_set_cache(&mut self, set_name: impl ToString, cache_slot: u32) {
+        let set_name = set_name.to_string();
+        let set_info = self
+            .shader_set_bindings
+            .iter()
+            .find(|set| set.name == set_name)
+            .expect(&format!("No set with the name `{}` exists.", set_name,));
+        let mut set = self
+            .set_bindings
+            .entry(set_info.set_index)
+            .or_insert(ShaderSetData::new());
+        let old_set_index = match set {
+            ShaderSetData::Defined {
+                bindings,
+                uniform_data,
+                cache_slot: slot,
+            } => slot.replace(cache_slot),
+            ShaderSetData::CacheSlot(_) => panic!("Set was defined as using the cache already."),
+        };
+        if old_set_index.is_some() {
             panic!(
                 "Called use_set_cache() but set `{}` was written to prior which is not allowed.",
                 set_name
@@ -346,13 +416,14 @@ impl<'a> ShaderWriter<'a> {
                     set_name, full_uniform_name,
                 ));
 
-            let (binding_index, expected_type) = set_info
+            let Some((binding_index, expected_type)) = set_info
                 .bindings
                 .iter()
                 .find_map(|(path, (binding, is_used))| {
                     if path == param_path {
                         if !is_used {
-                            panic!("Wrote uniform binding for `{}` but it is not used", full_uniform_name);
+                            warn!("Wrote uniform binding for `{}` but it is not used", full_uniform_name);
+                            return None;
                         }
 
                         match binding {
@@ -369,17 +440,30 @@ impl<'a> ShaderWriter<'a> {
                     }
 
                     None
-                })
-                .expect(&format!(
-                    "No binding with the path `{}` exists for the submitted uniform `{}`",
-                    param_path, full_uniform_name
-                ));
+                }) else {
+                    warn!(
+                        "No uniform binding with the path `{}` exists for the submitted uniform `{}`",
+                        param_path, full_uniform_name
+                    );
+                    return;
+                };
 
             (set_info.set_index, *binding_index, *expected_type)
         };
 
         let binding = match expected_type {
-            ShaderBindingType::Sampler => todo!(),
+            ShaderBindingType::Sampler => {
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Sampler>(),
+                    "Expected type for uniform `{}` is a Sampler, yet we recieved a ResourceId<{}>",
+                    full_uniform_name,
+                    std::any::type_name::<T>()
+                );
+                Binding::Sampler {
+                    sampler: ResourceId::new(binding_resource.id()),
+                }
+            }
             ShaderBindingType::SampledImage => {
                 assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Image>(),
                     "Expected type for uniform `{}` is a SampledImage, yet we recieved a ResourceId<{}>", 
@@ -422,10 +506,33 @@ impl<'a> ShaderWriter<'a> {
             .set_bindings
             .entry(set_index)
             .or_insert(ShaderSetData::new());
-        if set.is_cached() {
+        if set.is_using_cache() {
             panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
         }
         set.bindings_mut().insert(binding_index, binding);
+    }
+
+    pub fn write_uniform_mat4(
+        &mut self,
+        full_uniform_name: impl ToString,
+        val: &nalgebra::Matrix4<f32>,
+    ) {
+        let arr: [f32; 16] = val.transpose().as_slice().try_into().unwrap();
+        self.write_uniform(full_uniform_name, arr);
+    }
+
+    pub fn write_uniform_mat3(
+        &mut self,
+        full_uniform_name: impl ToString,
+        val: &nalgebra::Matrix3<f32>,
+    ) {
+        let val = val.transpose();
+        let slice = val.as_slice();
+        let mut arr: [f32; 12] = [0.0; 12];
+        arr[0..3].copy_from_slice(&slice[0..3]);
+        arr[4..7].copy_from_slice(&slice[3..6]);
+        arr[8..11].copy_from_slice(&slice[6..9]);
+        self.write_uniform(full_uniform_name, arr);
     }
 
     pub fn write_uniform<T: 'static>(&mut self, full_uniform_name: impl ToString, val: T) {
@@ -448,7 +555,8 @@ impl<'a> ShaderWriter<'a> {
             .find_map(|(path, (binding, is_used))| {
                 if path == param_path {
                         if !is_used {
-                            panic!("Wrote uniform data for `{}` but it is not used", full_uniform_name);
+                            warn!("Wrote uniform data for `{}` but it is not used", full_uniform_name);
+                            return None;
                         }
 
                     match binding {
@@ -479,14 +587,14 @@ impl<'a> ShaderWriter<'a> {
             .set_bindings
             .entry(set_info.set_index)
             .or_insert(ShaderSetData::new());
-        if set.is_cached() {
+        if set.is_using_cache() {
             panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
         }
 
         let UniformSetData {
             data,
             written_uniforms,
-        } = &mut set.uniform_data();
+        } = &mut set.uniform_data_mut();
         let required_size = (offset + size) as usize;
         if data.len() < required_size {
             data.resize(required_size, 0);
@@ -510,10 +618,13 @@ impl<'a> ShaderWriter<'a> {
             let Some(set) = self.set_bindings.get(&set_info.set_index) else {
                 // We need to make sure we fill in all the shader uniforms if we are not writing
                 // globally.
-                if !self.global_writer {
+                // TODO: We can't check whether uniforms are used or not so ignore global shader
+                // sets for now if we don't define them at all in `bind_uniforms`.
+                if !self.global_writer && set_info.name != "u_frame" {
                     panic!(
-                        "Set `{}` was not defined in the ShaderWriter.",
-                        set_info.name
+                        "Set `{}` was not defined in the ShaderWriter, comparing against bindings {:?}.",
+                        set_info.name,
+                        self.shader_set_bindings
                     );
                 }
 
@@ -524,6 +635,7 @@ impl<'a> ShaderWriter<'a> {
                 ShaderSetData::Defined {
                     bindings,
                     uniform_data,
+                    cache_slot,
                 } => {
                     for (binding_name, (binding_info, is_used)) in &set_info.bindings {
                         if *is_used {
@@ -552,7 +664,7 @@ impl<'a> ShaderWriter<'a> {
                         }
                     }
                 }
-                ShaderSetData::Cached => {}
+                ShaderSetData::CacheSlot(_) => {}
             }
         }
     }
@@ -564,25 +676,24 @@ pub enum ShaderSetData {
         /// Set bindings ordered by backend binding index.
         bindings: HashMap</*binding_index=*/ u32, Binding>,
         uniform_data: UniformSetData,
+        cache_slot: Option<u32>,
     },
-    Cached,
+    CacheSlot(u32),
 }
 
 impl ShaderSetData {
     pub fn new() -> ShaderSetData {
-        ShaderSetData::Defined {
+        Self::Defined {
             bindings: HashMap::new(),
             uniform_data: UniformSetData::new(),
+            cache_slot: None,
         }
     }
 
     pub fn bindings(&self) -> &HashMap<u32, Binding> {
         match self {
-            ShaderSetData::Defined {
-                bindings,
-                uniform_data,
-            } => bindings,
-            ShaderSetData::Cached => {
+            ShaderSetData::Defined { bindings, .. } => bindings,
+            ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call bindings() on cached uniform set data.")
             }
         }
@@ -590,11 +701,8 @@ impl ShaderSetData {
 
     pub fn bindings_mut(&mut self) -> &mut HashMap<u32, Binding> {
         match self {
-            ShaderSetData::Defined {
-                bindings,
-                uniform_data,
-            } => bindings,
-            ShaderSetData::Cached => {
+            ShaderSetData::Defined { bindings, .. } => bindings,
+            ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call bindings_mut() on cached uniform set data.")
             }
         }
@@ -603,10 +711,9 @@ impl ShaderSetData {
     pub fn take_bindings(&mut self) -> HashMap<u32, Binding> {
         match self {
             ShaderSetData::Defined {
-                ref mut bindings,
-                uniform_data,
+                ref mut bindings, ..
             } => std::mem::replace(bindings, HashMap::new()),
-            ShaderSetData::Cached => {
+            ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call take_bindings() on cached uniform set data.")
             }
         }
@@ -615,10 +722,9 @@ impl ShaderSetData {
     pub fn set_bindings(&mut self, in_bindings: HashMap<u32, Binding>) {
         match self {
             ShaderSetData::Defined {
-                ref mut bindings,
-                uniform_data,
+                ref mut bindings, ..
             } => *bindings = in_bindings,
-            ShaderSetData::Cached => {
+            ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call set_bindings() on cached uniform set data.")
             }
         }
@@ -627,39 +733,66 @@ impl ShaderSetData {
     pub fn take_uniform_data(&mut self) -> UniformSetData {
         match self {
             ShaderSetData::Defined {
-                bindings,
                 ref mut uniform_data,
+                ..
             } => std::mem::replace(uniform_data, UniformSetData::new()),
-            ShaderSetData::Cached => panic!("Shouldn't take uniform data on a cached set."),
+            ShaderSetData::CacheSlot(_) => {
+                panic!("Shouldn't take uniform data on a cached set.")
+            }
         }
     }
 
     pub fn set_uniform_data(&mut self, data: UniformSetData) {
         match self {
             ShaderSetData::Defined {
-                bindings,
                 ref mut uniform_data,
+                ..
             } => *uniform_data = data,
-            ShaderSetData::Cached => panic!("Shouldn't set uniform data on a cached set."),
+            ShaderSetData::CacheSlot(_) => {
+                panic!("Shouldn't set uniform data on a cached set.")
+            }
         }
     }
 
-    pub fn uniform_data(&mut self) -> &mut UniformSetData {
+    pub fn uniform_data(&self) -> &UniformSetData {
         match self {
-            ShaderSetData::Defined {
-                bindings,
-                uniform_data,
-            } => uniform_data,
-            ShaderSetData::Cached => {
+            ShaderSetData::Defined { uniform_data, .. } => uniform_data,
+            ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call bindings() on cached uniform set data.")
             }
         }
     }
 
-    pub fn is_cached(&self) -> bool {
+    pub fn uniform_data_mut(&mut self) -> &mut UniformSetData {
+        match self {
+            ShaderSetData::Defined {
+                ref mut uniform_data,
+                ..
+            } => uniform_data,
+            ShaderSetData::CacheSlot(_) => {
+                panic!("Shouldn't call bindings() on cached uniform set data.")
+            }
+        }
+    }
+
+    pub fn is_using_cache(&self) -> bool {
         match self {
             ShaderSetData::Defined { .. } => false,
-            ShaderSetData::Cached => true,
+            ShaderSetData::CacheSlot(_) => true,
+        }
+    }
+
+    pub fn is_writing_cache(&self) -> bool {
+        match self {
+            ShaderSetData::Defined { cache_slot, .. } => cache_slot.is_some(),
+            ShaderSetData::CacheSlot(_) => false,
+        }
+    }
+
+    pub fn cache_slot(&self) -> Option<u32> {
+        match self {
+            ShaderSetData::Defined { cache_slot, .. } => *cache_slot,
+            ShaderSetData::CacheSlot(slot_idx) => Some(*slot_idx),
         }
     }
 }
@@ -671,7 +804,7 @@ pub struct UniformSetData {
 }
 
 impl UniformSetData {
-    fn new() -> Self {
+    pub fn new() -> Self {
         UniformSetData {
             data: Vec::new(),
             written_uniforms: HashSet::new(),
@@ -694,18 +827,149 @@ pub enum Binding {
     StorageBuffer { buffer: ResourceId<Buffer> },
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct GfxComputePipelineCreateInfo {
-    pub shader_path: ShaderPath,
-    pub entry_point_fn: String,
+pub struct GfxComputePipelineCreateInfo<'a> {
+    pub shader: &'a Shader,
 }
 
-pub struct RasterPipelineCreateInfo {}
+pub struct GfxImageWrite<'a> {
+    pub image: ResourceId<Image>,
+    pub data: &'a [u8],
+    pub offset: Vector2<u32>,
+    pub extent: Vector2<u32>,
+}
+
+#[derive(Clone)]
+pub struct GfxRasterPipelineCreateInfo<'a> {
+    pub vertex_shader: &'a Shader,
+    pub fragment_shader: &'a Shader,
+
+    pub cull_mode: GfxCullMode,
+    pub front_face: GfxFrontFace,
+    pub vertex_format: GfxVertexFormat,
+    pub blend_state: GfxRasterPipelineBlendStateCreateInfo,
+
+    pub color_formats: Vec<GfxImageFormat>,
+    pub depth_format: Option<GfxImageFormat>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+pub struct GfxVertexFormat {
+    pub attributes: Vec<GfxVertexAttribute>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+pub struct GfxVertexAttribute {
+    pub format: GfxVertexAttributeFormat,
+    pub location: u32,
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum GfxVertexAttributeFormat {
+    Float2,
+    Float3,
+    Uint,
+}
+
+impl GfxVertexAttributeFormat {
+    pub fn byte_size(&self) -> u32 {
+        match self {
+            GfxVertexAttributeFormat::Float2 => 8,
+            GfxVertexAttributeFormat::Float3 => 12,
+            GfxVertexAttributeFormat::Uint => 4,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum GfxCullMode {
+    None,
+    Front,
+    Back,
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub enum GfxFrontFace {
+    Clockwise,
+    CounterClockwise,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct GfxRasterPipelineBlendStateCreateInfo {
+    pub attachments: Vec<GfxRasterPipelineBlendStateAttachmentInfo>,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct GfxRasterPipelineBlendStateAttachmentInfo {
+    pub enable_blend: bool,
+    pub src_color_blend_factor: GfxBlendFactor,
+    pub dst_color_blend_factor: GfxBlendFactor,
+    pub color_blend_op: GfxBlendOp,
+    pub src_alpha_blend_factor: GfxBlendFactor,
+    pub dst_alpha_blend_factor: GfxBlendFactor,
+    pub alpha_blend_op: GfxBlendOp,
+}
+
+impl GfxRasterPipelineBlendStateAttachmentInfo {
+    pub const fn additive() -> Self {
+        Self {
+            enable_blend: true,
+            src_color_blend_factor: GfxBlendFactor::SrcAlpha,
+            dst_color_blend_factor: GfxBlendFactor::One,
+            color_blend_op: GfxBlendOp::Add,
+            src_alpha_blend_factor: GfxBlendFactor::One,
+            dst_alpha_blend_factor: GfxBlendFactor::Zero,
+            alpha_blend_op: GfxBlendOp::Add,
+        }
+    }
+    pub const fn one_minus_src_alpha() -> Self {
+        Self {
+            enable_blend: true,
+            src_color_blend_factor: GfxBlendFactor::SrcAlpha,
+            dst_color_blend_factor: GfxBlendFactor::OneMinusSrcAlpha,
+            color_blend_op: GfxBlendOp::Add,
+            src_alpha_blend_factor: GfxBlendFactor::One,
+            dst_alpha_blend_factor: GfxBlendFactor::Zero,
+            alpha_blend_op: GfxBlendOp::Add,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GfxBlendFactor {
+    Zero,
+    One,
+    OneMinusSrcAlpha,
+    SrcColor,
+    DstColor,
+    SrcAlpha,
+    DstAlpha,
+}
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+pub enum GfxBlendOp {
+    Add,
+    Subtract,
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GfxBufferCreateInfo {
     pub name: String,
     pub size: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GfxSamplerCreateInfo {
+    pub mag_filter: GfxFilterMode,
+    pub min_filter: GfxFilterMode,
+    pub mipmap_filter: GfxFilterMode,
+    pub address_mode: GfxAddressMode,
+}
+
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+pub enum GfxAddressMode {
+    ClampToEdge,
+    Repeat,
+    MirroredRepeat,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -723,7 +987,7 @@ pub enum GfxImageType {
     Cube,
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum GfxFilterMode {
     Nearest,
     Linear,
@@ -731,6 +995,7 @@ pub enum GfxFilterMode {
 
 pub struct GfxImageInfo {
     pub resolution: Vector3<u32>,
+    pub format: GfxImageFormat,
 }
 
 impl GfxImageInfo {
@@ -741,7 +1006,11 @@ impl GfxImageInfo {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum GfxImageFormat {
+    R16Float,
     Rgba32Float,
     Rgba8Unorm,
+    Rgba8Srgb,
     D16Unorm,
+    D24UnormS8Uint,
+    D32Float,
 }

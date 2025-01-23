@@ -46,14 +46,13 @@ pub struct ChunkTicket {
     chunk_position: Vector3<i32>,
 }
 
-#[derive(Resource)]
 pub struct VoxelTerrain {
-    chunk_render_distance: u32,
+    pub chunk_render_distance: u32,
 
-    chunk_tree: Option<ChunkTree>,
-    chunk_queue: ChunkProcessingQueue,
-    chunk_loader: ChunkLoader,
-    queue_timer: Timer,
+    pub chunk_tree: Option<ChunkTree>,
+    pub chunk_queue: ChunkProcessingQueue,
+    pub chunk_loader: ChunkLoader,
+    pub queue_timer: Timer,
 }
 
 impl VoxelTerrain {
@@ -68,42 +67,16 @@ impl VoxelTerrain {
         }
     }
 
-    fn initialize_chunk_tree(&mut self) {
+    pub fn initialize_chunk_tree(&mut self) {
         let chunk_tree = ChunkTree::new_with_center(
             Vector3::new(0, 0, 0),
-            //self.chunk_render_distance.next_power_of_two(),
-            16,
+            self.chunk_render_distance.next_power_of_two(),
+        );
+        debug!(
+            "Intialized the terrain chunk tree with a length of {} chunks.",
+            chunk_tree.chunk_side_length
         );
         self.chunk_tree = Some(chunk_tree);
-    }
-
-    pub fn update_post_physics(
-        mut terrain: ResMut<VoxelTerrain>,
-        events: Res<Events>,
-        settings: Res<Settings>,
-        mut ecs_world: ResMut<ECSWorld>,
-        mut voxel_world: ResMut<VoxelWorld>,
-    ) {
-        let terrain: &mut VoxelTerrain = &mut terrain;
-
-        if terrain.chunk_tree.is_none() {
-            terrain.initialize_chunk_tree();
-        };
-
-        // Try enqueue any non enqueued chunks.
-        if !terrain.chunk_queue.chunk_queue.is_full() {
-            terrain.chunk_loader.enqueue_chunks(
-                terrain.chunk_tree.as_mut().unwrap(),
-                &mut terrain.chunk_queue,
-            );
-        }
-
-        // Process next chunk.
-        terrain.chunk_tree.as_mut().unwrap().is_dirty = false;
-        terrain.chunk_queue.handle_enqueued_chunks();
-        terrain
-            .chunk_queue
-            .handle_finished_chunks(terrain.chunk_tree.as_mut().unwrap(), &mut voxel_world);
     }
 
     pub fn try_enqueue_load_chunk(&mut self, chunk_position: Vector3<i32>) {
@@ -148,8 +121,8 @@ impl VoxelTerrain {
 }
 
 pub struct FinishedChunk {
-    chunk_position: Vector3<i32>,
-    esvo: Option<ChunkModelType>,
+    pub chunk_position: Vector3<i32>,
+    pub esvo: Option<ChunkModelType>,
 }
 
 impl FinishedChunk {
@@ -159,12 +132,12 @@ impl FinishedChunk {
 }
 
 pub struct ChunkProcessingQueue {
-    chunk_queue: RingQueue<ChunkTicket>,
-    chunk_generator: ChunkGenerator,
-    chunk_handler_pool: rayon::ThreadPool,
-    chunk_handler_count: u32,
-    finished_chunk_recv: Receiver<FinishedChunk>,
-    finished_chunk_send: Sender<FinishedChunk>,
+    pub chunk_queue: RingQueue<ChunkTicket>,
+    pub chunk_generator: ChunkGenerator,
+    pub chunk_handler_pool: rayon::ThreadPool,
+    pub chunk_handler_count: u32,
+    pub finished_chunk_recv: Receiver<FinishedChunk>,
+    pub finished_chunk_send: Sender<FinishedChunk>,
 }
 
 impl ChunkProcessingQueue {
@@ -197,43 +170,6 @@ impl ChunkProcessingQueue {
         chunk_tree: &mut ChunkTree,
         voxel_world: &mut VoxelWorld,
     ) {
-        const RECIEVED_CHUNKS_PER_FRAME: usize = 1;
-        // Loops until the reciever is empty.
-        'lp: for _ in 0..RECIEVED_CHUNKS_PER_FRAME {
-            match self.finished_chunk_recv.try_recv() {
-                Ok(finished_chunk) => {
-                    self.chunk_handler_count -= 1;
-                    if finished_chunk.is_empty() {
-                        chunk_tree.set_world_chunk_empty(finished_chunk.chunk_position);
-                    } else {
-                        let chunk_name = format!(
-                            "chunk_{}_{}_{}",
-                            finished_chunk.chunk_position.x,
-                            finished_chunk.chunk_position.y,
-                            finished_chunk.chunk_position.z
-                        );
-                        let voxel_model_id = voxel_world.register_renderable_voxel_model(
-                            chunk_name,
-                            VoxelModel::new(finished_chunk.esvo.unwrap()),
-                        );
-                        chunk_tree.set_world_chunk_data(
-                            finished_chunk.chunk_position,
-                            ChunkData { voxel_model_id },
-                        );
-                        debug!(
-                            "Recieved finished chunk {:?}",
-                            finished_chunk.chunk_position
-                        );
-                    }
-                }
-                Err(err) => match err {
-                    std::sync::mpsc::TryRecvError::Disconnected => {
-                        panic!("Shouldn't be disconnected")
-                    }
-                    _ => break 'lp,
-                },
-            }
-        }
     }
 
     pub fn handle_enqueued_chunks(&mut self) {
@@ -276,13 +212,13 @@ impl ChunkTreeNode {
 
 /// Octree that holds chunks.
 pub struct ChunkTree {
-    children: [ChunkTreeNode; 8],
-    chunk_side_length: u32,
-    chunk_half_length: u32,
+    pub children: [ChunkTreeNode; 8],
+    pub chunk_side_length: u32,
+    pub chunk_half_length: u32,
 
     /// Where the origin is the the -XYZ corner of the tree.
-    chunk_origin: Vector3<i32>,
-    is_dirty: bool,
+    pub chunk_origin: Vector3<i32>,
+    pub is_dirty: bool,
 }
 
 impl ChunkTree {
@@ -359,7 +295,7 @@ impl ChunkTree {
         }
     }
 
-    fn set_world_chunk_empty(&mut self, chunk_world_position: Vector3<i32>) {
+    pub fn set_world_chunk_empty(&mut self, chunk_world_position: Vector3<i32>) {
         let morton = self.world_pos_traversal_morton(chunk_world_position);
         self.is_dirty = true;
         return self.set_chunk_empty(morton);
@@ -389,7 +325,11 @@ impl ChunkTree {
         }
     }
 
-    fn set_world_chunk_data(&mut self, chunk_world_position: Vector3<i32>, chunk_data: ChunkData) {
+    pub fn set_world_chunk_data(
+        &mut self,
+        chunk_world_position: Vector3<i32>,
+        chunk_data: ChunkData,
+    ) {
         self.is_dirty = true;
         let morton = self.world_pos_traversal_morton(chunk_world_position);
         return self.set_chunk_data(morton, chunk_data);
@@ -458,8 +398,8 @@ impl ChunkTree {
     }
 }
 
-struct ChunkData {
-    voxel_model_id: VoxelModelId,
+pub struct ChunkData {
+    pub voxel_model_id: VoxelModelId,
 }
 
 // LOD 0 is the highest resolution.
@@ -538,7 +478,7 @@ impl ChunkLoader {
     }
 
     /// Enqueues chunks in an iterator fashion so we don't waste time rechecking chunks.
-    pub fn enqueue_chunks(
+    pub fn enqueue_next_chunk(
         &mut self,
         chunk_tree: &mut ChunkTree,
         chunk_queue: &mut ChunkProcessingQueue,

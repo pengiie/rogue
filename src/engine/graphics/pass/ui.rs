@@ -6,17 +6,22 @@ use std::{
 };
 
 use bytemuck::Zeroable;
+use fixedbitset::IndexRange;
+use log::debug;
+use nalgebra::Vector2;
 use rogue_macros::Resource;
 use wgpu::PipelineCompilationOptions;
 
 use crate::engine::{
     ecs::ecs_world::ECSWorld,
     graphics::{
+        backend::{
+            Buffer, GfxAddressMode, GfxFilterMode, GfxImageCreateInfo, GfxImageFormat, GfxImageType, GfxImageWrite, GfxPassOnceImpl, GfxRenderPassAttachment, GfxSamplerCreateInfo, GraphicsBackendDevice, GraphicsBackendRecorder, Image, ResourceId, Sampler
+        },
         device::DeviceResource,
-        pipeline_manager::{PipelineId, RenderPipelineManager},
+        frame_graph::FrameGraphContext,
         render_contants,
         renderer::Renderer,
-        sampler::{FilterMode, SamplerCache, SamplerId, SamplerInfo},
         shader,
     },
     resource::{Res, ResMut},
@@ -43,154 +48,83 @@ const UI_INDEX_BUFFER_START_COUNT: u64 = 100;
 
 #[derive(Resource)]
 pub struct UIPass {
-    ui_vertex_buffer: wgpu::Buffer,
-    ui_index_buffer: wgpu::Buffer,
-    ui_uniform_buffer: wgpu::Buffer,
-    ui_bind_group_layout: wgpu::BindGroupLayout,
-    ui_textures: HashMap<egui::TextureId, (wgpu::Texture, wgpu::BindGroup)>,
-    ui_samplers: HashMap<egui::TextureOptions, SamplerId>,
-    ui_pipeline: wgpu::RenderPipeline,
+    ui_textures: HashMap<egui::TextureId, (ResourceId<Image>, ResourceId<Sampler>)>,
+    ui_samplers: HashMap<egui::TextureOptions, ResourceId<Sampler>>,
 
     ui_render_prims: Vec<UIRenderPrim>,
     pixels_per_egui_point: f32,
 }
 
 impl UIPass {
-    pub fn new(device: &DeviceResource) -> Self {
-        let ui_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("ui_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::all(),
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        let ui_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui_uniform_buffer"),
-            size: std::mem::size_of::<UIBufferData>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ui_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui_vertex_buffer"),
-            size: UI_VERTEX_BUFFER_START_COUNT * std::mem::size_of::<f32>() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        const UI_INDEX_BUFFER_START_COUNT: u64 = 100;
-        let ui_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui_vertex_buffer"),
-            size: UI_INDEX_BUFFER_START_COUNT * std::mem::size_of::<u32>() as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ui_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ui_shader_module"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader::ui::SOURCE)),
-        });
-        let ui_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("ui_pipeline_layout"),
-            bind_group_layouts: &[&ui_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let ui_vertex_attributes = [
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 8,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 16,
-                shader_location: 2,
-            },
-        ];
-        let ui_vertex_buffer_layout = wgpu::VertexBufferLayout {
-            array_stride: 20,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &ui_vertex_attributes,
-        };
-        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ui_pipeline"),
-            layout: Some(&ui_pipeline_layout),
-            cache: None,
-            vertex: wgpu::VertexState {
-                module: &ui_shader_module,
-                entry_point: "vs_main",
-                compilation_options: PipelineCompilationOptions::default(),
-                buffers: &[ui_vertex_buffer_layout],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &ui_shader_module,
-                entry_point: "fs_main",
-                compilation_options: PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: device.surface_config().format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::all(),
-                })],
-            }),
-            multiview: None,
-        });
+    pub fn new() -> Self {
+        // let ui_vertex_attributes = [
+        //     wgpu::VertexAttribute {
+        //         format: wgpu::VertexFormat::Float32x2,
+        //         offset: 0,
+        //         shader_location: 0,
+        //     },
+        //     wgpu::VertexAttribute {
+        //         format: wgpu::VertexFormat::Float32x2,
+        //         offset: 8,
+        //         shader_location: 1,
+        //     },
+        //     wgpu::VertexAttribute {
+        //         format: wgpu::VertexFormat::Uint32,
+        //         offset: 16,
+        //         shader_location: 2,
+        //     },
+        // ];
+        // let ui_vertex_buffer_layout = wgpu::VertexBufferLayout {
+        //     array_stride: 20,
+        //     step_mode: wgpu::VertexStepMode::Vertex,
+        //     attributes: &ui_vertex_attributes,
+        // };
+        //let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        //    label: Some("ui_pipeline"),
+        //    layout: Some(&ui_pipeline_layout),
+        //    cache: None,
+        //    vertex: wgpu::VertexState {
+        //        module: &ui_shader_module,
+        //        entry_point: "vs_main",
+        //        compilation_options: PipelineCompilationOptions::default(),
+        //        buffers: &[ui_vertex_buffer_layout],
+        //    },
+        //    primitive: wgpu::PrimitiveState {
+        //        topology: wgpu::PrimitiveTopology::TriangleList,
+        //        strip_index_format: None,
+        //        front_face: wgpu::FrontFace::Ccw,
+        //        cull_mode: None,
+        //        unclipped_depth: false,
+        //        polygon_mode: wgpu::PolygonMode::Fill,
+        //        conservative: false,
+        //    },
+        //    depth_stencil: None,
+        //    multisample: wgpu::MultisampleState::default(),
+        //    fragment: Some(wgpu::FragmentState {
+        //        module: &ui_shader_module,
+        //        entry_point: "fs_main",
+        //        compilation_options: PipelineCompilationOptions::default(),
+        //        targets: &[Some(wgpu::ColorTargetState {
+        //            format: device.surface_config().format,
+        //            blend: Some(wgpu::BlendState {
+        //                color: wgpu::BlendComponent {
+        //                    src_factor: wgpu::BlendFactor::One,
+        //                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        //                    operation: wgpu::BlendOperation::Add,
+        //                },
+        //                alpha: wgpu::BlendComponent {
+        //                    src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        //                    dst_factor: wgpu::BlendFactor::One,
+        //                    operation: wgpu::BlendOperation::Add,
+        //                },
+        //            }),
+        //            write_mask: wgpu::ColorWrites::all(),
+        //        })],
+        //    }),
+        //    multiview: None,
+        //});
 
         return Self {
-            ui_vertex_buffer,
-            ui_index_buffer,
-            ui_uniform_buffer,
-            ui_bind_group_layout,
-            ui_pipeline,
             ui_textures: HashMap::new(),
             ui_samplers: HashMap::new(),
             ui_render_prims: Vec::new(),
@@ -198,13 +132,12 @@ impl UIPass {
         };
     }
 
-    pub fn write_render_data(
+    pub fn write_debug_ui_render_data(
         mut ui_pass: ResMut<UIPass>,
-        mut sampler_cache: ResMut<SamplerCache>,
-        device: Res<DeviceResource>,
+        mut renderer: ResMut<Renderer>,
+        mut device: ResMut<DeviceResource>,
         ecs_world: Res<ECSWorld>,
         egui: Res<Egui>,
-        pipeline_manager: Res<RenderPipelineManager>,
         time: Res<Time>,
     ) {
         let ui_pass = ui_pass.deref_mut();
@@ -212,18 +145,6 @@ impl UIPass {
         ui_pass.pixels_per_egui_point = egui.pixels_per_point();
         ui_pass.ui_render_prims.clear();
 
-        // Update uniform buffer.
-        let uniform_data = UIBufferData {
-            screen_size: [
-                device.surface_config().width as f32 / egui.pixels_per_point(),
-                device.surface_config().height as f32 / egui.pixels_per_point(),
-            ],
-        };
-        device.queue().write_buffer(
-            &ui_pass.ui_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniform_data),
-        );
         // Update textures.
         // TODO: Clean this up since the nesting is out of hand.
         if let Some(texture_deltas) = egui.textures_delta() {
@@ -232,15 +153,12 @@ impl UIPass {
                     ui_pass.ui_samplers.entry(delta.options)
                 {
                     let options = &delta.options;
-                    let sampler_id = sampler_cache.get_lazy_id(
-                        SamplerInfo {
-                            mag_filter: options.magnification.into(),
-                            min_filter: options.minification.into(),
-                            address_mode: options.wrap_mode.into(),
-                            mipmap_filter: FilterMode::Nearest,
-                        },
-                        &device,
-                    );
+                    let sampler_id = device.create_sampler(GfxSamplerCreateInfo {
+                        mag_filter: options.magnification.into(),
+                        min_filter: options.minification.into(),
+                        address_mode: options.wrap_mode.into(),
+                        mipmap_filter: GfxFilterMode::Nearest,
+                    });
 
                     e.insert(sampler_id);
                     ui_pass.ui_samplers.get(&delta.options).unwrap()
@@ -250,38 +168,21 @@ impl UIPass {
 
                 if delta.is_whole() {
                     // Get or create textures.
-                    let (texture, _bind_group) = {
+                    let texture = {
                         if !ui_pass.ui_textures.contains_key(id) {
-                            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                                label: Some("ui_texture"),
-                                size: wgpu::Extent3d {
-                                    width: delta.image.size()[0] as u32,
-                                    height: delta.image.size()[1] as u32,
-                                    depth_or_array_layers: 1,
-                                },
-                                mip_level_count: 1,
-                                sample_count: 1,
-                                dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rgba8Unorm,
-                                usage: wgpu::TextureUsages::COPY_DST
-                                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                                view_formats: &[],
+                            let texture = device.create_image(GfxImageCreateInfo {
+                                name: "ui_texture".to_owned(),
+                                image_type: GfxImageType::D2,
+                                extent: Vector2::new(
+                                    delta.image.size()[0] as u32,
+                                    delta.image.size()[1] as u32,
+                                ),
+                                format: GfxImageFormat::Rgba8Srgb,
                             });
-                            let texture_view =
-                                texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                            let sampler = sampler_cache.sampler(*sampler_id);
-                            let bind_group = Self::create_ui_bind_group(
-                                &device,
-                                &ui_pass.ui_bind_group_layout,
-                                sampler,
-                                &texture_view,
-                                &ui_pass.ui_uniform_buffer,
-                            );
-                            ui_pass.ui_textures.insert(*id, (texture, bind_group));
+                            ui_pass.ui_textures.insert(*id, (texture, *sampler_id));
                         }
 
-                        ui_pass.ui_textures.get(id).unwrap()
+                        ui_pass.ui_textures.get(id).unwrap().0
                     };
 
                     if let Some(pos) = delta.pos {
@@ -289,47 +190,21 @@ impl UIPass {
                     }
                     match &delta.image {
                         egui::ImageData::Color(image) => {
-                            device.queue().write_texture(
-                                wgpu::ImageCopyTexture {
-                                    texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                bytemuck::cast_slice(image.pixels.as_slice()),
-                                wgpu::ImageDataLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(4 * image.width() as u32),
-                                    rows_per_image: Some(image.height() as u32),
-                                },
-                                wgpu::Extent3d {
-                                    width: image.width() as u32,
-                                    height: image.height() as u32,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
+                            device.write_image(GfxImageWrite {
+                                image: texture,
+                                data: bytemuck::cast_slice(image.pixels.as_slice()),
+                                offset: Vector2::zeros(),
+                                extent: Vector2::new(image.width() as u32, image.height() as u32),
+                            });
                         }
                         egui::ImageData::Font(font) => {
                             let data = font.srgba_pixels(None).collect::<Vec<egui::Color32>>();
-                            device.queue().write_texture(
-                                wgpu::ImageCopyTexture {
-                                    texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                bytemuck::cast_slice(data.as_slice()),
-                                wgpu::ImageDataLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(4 * font.width() as u32),
-                                    rows_per_image: Some(font.height() as u32),
-                                },
-                                wgpu::Extent3d {
-                                    width: font.width() as u32,
-                                    height: font.height() as u32,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
+                            device.write_image(GfxImageWrite {
+                                image: texture,
+                                data: bytemuck::cast_slice(data.as_slice()),
+                                offset: Vector2::zeros(),
+                                extent: Vector2::new(font.width() as u32, font.height() as u32),
+                            });
                         }
                     }
                 } else {
@@ -355,45 +230,40 @@ impl UIPass {
         }
 
         if total_vertex_count == 0 || total_index_count == 0 {
+            // We maybe don't have to do this.
+            // renderer
+            //     .frame_graph_executor
+            //     .mark_buffer_empty(Renderer::GRAPH.debug_ui.buffer_vertex_buffer);
+            // renderer
+            //     .frame_graph_executor
+            //     .mark_buffer_empty(Renderer::GRAPH.debug_ui.buffer_index_buffer);
             return;
         }
 
-        // Resize buffers to fit vertex and index data.
+        // TODO: Make a `write_buffers` that can take a n-sized tuple of (buffer, size) and the function
+        // will have a n-sized tuple with the corresponding write pointers in the same order.
         let required_vertex_size = std::mem::size_of::<epaint::Vertex>() * total_vertex_count;
-        if ui_pass.ui_vertex_buffer.size() < required_vertex_size as u64 {
-            let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ui_vertex_buffer"),
-                size: required_vertex_size as u64 + (ui_pass.ui_vertex_buffer.size() / 2),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let _ = std::mem::replace(&mut ui_pass.ui_vertex_buffer, new_buffer);
-        }
         let required_index_size = std::mem::size_of::<u32>() * total_index_count;
-        if ui_pass.ui_index_buffer.size() < required_index_size as u64 {
-            let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ui_index_buffer"),
-                size: required_index_size as u64 + (ui_pass.ui_index_buffer.size() / 2),
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let _ = std::mem::replace(&mut ui_pass.ui_index_buffer, new_buffer);
-        }
-
-        let Some(mut writeable_vertex_buffer) = device.queue().write_buffer_with(
-            &ui_pass.ui_vertex_buffer,
-            0,
-            NonZero::new(required_vertex_size as u64).unwrap(),
-        ) else {
-            return;
-        };
-
-        let Some(mut writeable_index_buffer) = device.queue().write_buffer_with(
-            &ui_pass.ui_index_buffer,
-            0,
-            NonZero::new(required_index_size as u64).unwrap(),
-        ) else {
-            return;
+        let writeable_vertex_buffer = renderer
+            .frame_graph_executor
+            .write_buffer(
+                Renderer::GRAPH.debug_ui.buffer_vertex_buffer,
+                required_vertex_size as u64,
+            )
+            .as_mut_ptr();
+        let writeable_index_buffer = renderer
+            .frame_graph_executor
+            .write_buffer(
+                Renderer::GRAPH.debug_ui.buffer_index_buffer,
+                required_index_size as u64,
+            )
+            .as_mut_ptr();
+        // Safety: I just know these pointers are valid since they're mapped to a staging buffer, trust me bro.
+        let (writeable_vertex_buffer, writeable_index_buffer) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(writeable_vertex_buffer, required_vertex_size),
+                std::slice::from_raw_parts_mut(writeable_index_buffer, required_index_size),
+            )
         };
 
         let mut vertex_ptr = 0;
@@ -430,130 +300,108 @@ impl UIPass {
         }
     }
 
-    fn create_ui_bind_group(
-        device: &DeviceResource,
-        layout: &wgpu::BindGroupLayout,
-        texture_sampler: &wgpu::Sampler,
-        texture_view: &wgpu::TextureView,
-        uniform_buffer: &wgpu::Buffer,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ui_bind_group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Sampler(texture_sampler),
+    pub fn write_ui_pass(mut ui_pass: ResMut<UIPass>, mut renderer: ResMut<Renderer>) {
+        let ui_pass: &mut UIPass = &mut ui_pass;
+        renderer.frame_graph_executor.supply_pass_ref(
+            Renderer::GRAPH.debug_ui.pass_ui,
+            
+                &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>| {
+                    if ui_pass.ui_render_prims.is_empty() {
+                        return;
+                    }
+
+                    let backbuffer = ctx.get_image(Renderer::GRAPH.image_backbuffer);
+                    let backbuffer_info = recorder.get_image_info(&backbuffer);
+                    let vertex_buffer =
+                        ctx.get_buffer(Renderer::GRAPH.debug_ui.buffer_vertex_buffer);
+                    let index_buffer = ctx.get_buffer(Renderer::GRAPH.debug_ui.buffer_index_buffer);
+
+                    let raster_pipeline =
+                        ctx.get_raster_pipeline(Renderer::GRAPH.debug_ui.pipeline_raster_ui);
+                    let mut render_pass = recorder.begin_render_pass(raster_pipeline, &[GfxRenderPassAttachment::new_load(backbuffer)], None);
+
+                    let pixels_per_point = ui_pass.pixels_per_egui_point;
+                    let logical_screen_size = Vector2::new(backbuffer_info.resolution.x as f32 / pixels_per_point, backbuffer_info.resolution.y as f32 / pixels_per_point);
+                    for UIRenderPrim {
+                        clip_rect,
+                        vertex_slice,
+                        index_slice,
+                        vertex_count,
+                        texture_id,
+                    } in ui_pass.ui_render_prims.drain(..)
+                    {
+                        // Set scissor.
+                        {
+                            let rect = clip_rect;
+                            if rect.width() == 0.0 || rect.height() == 0.0 {
+                                continue;
+                            }
+
+                            let clip_min_x = pixels_per_point * clip_rect.min.x;
+                            let clip_min_y = pixels_per_point * clip_rect.min.y;
+                            let clip_max_x = pixels_per_point * clip_rect.max.x;
+                            let clip_max_y = pixels_per_point * clip_rect.max.y;
+
+                            // Round to integer:
+                            let clip_min_x = clip_min_x.round() as u32;
+                            let clip_min_y = clip_min_y.round() as u32;
+                            let clip_max_x = clip_max_x.round() as u32;
+                            let clip_max_y = clip_max_y.round() as u32;
+
+                            // Clamp:
+                            let texture_size = backbuffer_info.resolution_xy();
+                            let clip_min_x = clip_min_x.clamp(0, texture_size.x);
+                            let clip_min_y = clip_min_y.clamp(0, texture_size.y);
+                            let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.x);
+                            let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.y);
+                            render_pass.set_scissor(
+                                clip_min_x,
+                                clip_min_y,
+                                clip_max_x - clip_min_x,
+                                clip_max_y - clip_min_y,
+                            );
+                        }
+
+                        let Some((texture, sampler)) = ui_pass.ui_textures.get(&texture_id) else {
+                            panic!("Debug ui render primitive has a texture ID that hasn't been populated in `ui_pass.ui_textures` yet.");
+                        };
+                        render_pass.bind_uniforms(&mut |writer| {
+                            writer.write_uniform("u_shader.screen_size", logical_screen_size);
+                            writer.write_binding("u_shader.texture", *texture);
+                            writer.write_binding("u_shader.sampler", *sampler);
+                        });
+
+                        render_pass.bind_vertex_buffer(
+                            vertex_buffer,
+                            vertex_slice.start().unwrap() as u64,
+                        );
+                        render_pass.bind_index_buffer(
+                            index_buffer,
+                            index_slice.start().unwrap() as u64,
+                        );
+
+                        render_pass.draw_indexed(vertex_count);
+                    }
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: uniform_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                },
-            ],
-        })
+        );
     }
+}
 
-    pub fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        (backbuffer, backbuffer_view): (&wgpu::Texture, &wgpu::TextureView),
-    ) {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &backbuffer_view,
-                resolve_target: None,
-                ops: wgpu::Operations::<wgpu::Color> {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        render_pass.set_pipeline(&self.ui_pipeline);
-
-        for UIRenderPrim {
-            clip_rect,
-            vertex_slice,
-            index_slice,
-            vertex_count,
-            texture_id,
-        } in &self.ui_render_prims
-        {
-            {
-                let rect = clip_rect;
-                if rect.width() == 0.0 || rect.height() == 0.0 {
-                    continue;
-                }
-                let pixels_per_point = self.pixels_per_egui_point;
-                let clip_min_x = pixels_per_point * clip_rect.min.x;
-                let clip_min_y = pixels_per_point * clip_rect.min.y;
-                let clip_max_x = pixels_per_point * clip_rect.max.x;
-                let clip_max_y = pixels_per_point * clip_rect.max.y;
-
-                // Round to integer:
-                let clip_min_x = clip_min_x.round() as u32;
-                let clip_min_y = clip_min_y.round() as u32;
-                let clip_max_x = clip_max_x.round() as u32;
-                let clip_max_y = clip_max_y.round() as u32;
-
-                // Clamp:
-                let texture_size = backbuffer.size();
-                let clip_min_x = clip_min_x.clamp(0, texture_size.width);
-                let clip_min_y = clip_min_y.clamp(0, texture_size.height);
-                let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.width);
-                let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.height);
-                render_pass.set_scissor_rect(
-                    clip_min_x,
-                    clip_min_y,
-                    clip_max_x - clip_min_x,
-                    clip_max_y - clip_min_y,
-                );
-            }
-            let vertex_buffer_slice = self
-                .ui_vertex_buffer
-                .slice(vertex_slice.start as u64..vertex_slice.end as u64);
-            let index_buffer_slice = self
-                .ui_index_buffer
-                .slice(index_slice.start as u64..index_slice.end as u64);
-
-            if let Some((_texture, bind_group)) = self.ui_textures.get(&texture_id) {
-                render_pass.set_bind_group(0, bind_group, &[]);
-                render_pass.set_vertex_buffer(0, vertex_buffer_slice);
-                render_pass.set_index_buffer(index_buffer_slice, wgpu::IndexFormat::Uint32);
-
-                render_pass.draw_indexed(0..*vertex_count, 0, 0..1);
-            } else {
-                todo!("Couldnt find the thingy");
-            }
+impl From<egui::TextureFilter> for GfxFilterMode {
+    fn from(value: egui::TextureFilter) -> Self {
+        match value {
+            egui::TextureFilter::Nearest => Self::Nearest,
+            egui::TextureFilter::Linear => Self::Linear,
         }
     }
 }
 
-pub struct UITask {}
-
-// impl UITask {}
-//
-// impl Into<FrameTask> for UITask {
-//     fn into(self) -> FrameTask {
-//         FrameTask {
-//             dependencies: vec![],
-//             boxed_run: Box::new(|recorder, ctx| {
-//                 recorder.begin_render_pass(|render_pass| {
-//                     render_pass.set_vertex_buffer(ctx.get_buffer());
-//                     render_pass.set_index_buffer(ctx.get_buffer());
-//                 });
-//             }),
-//         }
-//     }
-// }
+impl From<egui::TextureWrapMode> for GfxAddressMode {
+    fn from(value: egui::TextureWrapMode) -> Self {
+        match value {
+            egui::TextureWrapMode::ClampToEdge => Self::ClampToEdge,
+            egui::TextureWrapMode::Repeat => Self::Repeat,
+            egui::TextureWrapMode::MirroredRepeat => Self::MirroredRepeat,
+        }
+    }
+}

@@ -5,7 +5,7 @@ use crate::{
     engine::{
         asset::asset::Assets,
         event::Events,
-        graphics::{device::DeviceResource, renderer::Renderer},
+        graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
         physics::physics_world::PhysicsWorld,
         system::System,
@@ -55,8 +55,8 @@ pub fn game_loop(app: &App) {
 
     app.run_system(PhysicsWorld::do_physics_update);
 
-    // ------- TERRAIN -------
-    app.run_system(VoxelTerrain::update_post_physics);
+    // ------- VOXEL WORLD -------
+    app.run_system(VoxelWorld::update_post_physics);
 
     // ------- UI ---------
 
@@ -70,11 +70,15 @@ pub fn game_loop(app: &App) {
     app.run_system(VoxelWorldGpu::write_render_data);
 
     app.run_system(Renderer::write_common_render_data);
+    app.run_system(UIPass::write_debug_ui_render_data);
 
-    // app.run_system(UIPass::write_render_data);
-
-    // Render the frame to the swapchain.
-    app.run_system(Renderer::finish_frame);
+    // Only continue with frame graph pass writing if we successfully acquired the swapchain since
+    // some images may rely on swapchain info.
+    app.run_system(Renderer::acquire_swapchain_image);
+    if app.get_resource::<Renderer>().did_acquire_swapchain() {
+        app.run_system(UIPass::write_ui_pass);
+        app.run_system(Renderer::finish_frame);
+    }
 
     // ------- FRAME CLEANUP ---------
 

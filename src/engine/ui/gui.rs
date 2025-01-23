@@ -20,7 +20,7 @@ impl Egui {
         let ctx = egui::Context::default();
 
         ctx.set_embed_viewports(true);
-        ctx.set_visuals(egui::Visuals::dark());
+        //ctx.set_visuals(egui::Visuals::dark());
         ctx.set_zoom_factor(1.0);
 
         Self {
@@ -30,7 +30,7 @@ impl Egui {
                 egui::ViewportId::ROOT,
                 window,
                 None,
-                None,
+                Some(winit::window::Theme::Dark),
                 None,
             )),
             viewport_info: egui::ViewportInfo::default(),

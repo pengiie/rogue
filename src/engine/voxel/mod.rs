@@ -13,11 +13,9 @@ pub mod voxel_transform;
 pub mod voxel_world;
 
 pub fn initialize_voxel_world_resources(app: &mut crate::app::App) {
-    let voxel_world = voxel_world::VoxelWorld::new();
+    let voxel_world = voxel_world::VoxelWorld::new(&app.get_resource::<Settings>());
     let voxel_world_gpu = voxel_world::VoxelWorldGpu::new();
-    let voxel_terrain = voxel_terrain::VoxelTerrain::new(&app.get_resource::<Settings>());
 
     app.insert_resource(voxel_world);
     app.insert_resource(voxel_world_gpu);
-    app.insert_resource(voxel_terrain);
 }

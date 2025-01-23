@@ -30,15 +30,10 @@ use crate::{
 use super::device::DeviceResource;
 
 pub const SHADER_DIR: &'static str = "assets/shaders/";
-pub const SHADER_BLIT: &'static str = "blit.slang";
-pub const SHADER_TERRAIN_PREPASS: &'static str = "blit.slang";
 
-#[derive(Resource)]
 pub struct ShaderCompiler {
     global_session: slang::GlobalSession,
-
-    cached_shaders: HashMap<ShaderCompilationOptions, Shader>,
-
+    cached_shaders: HashMap<ShaderDesc, Shader>,
     shader_constants: HashMap<String, String>,
 }
 
@@ -51,12 +46,12 @@ pub struct ShaderCompilationOptions {
     pub macro_defines: HashMap<String, String>,
 }
 
-impl std::hash::Hash for ShaderCompilationOptions {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.module.hash(state);
-        self.entry_point.hash(state);
-        self.stage.hash(state);
-        self.target.hash(state);
+impl ShaderCompilationOptions {
+    fn get_desc(&self) -> ShaderDesc {
+        ShaderDesc {
+            module: ShaderPath::new_unchecked(self.module.clone()),
+            entry_point_name: self.entry_point.clone(),
+        }
     }
 }
 
@@ -80,6 +75,12 @@ pub struct ShaderSetBinding {
     pub global_uniform_binding_index: Option<u32>,
     pub global_uniforms_used: bool,
     pub global_uniforms_size: u32,
+}
+
+impl ShaderSetBinding {
+    pub fn merge_clone(&self, other: &ShaderSetBinding) -> ShaderSetBinding {
+        todo!("merge clone this set aggregating the used bindings between both sets.");
+    }
 }
 
 impl PartialEq for ShaderSetBinding {
@@ -226,6 +227,15 @@ impl ShaderCompiler {
         }
     }
 
+    pub fn get_shader(&self, options: &ShaderCompilationOptions) -> &Shader {
+        self.cached_shaders
+            .get(&options.get_desc())
+            .expect(&format!(
+                "Failed to get shader with path `{:?}`",
+                options.module
+            ))
+    }
+
     pub fn invalidate_cache(&mut self) {
         self.cached_shaders.clear();
     }
@@ -274,25 +284,25 @@ impl ShaderCompiler {
         Ok(shader_bindings)
     }
 
-    pub fn compile_shader<'a>(
-        &'a mut self,
-        options: ShaderCompilationOptions,
-    ) -> anyhow::Result<&'a Shader> {
-        match self.cached_shaders.entry(options) {
+    fn compile_shader_ref(&mut self, options: ShaderCompilationOptions) -> anyhow::Result<&Shader> {
+        let shader: anyhow::Result<&mut Shader> = match self
+            .cached_shaders
+            .entry(options.get_desc())
+        {
             Entry::Occupied(e) => {
                 //todo!("Check modified date of file");
                 Ok(e.into_mut())
             }
             Entry::Vacant(e) => {
-                let options = e.key();
-
                 let search_path = std::ffi::CString::new("assets/shaders").unwrap();
 
                 let targets = [*TargetDescBuilder::new().format(options.target.into())];
 
                 let mut slang_opts = OptionsBuilder::new()
                     .stage(options.stage.into())
-                    .warnings_as_errors("all");
+                    .warnings_as_errors("all")
+                    .emit_spirv_directly(true)
+                    .vk_use_entry_point_name(true);
                 for (key, value) in &self.shader_constants {
                     slang_opts = slang_opts.macro_define(key, value);
                 }
@@ -330,11 +340,13 @@ impl ShaderCompiler {
                     })?;
                 let program = session
                     .create_composite_component_type(&[
-                        // Must include lib module to get reflection info for its defined global
-                        // parameters.
-                        lib_module.downcast().clone(),
                         module.downcast().clone(),
                         entry_point.downcast().clone(),
+                        // Must include lib module to get reflection info for its defined global
+                        // parameters, however include it last since for some reason it will try
+                        // and take up set binding space even if it is not used in the resulting
+                        // SPIR-V. TODO: Figure out how to properly get the set index.
+                        lib_module.downcast().clone(),
                     ])
                     .map_err(|err| anyhow!("Failed to create shader program.\nSlang: {:?}", err))?;
                 let linked_program = program.link().expect("Failed to link slang program.");
@@ -358,6 +370,7 @@ impl ShaderCompiler {
 
                 let shader = Shader {
                     code_blob: kernel_blob,
+                    module_name: options.module.clone(),
                     entry_point_name: options.entry_point.clone(),
                     bindings: shader_bindings,
                     pipline_info: shader_pipeline_info,
@@ -376,7 +389,43 @@ impl ShaderCompiler {
 
                 Ok(e.insert(shader))
             }
+        };
+
+        Ok(shader?)
+    }
+
+    pub fn compile_shader<'a>(
+        &'a mut self,
+        options: ShaderCompilationOptions,
+    ) -> anyhow::Result<&'a Shader> {
+        self.compile_shader_ref(options)
+    }
+
+    pub fn compile_shader_pair<'a>(
+        &'a mut self,
+        options_a: ShaderCompilationOptions,
+        options_b: ShaderCompilationOptions,
+    ) -> anyhow::Result<(&'a Shader, &'a Shader)> {
+        if options_a == options_b {
+            panic!("Should not call `compile_shader_pair` if the options are equal.");
         }
+
+        let desc_a = options_a.get_desc();
+        let desc_b = options_b.get_desc();
+
+        match self.compile_shader_ref(options_a) {
+            Ok(ptr) => {}
+            Err(err) => anyhow::bail!(err),
+        };
+        match self.compile_shader_ref(options_b) {
+            Ok(ptr) => {}
+            Err(err) => anyhow::bail!(err),
+        };
+
+        Ok((
+            self.cached_shaders.get(&desc_a).unwrap(),
+            self.cached_shaders.get(&desc_b).unwrap(),
+        ))
     }
 
     fn reflect_bindings(
@@ -394,11 +443,11 @@ impl ShaderCompiler {
             mut uniform_offset: u32,
         ) {
             let ty_layout = var_layout.type_layout();
-            debug!(
-                "Processing var layout: {:?}, type: {:?}",
-                var_layout.variable().name(),
-                ty_layout.kind()
-            );
+            // debug!(
+            //     "Processing var layout: {:?}, type: {:?}",
+            //     var_layout.variable().name(),
+            //     ty_layout.kind()
+            // );
             let var_name = var_layout.variable().name().unwrap().to_owned();
             let var_name = if parent_var_name.is_empty() {
                 var_name
@@ -415,7 +464,7 @@ impl ShaderCompiler {
                     binding_offset += offset;
                 }
 
-                debug!("Category: {:?}, offset: {}", category, offset,);
+                // debug!("Category: {:?}, offset: {}", category, offset,);
             }
 
             let is_used_binding = metadata.map_or(true, |metadata| {
@@ -442,10 +491,10 @@ impl ShaderCompiler {
             // TODO: Slang doesn't support querying whether uniforms are used, so always pretend
             // they are used for now.
             let is_used_uniform = true;
-            debug!(
-                "Is used binding {}, uniform {}",
-                is_used_binding, is_used_uniform
-            );
+            // debug!(
+            //     "Is used binding {}, uniform {}",
+            //     is_used_binding, is_used_uniform
+            // );
 
             match ty_layout.kind() {
                 slang::TypeKind::Resource => 'm: {
@@ -461,7 +510,7 @@ impl ShaderCompiler {
                         );
                         break 'm;
                     }
-                    debug!("Resource with resource kind {:?}, binding: ", shape);
+                    // debug!("Resource with resource kind {:?}, binding: ", shape);
 
                     let binding_type = match ty_layout.resource_shape() {
                         slang::ResourceShape::SlangTexture2d => match ty_layout.resource_access() {
@@ -510,6 +559,18 @@ impl ShaderCompiler {
                         );
                     }
                 }
+                slang::TypeKind::SamplerState => {
+                    set.bindings.insert(
+                        var_name,
+                        (
+                            ShaderBinding::Slot {
+                                binding_index: binding_offset,
+                                binding_type: ShaderBindingType::Sampler,
+                            },
+                            is_used_binding,
+                        ),
+                    );
+                }
                 slang::TypeKind::Scalar => {
                     let size = ty_layout.size(slang::ParameterCategory::Uniform) as u32;
                     let offset = uniform_offset;
@@ -520,6 +581,78 @@ impl ShaderCompiler {
                         kind => todo!("Need to implement scalar kind {:?}", kind),
                     };
 
+                    set.bindings.insert(
+                        var_name,
+                        (
+                            ShaderBinding::Uniform {
+                                expected_type,
+                                size,
+                                offset,
+                            },
+                            is_used_uniform,
+                        ),
+                    );
+                }
+                slang::TypeKind::Vector => 'm: {
+                    let expected_type = match (ty_layout.scalar_type(), ty_layout.element_count()) {
+                        (slang::ScalarType::Float32, 2) => {
+                            Some(std::any::TypeId::of::<nalgebra::Vector2<f32>>())
+                        }
+                        (slang::ScalarType::Float32, 3) => {
+                            Some(std::any::TypeId::of::<nalgebra::Vector3<f32>>())
+                        }
+                        _ => None,
+                    };
+
+                    let Some(expected_type) = expected_type else {
+                        log::error!(
+                            "Slang vector type with {} elements and scalar type {:?} is not supported.",
+                            ty_layout.element_count(), ty_layout.scalar_type()
+                        );
+                        break 'm;
+                    };
+
+                    let size = ty_layout.size(slang::ParameterCategory::Uniform) as u32;
+                    let offset = uniform_offset;
+                    set.bindings.insert(
+                        var_name,
+                        (
+                            ShaderBinding::Uniform {
+                                expected_type,
+                                size,
+                                offset,
+                            },
+                            is_used_uniform,
+                        ),
+                    );
+                }
+                slang::TypeKind::Matrix => 'm: {
+                    let rows = ty_layout.row_count();
+                    let cols = ty_layout.column_count();
+
+                    let expected_type = match (rows, cols) {
+                        (4, 4) => match ty_layout.scalar_type() {
+                            slang::ScalarType::Float32 => Some(std::any::TypeId::of::<[f32; 16]>()),
+                            _ => None,
+                        },
+                        (3, 3) => match ty_layout.scalar_type() {
+                            slang::ScalarType::Float32 => Some(std::any::TypeId::of::<[f32; 12]>()),
+                            _ => None,
+                        },
+                        (rows, cols) => None,
+                    };
+
+                    let Some(expected_type) = expected_type else {
+                        log::error!(
+                            "Slang matrix type with {}x{} elements is not supported.",
+                            rows,
+                            cols
+                        );
+                        break 'm;
+                    };
+
+                    let size = ty_layout.size(slang::ParameterCategory::Uniform) as u32;
+                    let offset = uniform_offset;
                     set.bindings.insert(
                         var_name,
                         (
@@ -545,25 +678,25 @@ impl ShaderCompiler {
             descriptor_slot_offset: Option<u32>,
         ) {
             let ty_layout = var_layout.type_layout();
-            debug!(
-                "Processing scope: {:?}, type: {:?}",
-                var_layout.variable().name(),
-                ty_layout.kind()
-            );
+            // debug!(
+            //     "Processing scope: {:?}, type: {:?}",
+            //     var_layout.variable().name(),
+            //     ty_layout.kind()
+            // );
 
             for category_index in 0..var_layout.category_count() {
                 let category = var_layout.category_by_index(category_index);
                 let offset = var_layout.offset(category);
                 let space = var_layout.binding_space_with_category(category);
                 let binding_space = var_layout.binding_space();
-                debug!(
-                    "Category: {:?}, offset: {}, space: {}, binding_space: {}, size: {}",
-                    category,
-                    offset,
-                    space,
-                    binding_space,
-                    ty_layout.size(category)
-                );
+                // debug!(
+                //     "Category: {:?}, offset: {}, space: {}, binding_space: {}, size: {}",
+                //     category,
+                //     offset,
+                //     space,
+                //     binding_space,
+                //     ty_layout.size(category)
+                // );
             }
 
             match ty_layout.kind() {
@@ -623,7 +756,9 @@ impl ShaderCompiler {
                 for global_field in global_type_layout.fields() {
                     let field_type = global_field.type_layout();
                     assert_eq!(field_type.kind(), slang::TypeKind::ParameterBlock);
-                    let set_index = global_field.binding_index();
+                    let set_index = global_field
+                        .offset(slang::ParameterCategory::SubElementRegisterSpace)
+                        + global_field.offset(slang::ParameterCategory::RegisterSpace);
                     let set_param_block_name = global_field.variable().name().unwrap();
 
                     let mut bindings = ShaderSetBinding {
@@ -673,12 +808,16 @@ impl ShaderCompiler {
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct ShaderPath {
     path: String,
 }
 
 impl ShaderPath {
+    pub fn new_unchecked(path: String) -> Self {
+        Self { path }
+    }
+
     pub fn new(path: String) -> anyhow::Result<Self> {
         let regex =
             regex::Regex::new(r"^(([a-zA-Z]+)(_[a-zA-Z]+)*)(::(([a-zA-Z]+)(_[a-zA-Z]+)*))*$")
@@ -711,6 +850,7 @@ impl ShaderPath {
 
 pub struct Shader {
     code_blob: slang::Blob,
+    module_name: String,
     entry_point_name: String,
     bindings: Vec<ShaderSetBinding>,
     pipline_info: ShaderPipelineInfo,
@@ -731,6 +871,10 @@ impl Shader {
 
     pub fn pipeline_info(&self) -> &ShaderPipelineInfo {
         &self.pipline_info
+    }
+
+    pub fn module_name(&self) -> &str {
+        &self.module_name
     }
 
     pub fn entry_point_name(&self) -> &str {
@@ -785,4 +929,10 @@ impl ShaderModificationTree {
 
         tree
     }
+}
+
+#[derive(Hash, Clone, PartialEq, Eq, Debug)]
+pub struct ShaderDesc {
+    pub module: ShaderPath,
+    pub entry_point_name: String,
 }
