@@ -71,10 +71,9 @@ public struct RayDDA {
   }
 
   public bool in_bounds() {
-    return true;
-    // return this.curr_grid.x >= 0 && this.curr_grid.y >= 0 && 
-    //        this.curr_grid.z >= 0 && this.curr_grid.x < this.bounds.x && 
-    //        this.curr_grid.y < this.bounds.y && this.curr_grid.z < this.bounds.z;
+    return this.curr_grid.x >= 0 && this.curr_grid.y >= 0 && 
+           this.curr_grid.z >= 0 && this.curr_grid.x < this.bounds.x && 
+           this.curr_grid.y < this.bounds.y && this.curr_grid.z < this.bounds.z;
   }
 
   public uint3 curr_grid_pos() {
@@ -202,3 +201,7 @@ public uint3 decode(uint val) {
 }
 
 } // namespace morton
+
+public uint morton_encode(uint3 val) {
+  return morton::encode(val);
+}

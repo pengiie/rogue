@@ -412,6 +412,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
         let mut esvo = VoxelModelESVO::empty(length, true);
         esvo.attachment_map = flat.attachment_map.clone();
 
+        // With just the root node being a height of 1, since log2(2) == 1.
         let height = length.trailing_zeros() as usize;
         let mut levels = (0..=height)
             .map(|_| Vec::new())
@@ -432,41 +433,42 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
 
                 // Try and pop a level if it is full recursively.
                 for h in (1..=height).rev() {
-                    if levels[h as usize].len() == 8 {
-                        let mut child_mask = 0;
-                        let mut child_ptr = u32::MAX;
-                        for octant in 0..8usize {
-                            if levels[h][octant].is_empty() {
-                                continue;
-                            }
-                            child_mask |= 1 << octant;
-                            if h == height {
-                                continue;
-                            }
-                            if child_ptr == u32::MAX {
-                                child_ptr = node_list.len() as u32;
-                            }
-                            node_list.push(levels[h][octant].clone());
-                        }
-                        levels[h].clear();
-
-                        if child_mask == 0 {
-                            levels[h - 1].push(FlatESVONode::empty());
+                    if levels[h as usize].len() != 8 {
+                        break;
+                    }
+                    let mut child_mask = 0;
+                    let mut child_ptr = u32::MAX;
+                    for octant in 0..8usize {
+                        if levels[h][octant].is_empty() {
                             continue;
                         }
-                        //debug!("STACKING OUT LEVEL {}", h);
-
-                        // Since we are on the leaf layer, we don't have any nodes to push.
-                        let mut meta_node = FlatESVONode::zero();
-                        meta_node.set_valid_mask(child_mask);
-                        if h < height {
-                            meta_node.child_ptr = child_ptr;
-                        } else {
-                            meta_node.set_leaf_mask(child_mask);
+                        child_mask |= 1 << octant;
+                        if h == height {
+                            continue;
                         }
-                        //debug!("height: {}, pushed: {}", h, child_mask);
-                        levels[h - 1].push(meta_node);
+                        if child_ptr == u32::MAX {
+                            child_ptr = node_list.len() as u32;
+                        }
+                        node_list.push(levels[h][octant].clone());
                     }
+                    levels[h].clear();
+
+                    if child_mask == 0 {
+                        levels[h - 1].push(FlatESVONode::empty());
+                        continue;
+                    }
+                    //debug!("STACKING OUT LEVEL {}", h);
+
+                    // Since we are on the leaf layer, we don't have any nodes to push.
+                    let mut meta_node = FlatESVONode::zero();
+                    meta_node.set_valid_mask(child_mask);
+                    if h < height {
+                        meta_node.child_ptr = child_ptr;
+                    } else {
+                        meta_node.set_leaf_mask(child_mask);
+                    }
+                    //debug!("height: {}, pushed: {}", h, child_mask);
+                    levels[h - 1].push(meta_node);
                 }
             }
         }

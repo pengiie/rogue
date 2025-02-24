@@ -52,5 +52,4 @@ float4 main_fs(VertexOut input) {
   let texture_color = u_shader.texture.Sample(u_shader.sampler, input.uv);
   return float4(color::lsrgb_to_srgb(input.color.rgb * texture_color.rgb),
                 input.color.a * texture_color.a);
-  //return texture_color * input.color;
 }

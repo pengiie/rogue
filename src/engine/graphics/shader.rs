@@ -302,7 +302,11 @@ impl ShaderCompiler {
                     .stage(options.stage.into())
                     .warnings_as_errors("all")
                     .emit_spirv_directly(true)
-                    .vk_use_entry_point_name(true);
+                    .vk_use_entry_point_name(true)
+                    .capability(
+                        self.global_session
+                            .find_capability("SPV_KHR_non_semantic_info"),
+                    );
                 for (key, value) in &self.shader_constants {
                     slang_opts = slang_opts.macro_define(key, value);
                 }
@@ -717,6 +721,26 @@ impl ShaderCompiler {
                         descriptor_slot_offset,
                     );
                 }
+                slang::TypeKind::ConstantBuffer => {
+                    for category_index in 0..var_layout.category_count() {
+                        let category = var_layout.category_by_index(category_index);
+                        let offset = var_layout.offset(category);
+                        if category == slang::ParameterCategory::Uniform {
+                            debug!("Uniform Constant Buffer catorgory with ofset {}", offset);
+                        } else if category == slang::ParameterCategory::DescriptorTableSlot {
+                            debug!(
+                                "Uniform Constant Buffer catorgory slot slot with ofset {}",
+                                offset
+                            );
+                        }
+                    }
+                    process_global_scope(
+                        metadata,
+                        set,
+                        ty_layout.element_var_layout(),
+                        descriptor_slot_offset,
+                    );
+                }
                 slang::TypeKind::Struct => {
                     for category_index in 0..var_layout.category_count() {
                         let category = var_layout.category_by_index(category_index);
@@ -769,6 +793,13 @@ impl ShaderCompiler {
                         global_uniforms_used: false,
                         global_uniforms_size: 0,
                     };
+                    for category_index in 0..global_field.category_count() {
+                        let category = global_field.category_by_index(category_index);
+                        if category == slang::ParameterCategory::DescriptorTableSlot {
+                            bindings.global_uniform_binding_index =
+                                Some(global_field.offset(category) as u32);
+                        }
+                    }
                     process_global_scope(metadata, &mut bindings, global_field, None);
                     bindings.global_uniforms_used = bindings
                         .bindings

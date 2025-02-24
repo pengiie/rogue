@@ -6,6 +6,7 @@ pub mod attachment;
 pub mod chunk_generator;
 pub mod esvo;
 pub mod flat;
+pub mod thc;
 pub mod unit;
 pub mod voxel;
 pub mod voxel_terrain;

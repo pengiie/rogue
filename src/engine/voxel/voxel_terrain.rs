@@ -31,11 +31,12 @@ use crate::{
 
 use super::{
     chunk_generator::ChunkGenerator,
+    thc::VoxelModelTHC,
     voxel_transform::VoxelModelTransform,
     voxel_world::{VoxelModelId, VoxelWorld},
 };
 
-type ChunkModelType = VoxelModelESVO;
+type ChunkModelType = VoxelModelTHC;
 
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },

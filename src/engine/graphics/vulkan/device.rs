@@ -863,7 +863,17 @@ impl VulkanDevice {
         p_callback_data: *const ash::vk::DebugUtilsMessengerCallbackDataEXT,
         _p_user_data: *mut std::ffi::c_void,
     ) -> ash::vk::Bool32 {
-        let message = std::ffi::CStr::from_ptr((*p_callback_data).p_message);
+        let message = std::ffi::CStr::from_ptr((*p_callback_data).p_message)
+            .to_str()
+            .unwrap();
+        if message.contains("VVL-DEBUG-PRINTF") {
+            let first_bar = message.find("|").unwrap();
+            let message = &message[(first_bar + 1)..];
+            let second_bar = message.find("|").unwrap();
+            log::debug!("Shader printf: {}", message[(second_bar + 1)..].trim());
+            return ash::vk::FALSE;
+        }
+
         let ty = format!("{:?}", message_type).to_lowercase();
         let message = format!("[{}] {:?}", ty, message);
 
@@ -2953,7 +2963,7 @@ impl VulkanResourceManager {
 
         let src_offset = staging_buffer.curr_write_pointer;
         staging_buffer.curr_write_pointer += write_len;
-        assert!(staging_buffer.curr_write_pointer < staging_buffer.size);
+        assert!(staging_buffer.curr_write_pointer <= staging_buffer.size);
 
         let mut copy_tasks = self.copy_tasks.write();
         let mut staging_buffer_copy_tasks = copy_tasks.entry(staging_buffer_index).or_default();

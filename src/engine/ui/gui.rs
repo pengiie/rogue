@@ -20,8 +20,12 @@ impl Egui {
         let ctx = egui::Context::default();
 
         ctx.set_embed_viewports(true);
-        //ctx.set_visuals(egui::Visuals::dark());
+        ctx.set_visuals(egui::Visuals::dark());
         ctx.set_zoom_factor(1.0);
+        ctx.style_mut(|style| {
+            let window_shadow = &mut style.visuals.window_shadow;
+            window_shadow.offset = egui::vec2(4.0, 4.0);
+        });
 
         Self {
             ctx: ctx.clone(),

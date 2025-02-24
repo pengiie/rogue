@@ -592,11 +592,11 @@ impl VoxelWorldGpu {
         }
 
         if voxel_world_gpu.voxel_data_allocator.is_none() {
-            // 1 gig
+            // 2 gig
             voxel_world_gpu.voxel_data_allocator = Some(GpuBufferAllocator::new(
                 &mut device,
                 "voxel_data_allocator",
-                1 << 30,
+                1 << 31,
             ));
             voxel_world_gpu.mark_dirty();
         }
@@ -627,19 +627,17 @@ impl VoxelWorldGpu {
         };
 
         // Update gpu model buffer data (Do this first so the allocation data is ready to reference).
+        for (entity, (mut voxel_model, mut voxel_model_gpu)) in
+            voxel_world.renderable_models_dyn_iter_mut()
         {
-            for (entity, (mut voxel_model, mut voxel_model_gpu)) in
-                voxel_world.renderable_models_dyn_iter_mut()
-            {
-                voxel_model_gpu.deref_mut().write_gpu_updates(
-                    &mut device,
-                    allocator,
-                    voxel_model.deref_mut() as &mut dyn VoxelModelImpl,
-                );
-            }
+            voxel_model_gpu.deref_mut().write_gpu_updates(
+                &mut device,
+                allocator,
+                voxel_model.deref_mut() as &mut dyn VoxelModelImpl,
+            );
         }
 
-        // Write any new renderable voxel models registered in the past frame.
+        // Write any new renderable voxel model infos registered in the past frame.
         // TODO: Change from clone and figure out borrow checker stuff.
         for new_renderable_id in voxel_world_gpu
             .frame_state

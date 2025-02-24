@@ -10,7 +10,7 @@ struct Uniforms {
   WTexture2D<float4> backbuffer;
 }
 
-extern ParameterBlock<Uniforms> u_shader;
+extern ParameterBlock<ConstantBuffer<Uniforms>> u_shader;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]

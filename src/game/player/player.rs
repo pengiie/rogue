@@ -43,7 +43,7 @@ impl Player {
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();
         let (_player_entity, (transform, camera, player)) = player_query.player();
 
-        if input.is_key_pressed(Key::Escape) {
+        if input.is_key_pressed(Key::Escape) || input.is_key_pressed(Key::Tab) {
             player.paused = !player.paused;
             window.set_cursor_grabbed(!player.paused);
             window.set_cursor_visible(player.paused);
