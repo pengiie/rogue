@@ -1,6 +1,7 @@
 use core::panic;
 use std::{
     array,
+    borrow::Borrow,
     collections::HashMap,
     fmt::{Pointer, Write},
     ops::BitOrAssign,
@@ -12,7 +13,7 @@ use log::debug;
 use nalgebra::Vector3;
 
 use crate::{
-    common::{bitset::Bitset, morton::morton_decode},
+    common::{aabb::AABB, bitset::Bitset, morton::morton_decode, ray::Ray},
     consts,
     engine::graphics::{
         device::{DeviceResource, GfxDevice},
@@ -25,45 +26,53 @@ use super::{
     esvo::{VoxelModelESVO, VoxelModelESVONode},
     voxel::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema,
+        VoxelModelImplConcrete, VoxelModelRange, VoxelModelSchema,
     },
 };
 
 /// A float 1D array representing a 3D voxel region.
 #[derive(Clone)]
 pub struct VoxelModelFlat {
-    pub attachment_data: HashMap<Attachment, Vec<u32>>,
-    pub attachment_presence_data: HashMap<Attachment, Bitset>,
+    pub attachment_data: HashMap<AttachmentId, Vec<u32>>,
+    pub attachment_presence_data: HashMap<AttachmentId, Bitset>,
     pub attachment_map: AttachmentMap,
     pub presence_data: Bitset,
-    length: Vector3<u32>,
+    side_length: Vector3<u32>,
     volume: usize,
+    update_tracker: u32,
 }
 
 impl VoxelModelFlat {
     pub fn new(
         presence_data: Bitset,
-        attachment_data: HashMap<Attachment, Vec<u32>>,
-        attachment_presence_data: HashMap<Attachment, Bitset>,
+        attachment_data: HashMap<AttachmentId, Vec<u32>>,
+        attachment_presence_data: HashMap<AttachmentId, Bitset>,
+        attachment_map: AttachmentMap,
         length: Vector3<u32>,
     ) -> Self {
         let volume = length.product() as usize;
 
         // Ensure all data fits the expected volume.
         assert_eq!(presence_data.bits(), volume as usize);
-        for (attachment, data) in &attachment_data {
-            assert_eq!(attachment.size() as usize * volume as usize, data.len());
+        for (attachment_id, attachment) in attachment_map.iter() {
+            assert_eq!(
+                attachment_presence_data.get(attachment_id).unwrap().bits(),
+                volume as usize
+            );
+            assert_eq!(
+                attachment_data.get(attachment_id).unwrap().len(),
+                attachment.size() as usize * volume
+            );
         }
-        for (attachment, data) in &attachment_presence_data {
-            assert_eq!(data.bits(), volume as usize);
-        }
+
         Self {
             presence_data,
             attachment_data,
             attachment_presence_data,
             attachment_map: AttachmentMap::new(),
-            length,
+            side_length: length,
             volume,
+            update_tracker: 0,
         }
     }
 
@@ -73,6 +82,7 @@ impl VoxelModelFlat {
             Bitset::new(volume as usize),
             HashMap::new(),
             HashMap::new(),
+            AttachmentMap::new(),
             length,
         )
     }
@@ -83,15 +93,15 @@ impl VoxelModelFlat {
 
     pub fn get_voxel_index(&self, position: Vector3<u32>) -> usize {
         position.x as usize
-            + position.y as usize * self.length.x as usize
-            + position.z as usize * (self.length.x as usize * self.length.y as usize)
+            + position.y as usize * self.side_length.x as usize
+            + position.z as usize * (self.side_length.x as usize * self.side_length.y as usize)
     }
 
     pub fn get_voxel_position(&self, index: usize) -> Vector3<u32> {
         Vector3::new(
-            (index % self.length.x as usize) as u32,
-            ((index / self.length.x as usize) % self.length.y as usize) as u32,
-            (index / (self.length.x as usize * self.length.y as usize)) as u32,
+            (index % self.side_length.x as usize) as u32,
+            ((index / self.side_length.x as usize) % self.side_length.y as usize) as u32,
+            (index / (self.side_length.x as usize * self.side_length.y as usize)) as u32,
         )
     }
 
@@ -111,12 +121,22 @@ impl VoxelModelFlat {
         }
     }
 
-    pub fn in_bounds(&self, position: Vector3<u32>) -> bool {
-        !(position.x >= self.length.x || position.y >= self.length.y || position.z >= self.length.z)
+    pub fn remove_voxel(&mut self, position: Vector3<u32>) {
+        let index = self.get_voxel_index(position);
+        self.presence_data.set_bit(index, false);
+        for (_, data) in &mut self.attachment_presence_data {
+            data.set_bit(index, false);
+        }
     }
 
-    pub fn length(&self) -> &Vector3<u32> {
-        &self.length
+    pub fn in_bounds(&self, position: Vector3<u32>) -> bool {
+        !(position.x >= self.side_length.x
+            || position.y >= self.side_length.y
+            || position.z >= self.side_length.z)
+    }
+
+    pub fn side_length(&self) -> &Vector3<u32> {
+        &self.side_length
     }
 
     pub fn volume(&self) -> usize {
@@ -148,19 +168,19 @@ impl std::fmt::Debug for VoxelModelFlat {
         let mut nodes_str = String::new();
         nodes_str.push_str(&format!(
             "length: {}x{}x{}\n",
-            self.length.x, self.length.y, self.length.z
+            self.side_length.x, self.side_length.y, self.side_length.z
         ));
-        if (self.length.x * self.length.y * self.length.z > 256) {
+        if (self.side_length.x * self.side_length.y * self.side_length.z > 256) {
             nodes_str.push_str("Flat model is too big to print out to stdout.\n");
         } else {
             nodes_str.push_str("presence: \n");
-            for y in 0..self.length.x {
+            for y in 0..self.side_length.x {
                 nodes_str.push_str(&format!("Y: {}\n", y));
-                for z in 0..self.length.y {
+                for z in 0..self.side_length.y {
                     let mut row = String::new();
-                    for x in 0..self.length.z {
+                    for x in 0..self.side_length.z {
                         let voxel = self.get_voxel(Vector3::new(x, y, z));
-                        let char = if voxel.is_empty() { '0' } else { '1' };
+                        let char = if !voxel.exists() { '0' } else { '1' };
                         row.push(char);
                     }
                     row.push_str("\n");
@@ -229,8 +249,8 @@ pub struct VoxelModelFlatVoxelAccess<'a> {
 }
 
 impl<'a> VoxelModelFlatVoxelAccess<'a> {
-    pub fn is_empty(&self) -> bool {
-        !self.flat_model.presence_data.get_bit(self.index)
+    pub fn exists(&self) -> bool {
+        self.flat_model.presence_data.get_bit(self.index)
     }
 
     pub fn get_attachment_data(&self) -> impl Iterator<Item = (u8, &[u32])> {
@@ -250,6 +270,7 @@ impl<'a> VoxelModelFlatVoxelAccess<'a> {
                     return None;
                 }
 
+                let attachment = self.flat_model.attachment_map.get_attachment(*attachment);
                 let i = attachment.size() as usize * self.index;
                 let data = &data[i..(i + attachment.size() as usize)];
                 Some((attachment.id(), data))
@@ -263,6 +284,22 @@ pub struct VoxelModelFlatVoxelAccessMut<'a> {
 }
 
 impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
+    /// Expects attachment id to be registered and present, and hashmaps to be populated.
+    pub fn set_attachment_id(&mut self, attachment_id: u8, value: &[u32]) {
+        let attachment = self.flat_model.attachment_map.get_attachment(attachment_id);
+        self.flat_model.presence_data.set_bit(self.index, true);
+        self.flat_model
+            .attachment_presence_data
+            .get_mut(&attachment_id)
+            .unwrap()
+            .set_bit(self.index, true);
+        let initial_offset = self.index * attachment.size() as usize;
+        self.flat_model
+            .attachment_data
+            .get_mut(&attachment_id)
+            .unwrap()[initial_offset..(initial_offset + attachment.size() as usize)]
+            .copy_from_slice(value);
+    }
     pub fn set_attachment<T: Pod>(&mut self, attachment: Attachment, value: Option<T>) {
         self.flat_model
             .presence_data
@@ -278,13 +315,13 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
             if !self
                 .flat_model
                 .attachment_presence_data
-                .contains_key(&attachment)
+                .contains_key(&attachment.id())
             {
                 self.flat_model
                     .attachment_presence_data
-                    .insert(attachment.clone(), Bitset::new(self.flat_model.volume));
+                    .insert(attachment.id(), Bitset::new(self.flat_model.volume));
                 self.flat_model.attachment_data.insert(
-                    attachment.clone(),
+                    attachment.id(),
                     vec![0u32; attachment.size() as usize * self.flat_model.volume()],
                 );
             }
@@ -292,7 +329,7 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
             // Mark attachment presence.
             self.flat_model
                 .attachment_presence_data
-                .get_mut(&attachment)
+                .get_mut(&attachment.id())
                 .unwrap()
                 .set_bit(self.index, true);
 
@@ -300,7 +337,7 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
             let mut attachment_data = self
                 .flat_model
                 .attachment_data
-                .get_mut(&attachment)
+                .get_mut(&attachment.id())
                 .unwrap()
                 .as_mut_slice();
 
@@ -313,7 +350,7 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
             if let Some(attachment_presence_data) = self
                 .flat_model
                 .attachment_presence_data
-                .get_mut(&attachment)
+                .get_mut(&attachment.id())
             {
                 // Unmark attachment presence if it exists.
                 attachment_presence_data.set_bit(self.index, false);
@@ -408,7 +445,11 @@ impl From<VoxelModelFlat> for VoxelModelESVO {
 
 impl From<&VoxelModelFlat> for VoxelModelESVO {
     fn from(flat: &VoxelModelFlat) -> Self {
-        let length = flat.length().map(|x| x.next_power_of_two()).max().max(2);
+        let length = flat
+            .side_length()
+            .map(|x| x.next_power_of_two())
+            .max()
+            .max(2);
         let mut esvo = VoxelModelESVO::empty(length, true);
         esvo.attachment_map = flat.attachment_map.clone();
 
@@ -425,7 +466,7 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
             if flat.in_bounds(pos) {
                 let flat_voxel = flat.get_voxel(pos);
 
-                if !flat_voxel.is_empty() {
+                if flat_voxel.exists() {
                     levels[height as usize].push(FlatESVONode::zero())
                 } else {
                     levels[height as usize].push(FlatESVONode::empty())
@@ -590,8 +631,57 @@ impl VoxelModelImplConcrete for VoxelModelFlat {
 }
 
 impl VoxelModelImpl for VoxelModelFlat {
-    fn set_voxel_range_impl(&mut self, range: super::voxel::VoxelRange) {
-        todo!()
+    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<Vector3<u32>> {
+        let mut ray = ray.clone();
+        let Some(model_t) = ray.intersect_aabb(aabb) else {
+            return None;
+        };
+        ray.advance(model_t);
+
+        let mut dda = ray.begin_dda(aabb, self.side_length);
+        while (dda.in_bounds()) {
+            let curr_grid_pos = dda.curr_grid_pos().map(|x| x as u32);
+            let voxel = self.get_voxel(curr_grid_pos);
+            if (voxel.exists()) {
+                return Some(curr_grid_pos);
+            }
+            dda.step();
+        }
+
+        return None;
+    }
+
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelRange) {
+        self.update_tracker += 1;
+        let other = &range.data;
+        self.attachment_map.inherit_other(&other.attachment_map);
+        for (attachment_id, attachment) in other.attachment_map.iter() {
+            if !self.attachment_presence_data.contains_key(attachment_id) {
+                assert!(!self.attachment_data.contains_key(attachment_id));
+                self.attachment_presence_data
+                    .insert(*attachment_id, Bitset::new(self.volume));
+                self.attachment_data.insert(
+                    attachment.id(),
+                    vec![0u32; attachment.size() as usize * self.volume()],
+                );
+            }
+        }
+
+        for i in 0..other.volume {
+            let src_voxel = VoxelModelFlatVoxelAccess {
+                flat_model: other,
+                index: i,
+            };
+            let dst_pos = range.offset + other.get_voxel_position(i);
+            if src_voxel.exists() {
+                let mut dst_voxel = self.get_voxel_mut(dst_pos);
+                for (attachment_id, data) in src_voxel.get_attachment_data() {
+                    dst_voxel.set_attachment_id(attachment_id, data);
+                }
+            } else {
+                self.remove_voxel(dst_pos);
+            }
+        }
     }
 
     fn schema(&self) -> VoxelModelSchema {
@@ -599,7 +689,7 @@ impl VoxelModelImpl for VoxelModelFlat {
     }
 
     fn length(&self) -> Vector3<u32> {
-        self.length
+        self.side_length
     }
 }
 
@@ -610,6 +700,17 @@ pub struct VoxelModelFlatGpu {
     voxel_attachment_data_allocations: HashMap<AttachmentId, Allocation>,
 
     initialized_data: bool,
+    update_tracker: u32,
+}
+
+impl VoxelModelFlatGpu {
+    pub fn on_model_update(
+        &mut self,
+        device: &mut GfxDevice,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) {
+    }
 }
 
 impl VoxelModelGpuImplConcrete for VoxelModelFlatGpu {
@@ -619,7 +720,9 @@ impl VoxelModelGpuImplConcrete for VoxelModelFlatGpu {
             voxel_presence_allocation: None,
             voxel_attachment_presence_allocations: HashMap::new(),
             voxel_attachment_data_allocations: HashMap::new(),
+
             initialized_data: false,
+            update_tracker: 0,
         }
     }
 }
@@ -688,35 +791,68 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             did_allocate = true;
         }
 
-        for (attachment_id, presence_bitset) in &model.attachment_presence_data {
-            if !self
-                .voxel_attachment_presence_allocations
-                .contains_key(&attachment_id.id())
-            {
-                let presence_allocation_size = presence_bitset.data().len() * 4;
-                self.voxel_attachment_presence_allocations.insert(
-                    attachment_id.id(),
-                    allocator
-                        .allocate(presence_allocation_size as u64)
-                        .expect("Failed to allocate flat attachment presence data."),
-                );
-                did_allocate = true;
-            }
-        }
+        if self.update_tracker != model.update_tracker || !self.initialized_data {
+            for (attachment_id, presence_bitset) in &model.attachment_presence_data {
+                let req_presence_allocation_size = presence_bitset.data().len() as u64 * 4;
+                match self
+                    .voxel_attachment_presence_allocations
+                    .entry(*attachment_id)
+                {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        let old_allocation = e.get();
+                        if old_allocation.length_bytes() < req_presence_allocation_size {
+                            let new_allocation = allocator
+                                .reallocate(e.get(), req_presence_allocation_size)
+                                .expect("Failed to reallocate flat attachment presence data.");
 
-        for (attachment_id, attachment_data) in &model.attachment_data {
-            if !self
-                .voxel_attachment_data_allocations
-                .contains_key(&attachment_id.id())
-            {
-                let attachment_data_allocation_size = attachment_data.len() * 4;
-                self.voxel_attachment_data_allocations.insert(
-                    attachment_id.id(),
-                    allocator
-                        .allocate(attachment_data_allocation_size as u64)
-                        .expect("Failed to allocate flat attachment data."),
-                );
-                did_allocate = true;
+                            // If we reallocate we may keep the same pointer, so we need to
+                            // only update our allocation info if the pointer is different.
+                            if old_allocation.start_index_stride_bytes()
+                                != new_allocation.start_index_stride_bytes()
+                            {
+                                did_allocate = true;
+                            }
+                            e.insert(new_allocation);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(vacant) => {
+                        vacant.insert(
+                            allocator
+                                .allocate(req_presence_allocation_size as u64)
+                                .expect("Failed to allocate flat attachment presence data."),
+                        );
+                        did_allocate = true;
+                    }
+                }
+            }
+
+            for (attachment_id, attachment_data) in &model.attachment_data {
+                let req_data_allocation_size = attachment_data.len() as u64 * 4;
+                match self.voxel_attachment_data_allocations.entry(*attachment_id) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        let old_allocation = e.get();
+                        if old_allocation.length_bytes() < req_data_allocation_size {
+                            let new_allocation = allocator
+                                .reallocate(e.get(), req_data_allocation_size)
+                                .expect("Failed to reallocate flat attachment raw data.");
+
+                            if old_allocation.start_index_stride_bytes()
+                                != new_allocation.start_index_stride_bytes()
+                            {
+                                did_allocate = true;
+                            }
+                            e.insert(new_allocation);
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(vacant) => {
+                        vacant.insert(
+                            allocator
+                                .allocate(req_data_allocation_size as u64)
+                                .expect("Failed to allocate flat attachment raw data."),
+                        );
+                        did_allocate = true;
+                    }
+                }
             }
         }
 
@@ -731,8 +867,11 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
     ) {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();
 
-        if !self.initialized_data && self.voxel_presence_allocation.is_some() {
-            self.flat_length = model.length;
+        // Update the gpu model if we haven't initialized or the model has been updated.
+        if (!self.initialized_data || self.update_tracker != model.update_tracker)
+            && self.voxel_presence_allocation.is_some()
+        {
+            self.flat_length = model.side_length;
 
             allocator.write_allocation_data(
                 device,
@@ -740,11 +879,13 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 bytemuck::cast_slice::<u32, u8>(model.presence_data.data()),
             );
 
-            for (attachment, presence_data) in &model.attachment_presence_data {
+            for (attachment_id, presence_data) in &model.attachment_presence_data {
                 let allocation = self
                     .voxel_attachment_presence_allocations
-                    .get(&attachment.id())
-                    .expect("Voxel attachment presence allocation should've been allocated at this point.");
+                    .get(attachment_id)
+                    .expect(
+                    "Voxel attachment presence allocation should've been allocated at this point.",
+                );
 
                 allocator.write_allocation_data(
                     device,
@@ -753,11 +894,13 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 );
             }
 
-            for (attachment, attachment_data) in &model.attachment_data {
+            for (attachment_id, attachment_data) in &model.attachment_data {
                 let allocation = self
                     .voxel_attachment_data_allocations
-                    .get(&attachment.id())
-                    .expect("Voxel attachment presence allocation should've been allocated at this point.");
+                    .get(attachment_id)
+                    .expect(
+                    "Voxel attachment presence allocation should've been allocated at this point.",
+                );
 
                 allocator.write_allocation_data(
                     device,
@@ -766,6 +909,13 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 );
             }
 
+            if self.initialized_data {
+                debug!(
+                    "Flat model updating from update {} to {}.",
+                    self.update_tracker, model.update_tracker
+                );
+            }
+            self.update_tracker = model.update_tracker;
             self.initialized_data = true;
             return;
         }

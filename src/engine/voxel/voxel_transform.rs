@@ -48,6 +48,10 @@ impl VoxelModelTransform {
             VoxelModelRotationAnchor::Center => (min + max) * 0.5,
         };
 
-        OBB::new(AABB::new(min, max), self.rotation, rotation_anchor)
+        OBB::new(
+            AABB::new_two_point(min, max),
+            self.rotation,
+            rotation_anchor,
+        )
     }
 }

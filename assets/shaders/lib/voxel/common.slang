@@ -51,6 +51,7 @@ public struct Terrain {
     }
 
      return RayTerrainTest.hit(float3(i / 512.0), 0.0);
+     //return RayTerrainTest.hit(float3(0.1), 0.0);
   }
 }
 
@@ -92,9 +93,99 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
     case consts::VOXEL_MODEL_SCHEMA_THC:
       let thc = THC(aabb, voxel_model_ptr);
       return thc.trace(ray);
+    case consts::VOXEL_MODEL_SCHEMA_FLAT:
+      let flat = Flat(aabb, voxel_model_ptr);
+      return flat.trace(ray);
   }
 
   return RayModelTest.miss();
+}
+
+public struct Flat {
+  AABB root_aabb;
+  uint voxel_model_ptr;
+  uint3 side_length; 
+                        
+  uint presence_data_ptr;
+
+  public __init(AABB in_aabb, uint in_voxel_model_ptr) {
+    let info_data = u_frame.voxel.model_info_data;
+    
+    root_aabb = in_aabb;
+    voxel_model_ptr = in_voxel_model_ptr;
+    side_length = uint3(
+      info_data.Load<uint>((voxel_model_ptr + 1) << 2),
+      info_data.Load<uint>((voxel_model_ptr + 2) << 2),
+      info_data.Load<uint>((voxel_model_ptr + 3) << 2)
+    );
+    presence_data_ptr = info_data.Load<uint>((voxel_model_ptr + 4) << 2);
+  }
+
+  public RayModelTest trace(Ray in_ray) {
+    let root_hit_info = ray_aabb_test(in_ray, this.root_aabb);
+
+    var dda = RayDDA(in_ray.advance_clone(root_hit_info.t_enter),
+                     this.root_aabb,
+                     this.side_length);
+    var i = 0;
+    while (dda.in_bounds() && i < 4321) {
+      let grid_pos = dda.curr_grid_pos();
+      let voxel_index = grid_pos.x + this.side_length.x * grid_pos.y + (this.side_length.x * this.side_length.y) * grid_pos.z;
+      let presence_u32 = u_frame.voxel.model_voxel_data.Load<uint>((this.presence_data_ptr + (voxel_index / 32)) << 2);
+      let is_present = (presence_u32 & (1 << (voxel_index % 32))) > 0;
+      if (is_present) {
+        if (let pt_material = this.load_ptmaterial(voxel_index)) {
+          //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
+          return RayModelTest.hit(pt_material, 0.0);
+        }
+        return RayModelTest.hit(float3(0.5), 0.0);
+      }
+
+      dda.step();
+      i += 1;
+    }
+
+    return RayModelTest.miss();
+  }
+
+  private Optional<uint> load_attachment_ptr(uint attachment_index, uint voxel_index) {
+    let info_data = u_frame.voxel.model_info_data;
+    let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 5 + attachment_index) << 2);
+    if (attachment_presence_ptr == 0xFFFFFFFF) {
+      return none;
+    }
+
+    let attachment_raw_ptr = info_data.Load<uint>((voxel_model_ptr + 5 + consts::VOXEL_ATTACHMENT_COUNT + attachment_index) << 2);
+    if (attachment_raw_ptr == 0xFFFFFFFF) {
+      return none;
+    }
+
+    let attachment_mask = u_frame.voxel.model_voxel_data.Load<uint>((attachment_presence_ptr + (voxel_index / 32)) << 2);
+    let is_attachment_present = (attachment_mask & (1 << (voxel_index % 32))) > 0;
+    if (!is_attachment_present) {
+      return none;
+    }
+
+    return attachment_raw_ptr + voxel_index;
+  }
+
+  private Optional<float3> load_ptmaterial(uint voxel_index) {
+    let ptmaterial_data_ptr_opt = this.load_attachment_ptr(0, voxel_index);
+    if (ptmaterial_data_ptr_opt == none) {
+      return none;
+    }
+    let ptmaterial_data_ptr = ptmaterial_data_ptr_opt.value;
+    let compressed_ptmaterial = u_frame.voxel.model_voxel_data.Load<uint>(ptmaterial_data_ptr << 2);
+    if (testglobal) {
+      //printf("mat is %u\n", compressed_ptmaterial);
+    }
+
+    return color::srgb_to_lsrgb(float3(
+      (float) ((compressed_ptmaterial >> 16) & 0xFF) / 255.0,
+      (float) ((compressed_ptmaterial >> 8) & 0xFF) / 255.0,
+      (float) (compressed_ptmaterial & 0xFF) / 255.0,
+    ));
+  }
 }
 
 struct ESVOStackItem {
@@ -200,7 +291,8 @@ public struct ESVO {
 
   public RayModelTest trace(Ray ray) {
     let root_hit_info = ray_aabb_test(ray, this.root_aabb);
-
+ 
+                        
     var curr_octant = ESVO.next_octant_morton(ray, this.root_aabb.center, root_hit_info.t_enter);
     var curr_aabb = ESVO.next_octant_aabb(this.root_aabb, curr_octant);
     var curr_node_index = 1u; // 0u is our page header.
@@ -220,7 +312,8 @@ public struct ESVO {
       let is_octant_present = (value_mask & (0x1u << curr_octant)) > 0;
       if (should_push && is_octant_present) {
         let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
-        if (is_leaf) {
+        if (is_leaf) { 
+                        
           let depth_t = octant_hit_info.t_enter;
           // More vibrant.
           return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 12.0) / 1028.0, log((i * 16.0) / 1028.0), (i * 8.0) / 1028.0)), depth_t);
@@ -326,27 +419,26 @@ public struct THC {
     // Local-space position with the origin being the AABB minimum.
     let relative_model_pos = ray.origin - this.root_aabb.min();
     // Normalize the local-space to [0, 1), mapping from the AABB side length.
-    let norm_model_pos = clamp(relative_model_pos / this.root_aabb.side_length(), 0.0, 0.99999);
+    let norm_model_pos = relative_model_pos / this.root_aabb.side_length();
     // Turn the local-space position from [0, 1) to [0, this.side_length).
-    let norm_grid_pos = norm_model_pos * (float3) this.side_length;
+    let norm_grid_pos = clamp(norm_model_pos * (float3) this.side_length, float3(0.0), (float3) (this.side_length - 1));
     let norm_ray = Ray(norm_grid_pos, ray.dir, ray.inv_dir);
 
     var curr_node_idx = 0;
     uint curr_node_stack[8];
     var curr_height = 0;
-    var curr_global_grid = (int3) floor(norm_grid_pos);
     // The local grid position in an octant with the range [0, 3].
-    var curr_local_grid = curr_global_grid >> (this.height * 2);
-    var curr_anchor_grid = int3(0);
     var curr_ray = norm_ray;
+    var curr_local_grid = ((int3) floor(curr_ray.origin)) >> (this.height * 2);
+    var curr_anchor_grid = int3(0);
 
     let unit_grid = (int3) sign(ray.dir);
 
     var i = 0;
     if (testglobal) {
-      //printf("INIT THE VOXEL!!!!!\n");
+      printf("INIT THE VOXEL!!!!!\n");
     }
-    while(this.in_bounds(curr_global_grid) && i < 200) {
+    while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 100) {
       if (testglobal) {
         //printf("next iter\n");
       }
@@ -356,6 +448,7 @@ public struct THC {
                        curr_local_grid.y > 3 || curr_local_grid.z > 3;
       if (should_pop) {
         if (curr_height == 0) {
+          //break;
           return RayModelTest.hit(float3(1.0, 0.0, 0.0), 0.0);
         }
 
@@ -405,6 +498,10 @@ public struct THC {
           curr_height += 1;
 
           curr_anchor_grid += curr_local_grid * curr_node_size;
+
+          int3 curr_global_grid = (int3) curr_ray.origin;
+          curr_global_grid = clamp(curr_global_grid, curr_anchor_grid, curr_anchor_grid + curr_node_size - 1);
+
           curr_local_grid = curr_global_grid >> ((this.height - curr_height) * 2); 
           curr_local_grid &= 3;
           continue;
@@ -421,17 +518,19 @@ public struct THC {
       let mask = curr_t == next_t;
       curr_local_grid += int3(mask) * unit_grid; 
       if (testglobal) {
-        //printf("OLD global: %d %d %d\n", curr_global_grid.x, curr_global_grid.y, curr_global_grid.z);
+        printf("OLD global: %f %f %f\n", curr_ray.origin.x, curr_ray.origin.y, curr_ray.origin.z);
       }
-      curr_ray.advance(max(next_t, 0.0001));
-      curr_global_grid = (int3) floor(curr_ray.origin);
+      curr_ray.advance(next_t + 0.001);
       if (testglobal) {
-        //printf("NEW global: %d %d %d\n", curr_global_grid.x, curr_global_grid.y, curr_global_grid.z);
+        printf("NEW global: %f %f %f\n", curr_ray.origin.x, curr_ray.origin.y, curr_ray.origin.z);
       }
     }
 
-    //return RayModelTest.hit(float3((float) curr_height / 2.0), 0.0);
-    return RayModelTest.miss();
+if (curr_height == 0) {
+    return RayModelTest.hit(float3(0.0, 1.0, 0.0), 0.0);
+}
+    return RayModelTest.hit(float3((float) curr_height / 2.0), 0.0);
+    //return RayModelTest.miss();
   }
 
   private uint load_node(uint node_index) {

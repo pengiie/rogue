@@ -1,6 +1,9 @@
+use egui::Separator;
 use gui::Egui;
 use log::debug;
-use state::DebugUIState;
+use rogue_macros::Resource;
+
+use crate::common::color::Color;
 
 use super::{
     graphics::renderer::Renderer,
@@ -10,43 +13,89 @@ use super::{
         time::{Instant, Time},
         window::Window,
     },
+    world::game_world::GameWorld,
 };
 
 pub mod gui;
-pub mod state;
 
 pub fn initialize_debug_ui_resource(app: &mut crate::app::App) {
     let egui = Egui::new(&app.get_resource::<Window>());
     app.insert_resource(egui);
-    app.insert_resource(DebugUIState::default());
+    app.insert_resource(UI::new());
 }
 
-pub struct UI {}
+#[derive(Resource)]
+pub struct UI {
+    pub debug_state: DebugUIState,
+}
+
+pub struct DebugUIState {
+    pub zoom_factor: f32,
+    pub player_fov: f32,
+    pub fps: u32,
+    pub delta_time_ms: f32,
+    pub samples: u32,
+    pub polling_time_ms: u32,
+    pub draw_grid: bool,
+
+    pub brush_size: u32,
+    pub brush_color: Color,
+
+    pub last_ui_update: Instant,
+}
+
+impl Default for DebugUIState {
+    fn default() -> Self {
+        Self {
+            zoom_factor: 1.0,
+            player_fov: 90.0,
+            fps: 0,
+            samples: 0,
+            delta_time_ms: 0.0,
+            polling_time_ms: 250,
+            draw_grid: true,
+
+            brush_size: 1,
+            brush_color: Color::new_srgb(1.0, 0.2, 1.0),
+
+            last_ui_update: Instant::now(),
+        }
+    }
+}
 
 impl UI {
+    pub fn new() -> Self {
+        UI {
+            debug_state: DebugUIState::default(),
+        }
+    }
+
     pub fn update(
         mut egui: ResMut<Egui>,
-        mut state: ResMut<DebugUIState>,
+        mut ui: ResMut<UI>,
         time: Res<Time>,
         renderer: Res<Renderer>,
     ) {
         // Determine if we should poll for the current fps, ensures the fps doesn't change
         // rapidly where it is unreadable.
-        if state.last_ui_update.elapsed().as_millis() >= state.polling_time_ms.into() {
-            state.last_ui_update = Instant::now();
+        if ui.debug_state.last_ui_update.elapsed().as_millis()
+            >= ui.debug_state.polling_time_ms.into()
+        {
+            ui.debug_state.last_ui_update = Instant::now();
 
-            state.fps = time.fps();
-            state.delta_time_ms = time.delta_time().as_micros() as f32 / 1000.0;
-            //state.samples = renderer.sample_count();
+            ui.debug_state.fps = time.fps();
+            ui.debug_state.delta_time_ms = time.delta_time().as_micros() as f32 / 1000.0;
         }
     }
 
     pub fn draw(
         window: Res<Window>,
         mut egui: ResMut<Egui>,
-        mut state: ResMut<DebugUIState>,
+        mut ui: ResMut<UI>,
+        mut game_world: ResMut<GameWorld>,
         voxel_world: Res<VoxelWorldGpu>,
     ) {
+        let debug_state = &mut ui.debug_state;
         egui.resolve_ui(&window, |ctx| {
             let mut total_allocation_str;
             let al = voxel_world
@@ -62,20 +111,32 @@ impl UI {
                 total_allocation_str = format!("{:.3}B", al);
             }
 
-            egui::Window::new("diagnostics")
+            egui::Window::new("Debug")
                 .current_pos(egui::pos2(4.0, 4.0))
                 .movable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!("FPS: {}", state.fps));
-                    ui.label(format!("Samples: {}", state.samples));
-                    ui.label(format!("Frame time: {}ms", state.delta_time_ms));
-                    ui.label(format!("Currently allocated: {}", total_allocation_str));
-                    ui.add(
-                        egui::Slider::new(&mut state.player_fov, 10.0..=170.0)
-                            .text("fov")
-                            .drag_value_speed(0.1),
-                    );
-                    ui.add(egui::Checkbox::new(&mut state.draw_grid, "Grid"));
+                    ui.set_width(150.0);
+
+                    ui.label(egui::RichText::new("Performance:").size(16.0));
+                    ui.label(format!("FPS: {}", debug_state.fps));
+                    ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("World:").size(16.0));
+                        if game_world.is_io_busy() {
+                            ui.disable();
+                        }
+
+                        if ui.add(egui::Button::new("Save").rounding(4.0)).clicked() {
+                            game_world.save();
+                        }
+
+                        if ui.add(egui::Button::new("Load").rounding(4.0)).clicked() {
+                            game_world.load();
+                        }
+                    });
                 });
         });
     }

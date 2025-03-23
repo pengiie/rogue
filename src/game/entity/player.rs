@@ -1,3 +1,4 @@
+use core::f32;
 use std::borrow::Borrow;
 
 use log::debug;
@@ -6,15 +7,17 @@ use nalgebra::{AbstractRotation, Rotation3, Translation3, UnitQuaternion, Vector
 use crate::{
     engine::{
         ecs::ecs_world::ECSWorld,
-        graphics::camera::Camera,
+        graphics::camera::{Camera, MainCamera},
         input::{keyboard::Key, Input},
         physics::transform::Transform,
         resource::{Res, ResMut},
-        ui::state::DebugUIState,
+        ui::UI,
         window::{time::Time, window::Window},
     },
     settings::Settings,
 };
+
+use super::{GameEntity, GameEntityType};
 
 pub struct Player {
     euler: Vector3<f32>,
@@ -31,13 +34,13 @@ impl Player {
         }
     }
 
-    pub fn update_player(
+    pub fn update(
         ecs_world: ResMut<ECSWorld>,
         input: Res<Input>,
         time: Res<Time>,
         settings: Res<Settings>,
         window: Res<Window>,
-        ui_state: Res<DebugUIState>,
+        ui: Res<UI>,
     ) {
         let mut player_query =
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();
@@ -51,7 +54,9 @@ impl Player {
 
         let md = input.mouse_delta();
         if (md.0 != 0.0 || md.1 != 0.0) && !player.paused {
-            player.euler.x += md.1 * settings.mouse_sensitivity;
+            // Clamp up and down yaw.
+            player.euler.x = (player.euler.x + md.1 * settings.mouse_sensitivity)
+                .clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
             player.euler.y += md.0 * settings.mouse_sensitivity;
         }
         transform.isometry.rotation =
@@ -83,6 +88,19 @@ impl Player {
 
         transform.isometry.translation.vector +=
             translation * speed * time.delta_time().as_secs_f32();
-        //println!("FPS: {:?}", time.fps());
+    }
+
+    pub fn spawn(mut ecs_world: ResMut<ECSWorld>, mut main_camera: ResMut<MainCamera>) {
+        if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
+            panic!("Player already spawned.");
+        }
+
+        let player = ecs_world.spawn((
+            GameEntity::new(GameEntityType::Player).set_name("a_player_name"),
+            Player::new(),
+            Camera::new(90.0),
+            Transform::with_translation(Translation3::new(-0.0, -2.0, -6.0)),
+        ));
+        main_camera.set_camera(player, "player_camera");
     }
 }

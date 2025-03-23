@@ -23,11 +23,11 @@ use crate::{
         physics::physics_world::PhysicsWorld,
         resource::{Res, ResMut, Resource, ResourceBank},
         system::System,
-        ui::{gui::Egui, state::DebugUIState},
+        ui::gui::Egui,
         voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
-    game::{self, player::player::Player, world::game_world::GameWorld},
+    game::{self, entity::player::Player},
     game_loop,
     settings::Settings,
 };

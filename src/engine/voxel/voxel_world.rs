@@ -16,9 +16,10 @@ use crate::{
         aabb::AABB,
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
+        morton::morton_encode,
         ray::Ray,
     },
-    consts::voxel::VOXEL_METER_LENGTH,
+    consts::{self, voxel::VOXEL_METER_LENGTH},
     engine::{
         ecs::ecs_world::ECSWorld,
         event::Events,
@@ -29,17 +30,18 @@ use crate::{
         },
         physics::transform::Transform,
         resource::{Res, ResMut},
-        voxel::{voxel_terrain::ChunkData, voxel_world},
+        voxel::{voxel::VoxelModelRange, voxel_terrain::ChunkData, voxel_world},
     },
     settings::Settings,
 };
 
 use super::{
+    cursor::VoxelEdit,
     esvo::{VoxelModelESVO, VoxelModelESVOGpu},
+    flat::VoxelModelFlat,
     voxel::{
         RenderableVoxelModelRef, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl,
         VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
-        VoxelRange,
     },
     voxel_terrain::{self, ChunkTreeGpu, VoxelTerrain},
     voxel_transform::VoxelModelTransform,
@@ -80,7 +82,7 @@ pub struct VoxelWorld {
     type_vtables: HashMap<TypeId, *mut ()>,
     id_counter: u64,
 
-    terrain: VoxelTerrain,
+    pub terrain: VoxelTerrain,
 }
 
 impl VoxelWorld {
@@ -104,20 +106,15 @@ impl VoxelWorld {
     ) {
         let terrain: &mut VoxelTerrain = &mut voxel_world.terrain;
 
-        if terrain.chunk_tree.is_none() {
-            terrain.initialize_chunk_tree();
-        };
-
         // Try enqueue any non enqueued chunks.
         if terrain.queue_timer.try_complete() && !terrain.chunk_queue.chunk_queue.is_full() {
-            terrain.chunk_loader.enqueue_next_chunk(
-                terrain.chunk_tree.as_mut().unwrap(),
-                &mut terrain.chunk_queue,
-            );
+            terrain
+                .chunk_loader
+                .enqueue_next_chunk(&mut terrain.chunk_tree, &mut terrain.chunk_queue);
         }
 
         // Process next chunk.
-        terrain.chunk_tree.as_mut().unwrap().is_dirty = false;
+        terrain.chunk_tree.is_dirty = false;
         terrain.chunk_queue.handle_enqueued_chunks();
 
         const RECIEVED_CHUNKS_PER_FRAME: usize = 1;
@@ -135,8 +132,6 @@ impl VoxelWorld {
                         voxel_world
                             .terrain
                             .chunk_tree
-                            .as_mut()
-                            .unwrap()
                             .set_world_chunk_empty(finished_chunk.chunk_position);
                     } else {
                         let chunk_name = format!(
@@ -145,19 +140,19 @@ impl VoxelWorld {
                             finished_chunk.chunk_position.y,
                             finished_chunk.chunk_position.z
                         );
+                        // TODO: inherit chunk uuid on loading.
+                        let chunk_uuid = uuid::Uuid::new_v4();
                         let voxel_model_id = voxel_world.register_renderable_voxel_model(
                             chunk_name,
                             VoxelModel::new(finished_chunk.esvo.unwrap()),
                         );
-                        voxel_world
-                            .terrain
-                            .chunk_tree
-                            .as_mut()
-                            .unwrap()
-                            .set_world_chunk_data(
-                                finished_chunk.chunk_position,
-                                ChunkData { voxel_model_id },
-                            );
+                        voxel_world.terrain.chunk_tree.set_world_chunk_data(
+                            finished_chunk.chunk_position,
+                            ChunkData {
+                                chunk_uuid,
+                                voxel_model_id,
+                            },
+                        );
                         debug!(
                             "Recieved finished chunk {:?}",
                             finished_chunk.chunk_position
@@ -174,8 +169,125 @@ impl VoxelWorld {
         }
     }
 
-    pub fn trace(&self, ray: &Ray) {
-        todo!("trace voxel world.");
+    /// Returns the hit voxel with the corresponding ray.
+    pub fn trace_terrain(&self, mut ray: Ray, _max_t: f32) -> Option<Vector3<i32>> {
+        let chunks_aabb = self.terrain.chunks_aabb();
+        let Some(terrain_t) = ray.intersect_aabb(&chunks_aabb) else {
+            return None;
+        };
+        ray.advance(terrain_t);
+        let mut chunk_dda = self.terrain.chunks_dda(&ray);
+        while (chunk_dda.in_bounds()) {
+            let morton = morton_encode(chunk_dda.curr_grid_pos().map(|x| x as u32));
+            if let Some(chunk_data) = self.terrain.chunk_tree.get_chunk_data(morton) {
+                let chunk_local = self.get_dyn_model(chunk_data.voxel_model_id);
+                let chunks_aabb_min = chunks_aabb.min
+                    + chunk_dda
+                        .curr_grid_pos()
+                        .map(|x| x as f32 * consts::voxel::TERRAIN_CHUNK_METER_LENGTH);
+                let chunk_aabb = AABB::new_two_point(
+                    chunks_aabb_min,
+                    chunks_aabb_min
+                        + Vector3::new(
+                            consts::voxel::TERRAIN_CHUNK_METER_LENGTH,
+                            consts::voxel::TERRAIN_CHUNK_METER_LENGTH,
+                            consts::voxel::TERRAIN_CHUNK_METER_LENGTH,
+                        ),
+                );
+                if let Some(local_chunk_hit) = chunk_local.trace(&ray, &chunk_aabb) {
+                    return Some(
+                        (self.terrain.chunk_tree.chunk_origin + chunk_dda.curr_grid_pos())
+                            .map(|x| x * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32)
+                            + local_chunk_hit.cast::<i32>(),
+                    );
+                }
+            }
+            chunk_dda.step();
+        }
+
+        return None;
+    }
+
+    pub fn apply_voxel_edit(
+        &mut self,
+        edit: VoxelEdit,
+        f: impl Fn(
+            &mut VoxelModelFlat,
+            /*world_voxel_pos*/ Vector3<i32>,
+            /*local_voxel_pos=*/ Vector3<u32>,
+        ),
+    ) {
+        log::info!(
+            "Applying edit at {:?} with length {:?}.",
+            edit.world_voxel_position,
+            edit.world_voxel_length
+        );
+        let edit_voxel_max = edit.world_voxel_position + edit.world_voxel_length.cast::<i32>();
+        let chunk_min = edit
+            .world_voxel_position
+            .map(|x| x.div_euclid(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32));
+        let chunk_max = (edit_voxel_max + Vector3::new(-1, -1, -1))
+            .map(|x| x.div_euclid(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32));
+        for chunk_x in chunk_min.x..=chunk_max.x {
+            for chunk_y in chunk_min.y..=chunk_max.y {
+                for chunk_z in chunk_min.z..=chunk_max.z {
+                    let rel_chunk = Vector3::new(chunk_x, chunk_y, chunk_z)
+                        - self.terrain.chunk_tree.chunk_origin;
+                    if (rel_chunk.x < 0
+                        || rel_chunk.y < 0
+                        || rel_chunk.z < 0
+                        || rel_chunk.x >= self.terrain.chunk_tree.chunk_side_length as i32
+                        || rel_chunk.y >= self.terrain.chunk_tree.chunk_side_length as i32
+                        || rel_chunk.z >= self.terrain.chunk_tree.chunk_side_length as i32)
+                    {
+                        continue;
+                    }
+                    // The bottom-left-back voxel of the current chunk we are in.
+                    let min_chunk_offset = Vector3::new(
+                        chunk_x * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                        chunk_y * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                        chunk_z * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                    );
+                    let min_offset = edit
+                        .world_voxel_position
+                        .zip_map(&min_chunk_offset, |x, y| x.max(y));
+                    let max_offset = (min_chunk_offset
+                        + Vector3::new(
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                        ))
+                    .zip_map(&edit_voxel_max, |x, y| x.min(y));
+                    debug!("min offset {:?}, max offset {:?}", min_offset, max_offset);
+                    let mut voxel_data =
+                        VoxelModelFlat::new_empty((max_offset - min_offset).map(|x| x as u32));
+                    for voxel_x in min_offset.x..max_offset.x {
+                        for voxel_y in min_offset.y..max_offset.y {
+                            for voxel_z in min_offset.z..max_offset.z {
+                                let world_voxel_pos = Vector3::new(voxel_x, voxel_y, voxel_z);
+                                let local_voxel_pos =
+                                    (world_voxel_pos - min_offset).map(|x| x as u32);
+                                f(&mut voxel_data, world_voxel_pos, local_voxel_pos);
+                            }
+                        }
+                    }
+
+                    let Some(chunk_data) = self
+                        .terrain
+                        .chunk_tree
+                        .get_world_chunk_data(Vector3::new(chunk_x, chunk_y, chunk_z))
+                    else {
+                        debug!("Implement force loading and queing chunk edits");
+                        continue;
+                    };
+                    let chunk_model = self.get_dyn_model_mut(chunk_data.voxel_model_id);
+                    chunk_model.set_voxel_range(&VoxelModelRange {
+                        offset: (min_offset - min_chunk_offset).map(|x| x as u32),
+                        data: voxel_data,
+                    });
+                }
+            }
+        }
     }
 
     pub fn next_id(&mut self) -> VoxelModelId {
@@ -240,6 +352,73 @@ impl VoxelWorld {
         self.voxel_model_info.push(info);
 
         id
+    }
+
+    pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImpl {
+        let model_info = self
+            .voxel_model_info
+            .get(id.id as usize)
+            .expect("Voxel model id is invalid");
+
+        let archetype = if model_info.gpu_type.is_none() {
+            todo!("Fetch from standalone archetype");
+        } else {
+            &self
+                .renderable_voxel_model_archtypes
+                .get(&model_info.model_type)
+                .unwrap()
+                .0
+        };
+
+        let model_type_info = &archetype.type_infos()[0];
+        assert_eq!(model_type_info.type_id(), model_info.model_type);
+
+        // Safety: If model_info is still valid, then the archetype_index it contains must best
+        // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
+        // reference to self and explicity the lifetime.
+        let model_ptr =
+            unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *const u8 };
+
+        let voxel_model_dyn_ref = {
+            let model_vtable = *self.type_vtables.get(&model_info.model_type).unwrap();
+            let fat_ptr = (model_ptr, model_vtable);
+            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImpl;
+
+            // TODO: Write why this is safe.
+            unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
+        };
+
+        voxel_model_dyn_ref
+    }
+
+    pub fn get_model<'a, T: 'static>(&'a self, id: VoxelModelId) -> &'a T {
+        let model_info = self
+            .voxel_model_info
+            .get(id.id as usize)
+            .expect("Voxel model id is invalid");
+
+        let archetype = if model_info.gpu_type.is_none() {
+            todo!("Fetch from standalone archetype");
+        } else {
+            &self
+                .renderable_voxel_model_archtypes
+                .get(&model_info.model_type)
+                .unwrap()
+                .0
+        };
+
+        let model_type_info = &archetype.type_infos()[0];
+        assert_eq!(model_type_info.type_id(), model_info.model_type);
+        assert_eq!(model_type_info.type_id(), std::any::TypeId::of::<T>());
+
+        // Safety: If model_info is still valid, then the archetype_index it contains must best
+        // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
+        // reference to self and explicity the lifetime.
+        let model_ptr =
+            unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *const u8 };
+
+        // Safety: We asset above the type id matches.
+        unsafe { (model_ptr as *const T).as_ref().unwrap() }
     }
 
     pub fn get_dyn_model_mut<'a>(&'a mut self, id: VoxelModelId) -> &'a mut dyn VoxelModelImpl {

@@ -1,4 +1,4 @@
-module terrain_prepass;
+module rt_prepass;
 
 import lib;
 
@@ -23,8 +23,14 @@ void main(uint3 id: SV_DispatchThreadID) {
   }
   random::init(uint3(coord.xy, u_frame.frame_info.time_ms));
 
-  if (id.x == 150 && id.y == 450) {
-    voxel::testglobal = true;
+  let center = (float2) dimensions / 2.0;
+  var over = false;
+  if (abs(coord.x - center.x) <= 3 && abs(coord.y - center.y) <= 10) {
+    //voxel::testglobal = true;
+    over = true;
+  }
+  if (abs(coord.x - center.x) <= 10 && abs(coord.y - center.y) <= 3) {
+    over = true;
   }
 
   let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
@@ -33,10 +39,10 @@ void main(uint3 id: SV_DispatchThreadID) {
   let ray_terrain = voxel::Terrain.trace(ray);
   if (ray_terrain.did_hit) {
     let normalized_depth = ray_terrain.depth_t / u_frame.world_info.camera.far_plane;
-    if (!voxel::testglobal) {
-    out_color = ray_terrain.color;
+    if (!over) {
+      out_color = ray_terrain.color;
     } else {
-      out_color = float3(1.0, 0.0, 0.0);
+      out_color = float3(0.2, 0.2, 0.2);
     }
 
     u_shader.backbuffer_depth.Store(coord.xy, normalized_depth);

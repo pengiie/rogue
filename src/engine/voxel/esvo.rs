@@ -25,7 +25,7 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentMap},
     voxel::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema, VoxelRange, VoxelRangeData,
+        VoxelModelImplConcrete, VoxelModelSchema,
     },
 };
 
@@ -801,20 +801,16 @@ impl VoxelModelImplConcrete for VoxelModelESVO {
 }
 
 impl VoxelModelImpl for VoxelModelESVO {
-    /// Sets a voxel range relative to the current models origin.
-    fn set_voxel_range_impl(&mut self, range: VoxelRange) {
-        let position = range.position();
-        match range.data() {
-            VoxelRangeData::Unit(unit) => {
-                self.attachment_map.inherit_other(unit.attachment_map());
+    fn trace(
+        &self,
+        ray: &crate::common::ray::Ray,
+        aabb: &crate::common::aabb::AABB,
+    ) -> Option<Vector3<u32>> {
+        todo!()
+    }
 
-                let mut voxel = self.get_voxel_mut(position);
-                if let Some(data) = unit.data() {
-                    voxel.set_data(data);
-                }
-            }
-            VoxelRangeData::Flat(_) => todo!(),
-        }
+    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelRange) {
+        todo!()
     }
 
     fn schema(&self) -> VoxelModelSchema {

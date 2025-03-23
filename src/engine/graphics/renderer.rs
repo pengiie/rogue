@@ -70,6 +70,10 @@ pub struct GraphConstantsRT {
     pub pipeline_compute_prepass: &'static str,
     pub pipeline_compute_prepass_info: FrameGraphComputeInfo<'static>,
     pub pass_prepass: &'static str,
+
+    pub pipeline_compute_gi_sample: &'static str,
+    pub pipeline_compute_gi_sample_info: FrameGraphComputeInfo<'static>,
+    pub pass_gi_sample: &'static str,
 }
 
 pub struct GraphConstantsPostProcess {
@@ -104,10 +108,17 @@ impl Renderer {
 
             pipeline_compute_prepass: "rt_compute_prepass",
             pipeline_compute_prepass_info: FrameGraphComputeInfo {
-                shader_path: "terrain_prepass",
+                shader_path: "rt_prepass",
                 entry_point_fn: "main",
             },
             pass_prepass: "rt_pass_prepass",
+
+            pipeline_compute_gi_sample: "rt_compute_gi_sample",
+            pipeline_compute_gi_sample_info: FrameGraphComputeInfo {
+                shader_path: "rt_sample",
+                entry_point_fn: "main",
+            },
+            pass_gi_sample: "rt_pass_gi_sample",
         },
         debug_ui: GraphConstantsDebugUI {
             buffer_vertex_buffer: "debug_ui_buffer_vertex_buffer",

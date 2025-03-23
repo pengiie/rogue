@@ -9,9 +9,13 @@ use nalgebra::Vector3;
 use rogue_macros::Resource;
 
 use crate::{
-    common::color::{
-        Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
-        ColorSpaceTransitionInto,
+    common::{
+        aabb::AABB,
+        color::{
+            Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
+            ColorSpaceTransitionInto,
+        },
+        ray::Ray,
     },
     engine::{
         graphics::{
@@ -31,48 +35,22 @@ use super::{
     voxel_world::VoxelModelId,
 };
 
-pub struct VoxelRange {
-    /// Local position of the voxel model being edited, with origin at (-x, -y, -z).
-    position: Vector3<u32>,
-    data: VoxelRangeData,
-}
-
-pub enum VoxelRangeData {
-    Unit(VoxelModelUnit),
-    Flat(VoxelModelFlat),
-}
-
-impl VoxelRange {
-    pub fn from_unit(position: Vector3<u32>, unit: impl Into<VoxelModelUnit>) -> Self {
-        Self {
-            position,
-            data: VoxelRangeData::Unit(unit.into()),
-        }
-    }
-
-    pub fn position(&self) -> Vector3<u32> {
-        self.position
-    }
-
-    pub fn length(&self) -> Vector3<u32> {
-        match &self.data {
-            VoxelRangeData::Unit(_) => Vector3::new(1, 1, 1),
-            VoxelRangeData::Flat(flat) => flat.length().clone(),
-        }
-    }
-
-    pub fn data(&self) -> &VoxelRangeData {
-        &self.data
-    }
+pub struct VoxelModelRange {
+    pub offset: Vector3<u32>,
+    pub data: VoxelModelFlat,
 }
 
 pub trait VoxelModelImpl: Send + Sync + Any {
-    fn set_voxel_range_impl(&mut self, range: VoxelRange);
-    fn set_voxel_range(&mut self, range: VoxelRange) {
+    // Returns the local voxel hit if it was hit.
+    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<Vector3<u32>>;
+
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelRange);
+    fn set_voxel_range(&mut self, range: &VoxelModelRange) {
         // Asserts that the range's position with its length fits within this voxel model.
         assert!(range
+            .data
             .length()
-            .zip_map(&(self.length() - range.position()), |x, y| x <= y)
+            .zip_map(&(self.length() - range.offset), |x, y| x <= y)
             .iter()
             .all(|x| *x));
         self.set_voxel_range_impl(range);

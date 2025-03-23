@@ -45,6 +45,13 @@ impl Color<ColorSpaceSrgb> {
     pub fn new_srgb(r: f32, g: f32, b: f32) -> Self {
         Self::new(r, g, b)
     }
+
+    pub fn black() -> Self {
+        Self {
+            xyz: Vector3::new(0.0, 0.0, 0.0),
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<T: ColorSpace> std::fmt::Debug for Color<T> {

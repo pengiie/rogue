@@ -37,8 +37,8 @@ pub struct VoxelModelTHC {
 #[repr(C)]
 pub struct THCNode {
     // Left most bit determines if this node is a leaf.
-    child_ptr: u32,
-    child_mask: u64,
+    pub child_ptr: u32,
+    pub child_mask: u64,
 }
 
 impl THCNode {
@@ -53,9 +53,9 @@ impl THCNode {
 #[derive(Clone)]
 pub struct THCAttachmentLookupNode {
     // Left most bit determines if this node is a leaf.
-    data_ptr: u32,
+    pub data_ptr: u32,
     // A mask designating which children have the attachment.
-    attachment_mask: u64,
+    pub attachment_mask: u64,
 }
 
 impl VoxelModelTHC {
@@ -89,8 +89,16 @@ impl VoxelModelImplConcrete for VoxelModelTHC {
 }
 
 impl VoxelModelImpl for VoxelModelTHC {
-    fn set_voxel_range_impl(&mut self, range: super::voxel::VoxelRange) {
-        unimplemented!("THCTree does not support setting voxel ranges, only full rebuilds for now");
+    fn trace(
+        &self,
+        ray: &crate::common::ray::Ray,
+        aabb: &crate::common::aabb::AABB,
+    ) -> Option<Vector3<u32>> {
+        todo!()
+    }
+
+    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelRange) {
+        todo!()
     }
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
@@ -310,7 +318,7 @@ impl From<VoxelModelFlat> for VoxelModelTHC {
 impl From<&VoxelModelFlat> for VoxelModelTHC {
     fn from(flat: &VoxelModelFlat) -> Self {
         let length = flat
-            .length()
+            .side_length()
             .map(|x| VoxelModelTHC::next_power_of_4(x))
             .max()
             .max(4);
@@ -323,7 +331,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
         let mut node_list_rev: Vec<THCNode> = Vec::new();
         for i in 0..volume {
             let pos = morton_decode(i);
-            if !flat.in_bounds(pos) || flat.get_voxel(pos).is_empty() {
+            if !flat.in_bounds(pos) || !flat.get_voxel(pos).exists() {
                 levels[height as usize].push(None);
             } else {
                 levels[height as usize].push(Some(THCNode::new_empty()));
@@ -389,9 +397,9 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
         let mut attachment_lookup_data = HashMap::new();
         let mut attachment_raw_data = HashMap::new();
         for (present_attachment, _) in &flat.attachment_presence_data {
-            attachment_lookup.insert(present_attachment.id(), (None, 0));
+            attachment_lookup.insert(*present_attachment, (None, 0));
             attachment_lookup_data.insert(
-                present_attachment.id(),
+                *present_attachment,
                 vec![
                     THCAttachmentLookupNode {
                         data_ptr: 0,
@@ -400,7 +408,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                     node_data_len as usize
                 ],
             );
-            attachment_raw_data.insert(present_attachment.id(), Vec::new());
+            attachment_raw_data.insert(*present_attachment, Vec::new());
         }
 
         let mut to_process = vec![(
@@ -451,7 +459,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                 // Append the voxels flat data from the
                 let voxel_morton = curr_morton_traversal << 6 | child as u64;
                 let voxel_pos = morton_decode(voxel_morton);
-                for (attachment, presence_bitset) in &flat.attachment_presence_data {
+                for (attachment_id, presence_bitset) in &flat.attachment_presence_data {
                     let flat_voxel_index = flat.get_voxel_index(voxel_pos);
                     //debug!("voxel pos {:?}", voxel_pos);
                     let is_attachment_present = presence_bitset.get_bit(flat_voxel_index);
@@ -461,24 +469,25 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                         continue;
                     }
 
+                    let attachment = flat.attachment_map.get_attachment(*attachment_id);
                     let (attachment_raw_ptr, attachment_mask) =
-                        attachment_lookup.get_mut(&attachment.id()).unwrap();
+                        attachment_lookup.get_mut(&attachment_id).unwrap();
                     if attachment_raw_ptr.is_none() {
                         *attachment_raw_ptr =
-                            Some(attachment_raw_data.get(&attachment.id()).unwrap().len() as u32);
+                            Some(attachment_raw_data.get(&attachment_id).unwrap().len() as u32);
                     }
                     *attachment_mask |= child_bit;
 
                     // Write voxexl attachment data.
                     let flat_raw_attachment_data =
-                        flat.attachment_data.get(attachment).unwrap().as_slice();
+                        flat.attachment_data.get(attachment_id).unwrap().as_slice();
                     let voxel_raw_attachment_data_start =
                         (flat_voxel_index * attachment.size() as usize);
                     let voxel_raw_attachment_data = &flat_raw_attachment_data
                         [voxel_raw_attachment_data_start
                             ..(voxel_raw_attachment_data_start + attachment.size() as usize)];
                     attachment_raw_data
-                        .get_mut(&attachment.id())
+                        .get_mut(attachment_id)
                         .unwrap()
                         .extend_from_slice(voxel_raw_attachment_data);
                     //attachment_raw_data

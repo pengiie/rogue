@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use log::warn;
 use nalgebra::Vector3;
 
 use crate::common::color::{Color, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceXYZ};
@@ -89,7 +90,7 @@ impl PTMaterial {
         PTMaterial::Diffuse { albedo }
     }
 
-    fn encode(&self) -> u32 {
+    pub fn encode(&self) -> u32 {
         match self {
             PTMaterial::Diffuse { albedo } => {
                 // Quantized values.
@@ -167,7 +168,7 @@ impl AttachmentMap {
     }
 
     pub fn inherit_other(&mut self, other: &AttachmentMap) {
-        for (_, attachment) in other.iter() {
+        for (attachment_id, attachment) in other.iter() {
             self.register_attachment(attachment);
         }
     }

@@ -33,6 +33,7 @@ petgraph = "0.6.5"
 pollster = "0.3.0"
 raw-window-handle = "0.6.2"
 rogue-macros = { path = "./macros" }
+uuid = { version = "1.15.1", features = [ "v4", "bytemuck" ]}
 winit = "0.30.5"
 wgpu = { version = "22.1.0", features = ["webgpu", "vulkan-portability", "spirv"] }
 

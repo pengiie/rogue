@@ -3,7 +3,7 @@ use log::debug;
 use crate::{
     app::App,
     engine::{
-        asset::asset::Assets,
+        asset::{self, asset::Assets},
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -11,12 +11,14 @@ use crate::{
         system::System,
         ui::UI,
         voxel::{
+            cursor::VoxelCursor,
             voxel_terrain::VoxelTerrain,
             voxel_world::{VoxelWorld, VoxelWorldGpu},
         },
         window::time::{Instant, Time},
+        world::game_world::GameWorld,
     },
-    game::{player::player::Player, world::game_world::GameWorld},
+    game::entity::player::Player,
 };
 
 pub fn game_loop(app: &App) {
@@ -38,24 +40,24 @@ pub fn game_loop(app: &App) {
     app.run_system(Assets::update_assets);
 
     // ------- GAME WORLD ---------
+    app.run_system(GameWorld::update_io);
     if app
         .resource_bank()
         .get_resource_mut::<GameWorld>()
         .try_tick()
     {
         // TICK UPDATES
-        app.run_system(GameWorld::load_test_models);
-        app.run_system(GameWorld::update_test_models_position);
     }
 
     // ------- PHYSICS ---------
 
     // Update player logic.
-    app.run_system(Player::update_player);
+    app.run_system(Player::update);
 
     app.run_system(PhysicsWorld::do_physics_update);
 
     // ------- VOXEL WORLD -------
+    app.run_system(VoxelCursor::update_post_physics);
     app.run_system(VoxelWorld::update_post_physics);
 
     // ------- UI ---------

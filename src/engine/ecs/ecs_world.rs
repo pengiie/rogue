@@ -10,7 +10,7 @@ use crate::{
         system::SystemParam,
         voxel::voxel::{VoxelModel, VoxelModelImpl},
     },
-    game::player::player::Player,
+    game::entity::player::Player,
 };
 
 pub type Entity = hecs::Entity;
@@ -77,5 +77,12 @@ impl<'a, Q: Query> PlayerQuery<'a, Q> {
             panic!("More than one player spawned?");
         }
         self.0.iter().next().expect("Player was not spawned.")
+    }
+
+    pub fn try_player<'b>(&'b mut self) -> Option<(Entity, Q::Item<'b>)> {
+        if self.0.iter().len() > 1 {
+            panic!("More than one player spawned?");
+        }
+        self.0.iter().next()
     }
 }

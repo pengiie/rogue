@@ -2,7 +2,7 @@ use core::panic;
 
 use super::{
     attachment::{Attachment, AttachmentMap},
-    voxel::{VoxelData, VoxelModelImpl, VoxelRange},
+    voxel::{VoxelData, VoxelModelImpl},
 };
 
 /// Voxel model which is a singular voxel

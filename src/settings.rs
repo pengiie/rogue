@@ -15,7 +15,7 @@ use crate::{
     engine::graphics::{backend::GfxPresentMode, renderer::Antialiasing},
 };
 
-/// Called/recieved whenever a setting is changed.
+/// Called/recieved whenever a graphics setting is changed.
 pub enum GraphicsSettingsEvent {
     RTSize(Vector2<u32>),
     Antialiasing(Antialiasing),
@@ -41,6 +41,11 @@ impl Default for GraphicsSettings {
     }
 }
 
+/// Called/recieved whenever a setting is changed.
+pub enum SettingsEvent {
+    TicksPerSecond(u32),
+}
+
 #[derive(Resource, Serialize, Deserialize)]
 pub struct Settings {
     /// The field of view in degrees of the camera.
@@ -56,6 +61,9 @@ pub struct Settings {
     /// The current default is number of logical CPUs.
     pub chunk_queue_capacity: u32,
 
+    // Tick rate only affects world events.
+    pub ticks_per_seconds: u32,
+
     pub graphics: GraphicsSettings,
     pub frame_rate_cap: u32,
 }
@@ -66,10 +74,12 @@ impl Default for Settings {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: 0.001,
 
-            chunk_render_distance: 4,
+            chunk_render_distance: 1,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,
+
+            ticks_per_seconds: 10,
 
             graphics: GraphicsSettings::default(),
             frame_rate_cap: 200,

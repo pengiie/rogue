@@ -1,6 +1,6 @@
 implementing lib;
 
-static const float EPSILON = 0.001;
+static const float EPSILON = 0.01;
 
 public typealias matrix3x3 = matrix<float, 3, 3>;
 public typealias matrix4x4 = matrix<float, 4, 4>;
@@ -59,10 +59,17 @@ public struct RayDDA {
     // long though since we are indexing from 0 we must adjust this.
     curr_grid = (int3) floor(norm_grid_pos);
     unit_grid = (int3) sign(in_ray.dir);
+    // Selects are for fixing floating point divide by zero stuff.
+    unit_grid = select(unit_grid == 0, int3(1), unit_grid); 
 
-    let next_point = (float3) curr_grid + sign(norm_grid_ray.dir) * 0.5 + 0.5;
+    let next_point = (float3) curr_grid + (/*Bit in parenthesis just maps [-1, 1] to [0, 1]*/
+                                           (float3) unit_grid * 0.5 + 0.5);
     curr_t = ray_point_test(norm_grid_ray, next_point);
+    curr_t = select(in_ray.dir == 0.0, float3(100000000.0), curr_t);
     unit_t = abs(in_ray.inv_dir);
+    // TODO: Figure out why i need this, if the curr_t is correct then i dont need 
+    // to worry about the unit_t, but it seems i still do, fix later i guess?
+    unit_t = select(isinf(unit_t), float3(0.0), unit_t);
     bounds = in_dda_bounds;
   }
 

@@ -26,7 +26,7 @@ use crate::engine::{
     },
     resource::{Res, ResMut},
     ui::gui::Egui,
-    window::time::Time,
+   window::time::Time,
 };
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable, Debug)]

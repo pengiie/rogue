@@ -62,6 +62,31 @@ impl Egui {
             .primary_state
             .get_mut()
             .on_window_event(window.handle(), window_event);
+        match window_event {
+            winit::event::WindowEvent::KeyboardInput {
+                device_id,
+                event,
+                is_synthetic,
+            } => match event.state {
+                winit::event::ElementState::Released => {
+                    // Don't consume release events so a keyboard input isn't held.
+                    return false;
+                }
+                _ => {}
+            },
+            winit::event::WindowEvent::MouseInput {
+                device_id,
+                state,
+                button,
+            } => match state {
+                winit::event::ElementState::Released => {
+                    // Don't consume release events so a mouse input isn't held.
+                    return false;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
 
         response.consumed
     }

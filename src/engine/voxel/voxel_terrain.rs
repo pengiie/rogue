@@ -7,12 +7,17 @@ use std::{
 };
 
 use egui::ahash::HashSetExt;
-use log::debug;
-use nalgebra::{zero, Vector2, Vector3};
+use nalgebra::{zero, SimdValue, Vector2, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
-    common::{aabb::AABB, color::Color, morton, ring_queue::RingQueue},
+    common::{
+        aabb::AABB,
+        color::Color,
+        morton,
+        ray::{Ray, RayDDA},
+        ring_queue::RingQueue,
+    },
     consts,
     engine::{
         ecs::ecs_world::ECSWorld,
@@ -36,7 +41,7 @@ use super::{
     voxel_world::{VoxelModelId, VoxelWorld},
 };
 
-type ChunkModelType = VoxelModelTHC;
+type ChunkModelType = VoxelModelFlat;
 
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
@@ -50,7 +55,7 @@ pub struct ChunkTicket {
 pub struct VoxelTerrain {
     pub chunk_render_distance: u32,
 
-    pub chunk_tree: Option<ChunkTree>,
+    pub chunk_tree: ChunkTree,
     pub chunk_queue: ChunkProcessingQueue,
     pub chunk_loader: ChunkLoader,
     pub queue_timer: Timer,
@@ -58,66 +63,68 @@ pub struct VoxelTerrain {
 
 impl VoxelTerrain {
     pub fn new(settings: &Settings) -> Self {
+        let chunk_tree = ChunkTree::new_with_center(
+            Vector3::new(0, 0, 0),
+            settings.chunk_render_distance.next_power_of_two(),
+        );
+
         Self {
             chunk_render_distance: settings.chunk_render_distance,
 
-            chunk_tree: None,
+            chunk_tree,
             chunk_queue: ChunkProcessingQueue::new(settings),
             chunk_loader: ChunkLoader::new(Vector3::zeros(), settings.chunk_render_distance),
             queue_timer: Timer::new(Duration::from_millis(100)),
         }
     }
 
-    pub fn initialize_chunk_tree(&mut self) {
-        let chunk_tree = ChunkTree::new_with_center(
-            Vector3::new(0, 0, 0),
-            self.chunk_render_distance.next_power_of_two(),
-        );
-        debug!(
-            "Intialized the terrain chunk tree with a length of {} chunks.",
-            chunk_tree.chunk_side_length
-        );
-        self.chunk_tree = Some(chunk_tree);
-    }
-
     pub fn try_enqueue_load_chunk(&mut self, chunk_position: Vector3<i32>) {
-        let Some(chunk_tree) = &mut self.chunk_tree else {
-            debug!("Chunk tree isn't loaded!!!");
-            return;
-        };
-
-        if !chunk_tree.is_world_chunk_loaded(chunk_position)
-            && !chunk_tree.is_world_chunk_enqueued(chunk_position)
+        if !self.chunk_tree.is_world_chunk_loaded(chunk_position)
+            && !self.chunk_tree.is_world_chunk_enqueued(chunk_position)
         {
             if self.chunk_queue.try_enqueue_chunk(chunk_position) {
-                self.chunk_tree
-                    .as_mut()
-                    .unwrap()
-                    .set_world_chunk_enqued(chunk_position);
+                self.chunk_tree.set_world_chunk_enqued(chunk_position);
             }
         }
     }
 
     pub fn origin_render_range(&self) -> (Range<i32>, Range<i32>, Range<i32>) {
-        assert!(self.chunk_tree.is_some());
-        let chunk_tree = self.chunk_tree.as_ref().unwrap();
-        let min = chunk_tree.chunk_origin;
-        let max = chunk_tree
+        let min = self.chunk_tree.chunk_origin;
+        let max = self
+            .chunk_tree
             .chunk_origin
-            .map(|x| x + chunk_tree.chunk_side_length as i32);
+            .map(|x| x + self.chunk_tree.chunk_side_length as i32);
 
         let ranges = min.zip_map(&max, |a, b| a..b);
         (ranges.x.clone(), ranges.y.clone(), ranges.z.clone())
     }
 
+    pub fn chunks_aabb(&self) -> AABB {
+        let origin =
+            self.chunk_tree.chunk_origin.cast::<f32>() * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
+        let side_length =
+            self.chunk_tree.chunk_side_length as f32 * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
+        return AABB::new_two_point(
+            origin,
+            origin + Vector3::new(side_length, side_length, side_length),
+        );
+    }
+
+    pub fn chunks_dda(&self, ray: &Ray) -> RayDDA {
+        let world_aabb = self.chunks_aabb();
+        let side_length = self.chunk_tree.chunk_side_length;
+        return ray.begin_dda(
+            &world_aabb,
+            Vector3::new(side_length, side_length, side_length),
+        );
+    }
+
     pub fn chunk_tree(&self) -> &ChunkTree {
-        self.chunk_tree
-            .as_ref()
-            .expect("Chunk tree should have been constructed by now.")
+        &self.chunk_tree
     }
 
     pub fn is_chunk_tree_dirty(&self) -> bool {
-        self.chunk_tree.as_ref().is_some_and(|tree| tree.is_dirty)
+        self.chunk_tree.is_dirty
     }
 }
 
@@ -194,7 +201,7 @@ impl ChunkProcessingQueue {
     }
 }
 
-enum ChunkTreeNode {
+pub enum ChunkTreeNode {
     Node(Box<ChunkTree>),
     Leaf(ChunkData),
     Empty,
@@ -251,7 +258,7 @@ impl ChunkTree {
         let relative_position = chunk_world_position - self.chunk_origin;
         assert!(
             self.in_bounds(&relative_position),
-            "Given chunk position is out of bounds and can't be accessed from this chunk tree."
+            "Given chunk position {:?} is out of bounds and can't be accessed from this chunk tree.", chunk_world_position
         );
         let morton = morton::morton_encode(relative_position.map(|x| x as u32));
         morton::morton_traversal(morton, self.chunk_side_length.trailing_zeros())
@@ -265,6 +272,28 @@ impl ChunkTree {
     fn is_world_chunk_enqueued(&self, chunk_world_position: Vector3<i32>) -> bool {
         let morton = self.world_pos_traversal_morton(chunk_world_position);
         return self.is_enqueued(morton);
+    }
+
+    pub fn get_world_chunk_data(&self, chunk_world_position: Vector3<i32>) -> Option<&ChunkData> {
+        let morton = self.world_pos_traversal_morton(chunk_world_position);
+        return self.get_chunk_data(morton);
+    }
+
+    pub fn get_chunk_data(&self, morton: u64) -> Option<&ChunkData> {
+        let octant = (morton & 7) as usize;
+        if self.is_pre_leaf() {
+            return match &self.children[octant] {
+                ChunkTreeNode::Leaf(chunk_data) => Some(chunk_data),
+                ChunkTreeNode::Empty | ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => None,
+                ChunkTreeNode::Node(_) => unreachable!(),
+            };
+        } else {
+            if let ChunkTreeNode::Node(subtree) = &self.children[octant] {
+                return subtree.get_chunk_data(morton >> 3);
+            } else {
+                return None;
+            }
+        }
     }
 
     fn set_world_chunk_enqued(&mut self, chunk_world_position: Vector3<i32>) {
@@ -397,9 +426,42 @@ impl ChunkTree {
     pub fn chunk_side_length(&self) -> u32 {
         self.chunk_side_length
     }
+
+    pub fn visit(&self, mut f: impl FnMut(ChunkTreeVisitorItem) -> ()) {
+        let mut to_process = vec![(Vector3::<u32>::new(0, 0, 0), self)];
+        while !to_process.is_empty() {
+            let (curr_origin, curr_node) = to_process.pop().unwrap();
+            for (octant, child) in curr_node.children.iter().enumerate() {
+                let mask = Vector3::new(
+                    (octant & 1) as u32,
+                    ((octant >> 1) & 1) as u32,
+                    ((octant >> 2) & 1) as u32,
+                );
+                let child_position = curr_origin + mask * curr_node.chunk_half_length;
+
+                match child {
+                    ChunkTreeNode::Node(sub_tree) => {
+                        to_process.push((child_position, sub_tree));
+                    }
+                    ChunkTreeNode::Leaf(chunk) => f(ChunkTreeVisitorItem::Some(chunk)),
+                    ChunkTreeNode::Empty => f(ChunkTreeVisitorItem::Empty),
+                    ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => {
+                        f(ChunkTreeVisitorItem::Unloaded)
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub enum ChunkTreeVisitorItem<'a> {
+    Unloaded,
+    Empty,
+    Some(&'a ChunkData),
 }
 
 pub struct ChunkData {
+    pub chunk_uuid: uuid::Uuid,
     pub voxel_model_id: VoxelModelId,
 }
 
