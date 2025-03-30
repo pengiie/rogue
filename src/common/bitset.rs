@@ -34,4 +34,8 @@ impl Bitset {
     pub fn data(&self) -> &[u32] {
         self.data.as_slice()
     }
+
+    pub fn data_mut(&mut self) -> &mut [u32] {
+        self.data.as_mut_slice()
+    }
 }

@@ -63,9 +63,7 @@ impl ChunkGenerator {
                         z - world_voxel_min.z,
                     )
                     .map(|x| x as u32);
-                    if ((local_pos.z % 2 == 0) && local_pos.y == 0)
-                        || ((local_pos.z % 2 == 1) && local_pos.y == 1)
-                    {
+                    if (y <= target_y && y >= target_y - 5) {
                         //if local_pos.y == 0 {
                         let mut voxel = flat.get_voxel_mut(local_pos);
                         let color = Color::new_srgb(

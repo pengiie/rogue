@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::set::{AttributeSet, AttributeSetImpl},
-    engine::graphics::{backend::GfxPresentMode, renderer::Antialiasing},
+    engine::{
+        asset::repr::settings::SettingsAsset,
+        graphics::{backend::GfxPresentMode, renderer::Antialiasing},
+    },
 };
 
 /// Called/recieved whenever a graphics setting is changed.
@@ -54,7 +57,8 @@ pub struct Settings {
     /// The mouse sensitivity of pixels per degree of rotation.
     pub mouse_sensitivity: f32,
 
-    /// The chunk render distance.
+    /// The chunk render distance, also acts as the load
+    /// and simulation distance for simplicity.
     pub chunk_render_distance: u32,
 
     /// The amount of chunk that can be enqueued at a time.
@@ -68,13 +72,13 @@ pub struct Settings {
     pub frame_rate_cap: u32,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
+impl From<&SettingsAsset> for Settings {
+    fn from(s: &SettingsAsset) -> Self {
         Self {
             camera_fov: consts::FRAC_PI_2,
-            mouse_sensitivity: 0.001,
+            mouse_sensitivity: s.mouse_sensitivity,
 
-            chunk_render_distance: 1,
+            chunk_render_distance: s.chunk_render_distance,
             chunk_queue_capacity: std::thread::available_parallelism()
                 .unwrap_or(NonZeroUsize::new(4).unwrap())
                 .get() as u32,
@@ -83,6 +87,15 @@ impl Default for Settings {
 
             graphics: GraphicsSettings::default(),
             frame_rate_cap: 200,
+        }
+    }
+}
+
+impl From<&Settings> for SettingsAsset {
+    fn from(s: &Settings) -> Self {
+        Self {
+            mouse_sensitivity: s.mouse_sensitivity,
+            chunk_render_distance: s.chunk_render_distance,
         }
     }
 }

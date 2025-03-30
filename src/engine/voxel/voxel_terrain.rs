@@ -41,7 +41,7 @@ use super::{
     voxel_world::{VoxelModelId, VoxelWorld},
 };
 
-type ChunkModelType = VoxelModelFlat;
+pub type ChunkModelType = VoxelModelFlat;
 
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
@@ -52,16 +52,16 @@ pub struct ChunkTicket {
     chunk_position: Vector3<i32>,
 }
 
-pub struct VoxelTerrain {
+pub struct VoxelChunks {
     pub chunk_render_distance: u32,
 
     pub chunk_tree: ChunkTree,
     pub chunk_queue: ChunkProcessingQueue,
-    pub chunk_loader: ChunkLoader,
+    pub chunk_load_iter: ChunkLoadIter,
     pub queue_timer: Timer,
 }
 
-impl VoxelTerrain {
+impl VoxelChunks {
     pub fn new(settings: &Settings) -> Self {
         let chunk_tree = ChunkTree::new_with_center(
             Vector3::new(0, 0, 0),
@@ -73,8 +73,19 @@ impl VoxelTerrain {
 
             chunk_tree,
             chunk_queue: ChunkProcessingQueue::new(settings),
-            chunk_loader: ChunkLoader::new(Vector3::zeros(), settings.chunk_render_distance),
+            chunk_load_iter: ChunkLoadIter::new(Vector3::zeros(), settings.chunk_render_distance),
             queue_timer: Timer::new(Duration::from_millis(100)),
+        }
+    }
+
+    // Called from VoxelWorld::update_post_physics.
+    pub fn try_queue_new_chunks(&mut self) {
+        // Try enqueue any not visited chunks if the current queue isn't full.
+        if self.queue_timer.try_complete() && !self.chunk_queue.chunk_queue.is_full() {
+            let Some(next_chunk) = self.chunk_load_iter.next_chunk() else {
+                return;
+            };
+            self.try_enqueue_load_chunk(next_chunk);
         }
     }
 
@@ -86,17 +97,6 @@ impl VoxelTerrain {
                 self.chunk_tree.set_world_chunk_enqued(chunk_position);
             }
         }
-    }
-
-    pub fn origin_render_range(&self) -> (Range<i32>, Range<i32>, Range<i32>) {
-        let min = self.chunk_tree.chunk_origin;
-        let max = self
-            .chunk_tree
-            .chunk_origin
-            .map(|x| x + self.chunk_tree.chunk_side_length as i32);
-
-        let ranges = min.zip_map(&max, |a, b| a..b);
-        (ranges.x.clone(), ranges.y.clone(), ranges.z.clone())
     }
 
     pub fn chunks_aabb(&self) -> AABB {
@@ -519,14 +519,14 @@ impl ChunkTreeGpu {
     }
 }
 
-pub struct ChunkLoader {
+pub struct ChunkLoadIter {
     max_radius: u32,
     curr_radius: u32,
     curr_index: u32,
     current_chunk_anchor: Vector3<i32>,
 }
 
-impl ChunkLoader {
+impl ChunkLoadIter {
     pub fn new(chunk_anchor: Vector3<i32>, render_distance: u32) -> Self {
         Self {
             max_radius: render_distance,
@@ -536,18 +536,20 @@ impl ChunkLoader {
         }
     }
 
+    /// Updates the current index which is our cursor position according to the new radius.
+    pub fn update_max_radius(&mut self, new_max_radius: u32) {
+        todo!()
+    }
+
+    /// Updates the current index which is our cursor position according to the new anchor.
     pub fn update_anchor(&mut self, new_chunk_anchor: Vector3<i32>) {
         todo!()
     }
 
     /// Enqueues chunks in an iterator fashion so we don't waste time rechecking chunks.
-    pub fn enqueue_next_chunk(
-        &mut self,
-        chunk_tree: &mut ChunkTree,
-        chunk_queue: &mut ChunkProcessingQueue,
-    ) {
+    pub fn next_chunk(&mut self) -> Option<Vector3<i32>> {
         if self.curr_radius == self.max_radius {
-            return;
+            return None;
         }
 
         let curr_diameter = (self.curr_radius + 1) * 2;
@@ -555,7 +557,7 @@ impl ChunkLoader {
         if self.curr_index >= curr_area * 6 {
             self.curr_radius += 1;
             self.curr_index = 0;
-            return;
+            return None;
         }
 
         let face = self.curr_index / curr_area;
@@ -591,24 +593,24 @@ impl ChunkLoader {
             _ => unreachable!(),
         }
 
-        self.try_enqueue_chunk(ChunkTicket { chunk_position }, chunk_tree, chunk_queue);
         self.curr_index += 1;
+        return Some(chunk_position);
     }
 
-    fn try_enqueue_chunk(
-        &mut self,
-        chunk_ticket: ChunkTicket,
-        chunk_tree: &mut ChunkTree,
-        chunk_queue: &mut ChunkProcessingQueue,
-    ) {
-        let chunk_position = chunk_ticket.chunk_position;
+    // fn try_enqueue_chunk(
+    //     &mut self,
+    //     chunk_ticket: ChunkTicket,
+    //     chunk_tree: &mut ChunkTree,
+    //     chunk_queue: &mut ChunkProcessingQueue,
+    // ) {
+    //     let chunk_position = chunk_ticket.chunk_position;
 
-        if !chunk_tree.is_world_chunk_loaded(chunk_position)
-            && !chunk_tree.is_world_chunk_enqueued(chunk_position)
-        {
-            if chunk_queue.try_enqueue_chunk(chunk_position) {
-                chunk_tree.set_world_chunk_enqued(chunk_position);
-            }
-        }
-    }
+    //     if !chunk_tree.is_world_chunk_loaded(chunk_position)
+    //         && !chunk_tree.is_world_chunk_enqueued(chunk_position)
+    //     {
+    //         if chunk_queue.try_enqueue_chunk(chunk_position) {
+    //             chunk_tree.set_world_chunk_enqued(chunk_position);
+    //         }
+    //     }
+    // }
 }

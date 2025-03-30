@@ -6,7 +6,6 @@ use std::{
 };
 
 use bytemuck::Zeroable;
-use fixedbitset::IndexRange;
 use log::debug;
 use nalgebra::Vector2;
 use rogue_macros::Resource;
@@ -373,11 +372,11 @@ impl UIPass {
 
                         render_pass.bind_vertex_buffer(
                             vertex_buffer,
-                            vertex_slice.start().unwrap() as u64,
+                            vertex_slice.start as u64,
                         );
                         render_pass.bind_index_buffer(
                             index_buffer,
-                            index_slice.start().unwrap() as u64,
+                            index_slice.start as u64,
                         );
 
                         render_pass.draw_indexed(vertex_count);

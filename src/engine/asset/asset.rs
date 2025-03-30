@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     future::{Future, IntoFuture},
     hash::{DefaultHasher, Hash, Hasher},
-    io::Read,
+    io::{Read, Write},
     ops::Deref,
     path::PathBuf,
     pin::Pin,
@@ -32,12 +32,13 @@ pub struct Assets {
     // separate heap allocation.
     path_id_map: HashMap<AssetPath, AssetId>,
     assets: HashMap<AssetId, AssetData>,
+    asset_statuses: HashMap<AssetId, AssetStatus>,
 
     queued_assets: VecDeque<QueuedAsset>,
     processing_assets: Vec<ProcessingAsset>,
     currently_loading_assets: HashSet<AssetId>,
     currently_saving_assets: HashSet<AssetId>,
-    id_counter: AtomicU64,
+    id_counter: u64,
 
     assets_dir_touched: bool,
     assets_dir_modified: Option<Instant>,
@@ -51,13 +52,14 @@ impl Assets {
         Self {
             path_id_map: HashMap::new(),
             assets: HashMap::new(),
+            asset_statuses: HashMap::new(),
 
             queued_assets: VecDeque::new(),
             processing_assets: Vec::new(),
 
             currently_loading_assets: HashSet::new(),
             currently_saving_assets: HashSet::new(),
-            id_counter: AtomicU64::new(0),
+            id_counter: 0,
 
             assets_dir_touched: false,
             assets_dir_modified: None,
@@ -70,52 +72,54 @@ impl Assets {
         }
     }
 
+    pub fn check_assets_dir_for_updates(&mut self) {
+        let assets_path = PathBuf::from("./assets").canonicalize().unwrap();
+
+        let mut dir_metadata = std::fs::metadata(&assets_path).expect("Failed to read assets dir.");
+        assert!(dir_metadata.is_dir());
+
+        let mut last_modified = None;
+        let mut dirs_to_process = vec![assets_path.clone()];
+        while let Some(curr_dir) = dirs_to_process.pop() {
+            let curr_dir_children =
+                std::fs::read_dir(&curr_dir).expect("Failed to read assets dir.");
+            for child in curr_dir_children {
+                if let Ok(child) = child {
+                    let metadata = child.metadata().unwrap();
+                    if metadata.is_dir() {
+                        dirs_to_process.push(child.path());
+                    } else if metadata.is_file() {
+                        if last_modified.is_none()
+                            || last_modified.unwrap() < metadata.modified().unwrap()
+                        {
+                            last_modified = Some(metadata.modified().unwrap());
+                        }
+                    } else {
+                        panic!("Symlinks in the asset dir are not supported.");
+                    }
+                }
+            }
+        }
+        let last_modified = last_modified
+            .expect("Asset directory should not be empty.")
+            .into();
+        if self.assets_dir_modified.is_none() || self.assets_dir_modified.unwrap() < last_modified {
+            if self.assets_dir_modified.is_some() {
+                self.assets_dir_touched = true;
+            }
+            self.assets_dir_modified = Some(last_modified);
+        }
+    }
+
     pub fn update_assets(mut assets: ResMut<Assets>) {
         let assets = &mut assets as &mut Assets;
         assets.assets_dir_touched = false;
 
         if assets.assets_dir_check_timer.try_complete() {
-            let assets_path = PathBuf::from("./assets").canonicalize().unwrap();
-
-            let mut dir_metadata =
-                std::fs::metadata(&assets_path).expect("Failed to read assets dir.");
-            assert!(dir_metadata.is_dir());
-
-            let mut last_modified = None;
-            let mut dirs_to_process = vec![assets_path.clone()];
-            while let Some(curr_dir) = dirs_to_process.pop() {
-                let curr_dir_children =
-                    std::fs::read_dir(&curr_dir).expect("Failed to read assets dir.");
-                for child in curr_dir_children {
-                    if let Ok(child) = child {
-                        let metadata = child.metadata().unwrap();
-                        if metadata.is_dir() {
-                            dirs_to_process.push(child.path());
-                        } else if metadata.is_file() {
-                            if last_modified.is_none()
-                                || last_modified.unwrap() < metadata.modified().unwrap()
-                            {
-                                last_modified = Some(metadata.modified().unwrap());
-                            }
-                        } else {
-                            panic!("Symlinks in the asset dir are not supported.");
-                        }
-                    }
-                }
-            }
-            let last_modified = last_modified
-                .expect("Asset directory should not be empty.")
-                .into();
-            if assets.assets_dir_modified.is_none()
-                || assets.assets_dir_modified.unwrap() < last_modified
-            {
-                if assets.assets_dir_modified.is_some() {
-                    assets.assets_dir_touched = true;
-                }
-                assets.assets_dir_modified = Some(last_modified);
-            }
+            assets.check_assets_dir_for_updates();
         }
 
+        // Process finished tasks from the thread pool.
         let mut finished_ids = Vec::new();
         'asset_loop: for asset in &assets.processing_assets {
             match asset {
@@ -170,6 +174,7 @@ impl Assets {
                 }
             }
         }
+        // Remove the finished assets from the statuses.
         for finished_id in finished_ids {
             assets.currently_saving_assets.remove(&finished_id);
             assets.currently_loading_assets.remove(&finished_id);
@@ -181,6 +186,7 @@ impl Assets {
                 });
         }
 
+        // Push queued asset requests to the threads to get processed.
         // Amount of asset that can be loaded at a time.
         const PROCESSING_THRESHOLD: u32 = 3;
         let take_count = PROCESSING_THRESHOLD - assets.processing_assets.len() as u32;
@@ -220,6 +226,14 @@ impl Assets {
         }
     }
 
+    pub fn load_asset_sync<T>(path: AssetPath) -> std::result::Result<T, AssetLoadError>
+    where
+        T: AssetLoader + 'static,
+    {
+        let storage = AssetFile::from_path(&path);
+        T::load(&storage)
+    }
+
     /// Enqueues the asset to the loading queue. Status on the asset can be queried using the
     /// returned `AssetHandle`.
     pub fn load_asset<T>(&mut self, path: AssetPath) -> AssetHandle
@@ -251,6 +265,8 @@ impl Assets {
             id: handle.id,
             load_fut: pin_box,
         });
+        self.asset_statuses
+            .insert(handle.id, AssetStatus::InProgress);
 
         handle
     }
@@ -274,6 +290,8 @@ impl Assets {
             id: handle.id,
             save_fut: Box::pin(save_fut),
         });
+        self.asset_statuses
+            .insert(handle.id, AssetStatus::InProgress);
 
         handle
     }
@@ -307,11 +325,28 @@ impl Assets {
         });
     }
 
+    pub fn get_asset_status(&self, handle: &AssetHandle) -> &AssetStatus {
+        self.asset_statuses
+            .get(&handle.id)
+            .expect(&format!("Got an invalid asset handle: {:?}", handle))
+    }
+
     pub fn get_asset<T: 'static>(&self, handle: &AssetHandle) -> Option<&T> {
         assert_eq!(std::any::TypeId::of::<T>(), handle.asset_type);
 
         self.assets.get(&handle.id).map(|asset| {
             asset.data.downcast_ref::<T>().expect(&format!(
+                "Stored asset with id {} was expected to be type {:?} but was not.",
+                handle.id, handle.asset_type
+            ))
+        })
+    }
+
+    pub fn take_asset<T: 'static>(&mut self, handle: &AssetHandle) -> Option<Box<T>> {
+        assert_eq!(std::any::TypeId::of::<T>(), handle.asset_type);
+
+        self.assets.remove(&handle.id).map(|asset| {
+            asset.data.downcast::<T>().expect(&format!(
                 "Stored asset with id {} was expected to be type {:?} but was not.",
                 handle.id, handle.asset_type
             ))
@@ -350,9 +385,21 @@ impl Assets {
     }
 
     pub fn next_id(&mut self) -> AssetId {
-        self.id_counter
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        let id = self.id_counter;
+        self.id_counter += 1;
+        return id;
     }
+}
+
+pub enum AssetStatus {
+    // Still loading or saving.
+    InProgress,
+    // Loaded successfully.
+    Loaded,
+    // Asset path could not be found.
+    NotFound,
+    // Asset errored while loading.
+    Error(anyhow::Error),
 }
 
 enum QueuedAsset {
@@ -380,7 +427,28 @@ struct ProcessedAsset {
     hash: AssetHash,
 }
 
-type ProcessingAssetLoadResult = anyhow::Result<ProcessedAsset>;
+#[derive(Debug)]
+pub enum AssetLoadError {
+    NotFound,
+    Other(anyhow::Error),
+}
+
+impl From<anyhow::Error> for AssetLoadError {
+    fn from(value: anyhow::Error) -> Self {
+        AssetLoadError::Other(value)
+    }
+}
+
+impl std::fmt::Display for AssetLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssetLoadError::NotFound => f.write_str("Asset not found."),
+            AssetLoadError::Other(err) => err.fmt(f),
+        }
+    }
+}
+
+type ProcessingAssetLoadResult = std::result::Result<ProcessedAsset, AssetLoadError>;
 enum ProcessingAsset {
     Load {
         id: AssetId,
@@ -426,7 +494,7 @@ where
 }
 
 pub trait AssetLoader {
-    fn load(data: &AssetFile) -> anyhow::Result<Self>
+    fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
     where
         Self: Sized + std::any::Any;
 }
@@ -442,6 +510,12 @@ pub struct AssetHandle {
     asset_type: std::any::TypeId,
     path: AssetPath,
     id: AssetId,
+}
+
+impl AssetHandle {
+    pub fn asset_path(&self) -> &AssetPath {
+        &self.path
+    }
 }
 
 // Hash only hashes the asset id.
@@ -485,7 +559,9 @@ impl AssetPath {
         log::error!("path {:?} {}", path, sub_path);
 
         Self {
-            path: path.join(sub_path).to_str().unwrap().to_owned(),
+            // TODO: I don't trust myself with the home directory yet.
+            //path: path.join(sub_path).to_str().unwrap().to_owned(),
+            path: sub_path,
         }
     }
 
@@ -496,7 +572,7 @@ impl AssetPath {
         let mut path = if asset_prefix {
             "./assets/".to_owned()
         } else {
-            String::new()
+            "./rogue_user_data/".to_owned()
         };
         for (i, part) in parts {
             if i == extension_index {
@@ -521,35 +597,45 @@ impl FileHandle {
         Self(path.path.clone())
     }
 
-    pub fn read_contents(&self) -> String {
+    pub fn read_contents(&self) -> std::io::Result<String> {
         let path = self.0.clone();
-        let mut file = std::fs::File::open(path).expect("couldnt open file");
+        let mut file = self.read_file()?;
 
         let mut s = String::new();
-        file.read_to_string(&mut s);
+        file.read_to_string(&mut s)?;
 
-        s
+        Ok(s)
     }
 
-    pub fn read_file(&self) -> std::fs::File {
-        std::fs::File::open(&self.0).expect("Couldn't open file in read only mode.")
+    pub fn write_contents(&self, contents: String) -> std::io::Result<()> {
+        let bytes = contents.as_bytes();
+
+        let path = self.0.clone();
+        let mut file = self.write_file()?;
+        file.set_len(bytes.len() as u64);
+        file.write_all(bytes)?;
+
+        Ok(())
     }
 
-    pub fn write_file(&self) -> std::fs::File {
+    pub fn read_file(&self) -> std::io::Result<std::fs::File> {
+        std::fs::File::open(&self.0)
+    }
+
+    pub fn write_file(&self) -> std::io::Result<std::fs::File> {
         let path = PathBuf::from_str(&self.0).unwrap();
 
         std::fs::create_dir_all(path.parent().unwrap()).expect(&format!(
             "Couldn't create parent dirs for file {:?}.",
             &path
         ));
-        std::fs::File::create(&path).expect(&format!(
-            "Couldn't open file {:?} in write only mode.",
-            &path
-        ))
+        std::fs::File::create(&path)
     }
 
     fn calculate_hash(&self) -> u64 {
-        let mut file = self.read_file();
+        let Ok(mut file) = self.read_file() else {
+            return 0;
+        };
         let last_modified = file.metadata().unwrap().modified().unwrap();
 
         let mut hasher = DefaultHasher::new();
@@ -572,16 +658,20 @@ impl AssetFile {
         }
     }
 
-    pub fn read_contents(&self) -> impl Future<Output = String> + use<'_> {
-        async { self.file_handle.read_contents() }
+    pub fn read_contents(&self) -> std::io::Result<String> {
+        self.file_handle.read_contents()
     }
 
     pub fn read_file(&self) -> std::fs::File {
-        self.file_handle.read_file()
+        self.file_handle.read_file().unwrap()
     }
 
     pub fn write_file(&self) -> std::fs::File {
-        self.file_handle.write_file()
+        self.file_handle.write_file().unwrap()
+    }
+
+    pub fn write_contents(&self, contents: String) -> std::io::Result<()> {
+        self.file_handle.write_contents(contents)
     }
 
     fn calculate_hash(&self) -> u64 {

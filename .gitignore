@@ -3,4 +3,6 @@
 /.idea
 /.cargo
 
+/rogue_user_data
+
 *.zst

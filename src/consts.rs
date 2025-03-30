@@ -29,3 +29,7 @@ pub mod gfx {
 
     pub const CAMERA_FAR_PLANE: f32 = 10_000.0;
 }
+
+pub mod io {
+    pub const SETTINGS_FILE: &str = "settings::json";
+}

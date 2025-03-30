@@ -25,6 +25,13 @@ impl Attachment {
     pub const NORMAL: Attachment = Attachment::new(Attachment::NORMAL_ID, "normal", 1);
     pub const EMMISIVE: Attachment = Attachment::new(Attachment::EMMISIVE_ID, "emmisive", 1);
 
+    pub fn from_id(id: AttachmentId) -> Self {
+        match id {
+            Self::PTMATERIAL_ID => Self::PTMATERIAL,
+            _ => panic!("Can't find attachment for id {}.", id),
+        }
+    }
+
     const fn new(id: AttachmentId, name: &'static str, size: u32) -> Self {
         Attachment { name, size, id }
     }

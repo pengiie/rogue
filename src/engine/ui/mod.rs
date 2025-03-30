@@ -1,11 +1,19 @@
+use std::borrow::Borrow;
+
 use egui::Separator;
 use gui::Egui;
 use log::debug;
 use rogue_macros::Resource;
 
-use crate::common::color::Color;
+use crate::{
+    common::color::Color,
+    consts,
+    engine::asset::{asset::AssetPath, repr::settings::SettingsAsset},
+    settings::Settings,
+};
 
 use super::{
+    asset::asset::Assets,
     graphics::renderer::Renderer,
     resource::{Res, ResMut},
     voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
@@ -94,6 +102,8 @@ impl UI {
         mut ui: ResMut<UI>,
         mut game_world: ResMut<GameWorld>,
         voxel_world: Res<VoxelWorldGpu>,
+        mut assets: ResMut<Assets>,
+        settings: Res<Settings>,
     ) {
         let debug_state = &mut ui.debug_state;
         egui.resolve_ui(&window, |ctx| {
@@ -120,6 +130,18 @@ impl UI {
                     ui.label(egui::RichText::new("Performance:").size(16.0));
                     ui.label(format!("FPS: {}", debug_state.fps));
                     ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
+                    ui.label(format!("Voxel data allocation: {}", total_allocation_str));
+
+                    if ui
+                        .add(egui::Button::new("Save Settings").rounding(4.0))
+                        .clicked()
+                    {
+                        log::info!("Saving current settings.");
+                        assets.save_asset(
+                            AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
+                            SettingsAsset::from(&settings as &Settings),
+                        );
+                    }
 
                     ui.separator();
 

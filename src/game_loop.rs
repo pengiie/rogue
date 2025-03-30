@@ -12,7 +12,6 @@ use crate::{
         ui::UI,
         voxel::{
             cursor::VoxelCursor,
-            voxel_terrain::VoxelTerrain,
             voxel_world::{VoxelWorld, VoxelWorldGpu},
         },
         window::time::{Instant, Time},
