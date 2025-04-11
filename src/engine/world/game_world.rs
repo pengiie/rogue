@@ -27,9 +27,9 @@ use crate::{
                 RenderableVoxelModel, RenderableVoxelModelRef, VoxelData, VoxelModel,
                 VoxelModelSchema,
             },
-            voxel_terrain::{self, ChunkTreeNode},
+            voxel_terrain::{self},
             voxel_transform::VoxelModelTransform,
-            voxel_world::{VoxelModelId, VoxelWorld},
+            voxel_world::VoxelWorld,
         },
         window::time::{Instant, Time, Timer},
     },
@@ -111,30 +111,30 @@ impl GameWorld {
         ecs_world: &mut ECSWorld,
         voxel_world: &mut VoxelWorld,
     ) {
-        let mut to_process = vec![voxel_world.chunks.chunk_tree()];
-        while !to_process.is_empty() {
-            let curr_node = to_process.pop().unwrap();
-            for child in curr_node.children.iter() {
-                match child {
-                    ChunkTreeNode::Node(sub_tree) => {
-                        to_process.push(sub_tree);
-                    }
-                    ChunkTreeNode::Leaf(chunk) => {
-                        let chunk_model = voxel_world
-                            .get_model::<voxel_terrain::ChunkModelType>(chunk.voxel_model_id);
-                        // let chunk_save_handle = assets.save_asset(
-                        //     AssetPath::new_user_dir(format!(
-                        //         "terrain_chunks::chunk_{}::rog",
-                        //         chunk.chunk_uuid.as_u128(),
-                        //     )),
-                        //     chunk_model.clone(),
-                        // );
-                        // self.waiting_assets.insert(chunk_save_handle);
-                    }
-                    ChunkTreeNode::Empty | ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => {}
-                }
-            }
-        }
+        // let mut to_process = vec![voxel_world.chunks.chunk_tree()];
+        // while !to_process.is_empty() {
+        //     let curr_node = to_process.pop().unwrap();
+        //     for child in curr_node.children.iter() {
+        //         match child {
+        //             ChunkTreeNode::Node(sub_tree) => {
+        //                 to_process.push(sub_tree);
+        //             }
+        //             ChunkTreeNode::Leaf(chunk) => {
+        //                 let chunk_model = voxel_world
+        //                     .get_model::<voxel_terrain::ChunkModelType>(chunk.voxel_model_id);
+        //                 // let chunk_save_handle = assets.save_asset(
+        //                 //     AssetPath::new_user_dir(format!(
+        //                 //         "terrain_chunks::chunk_{}::rog",
+        //                 //         chunk.chunk_uuid.as_u128(),
+        //                 //     )),
+        //                 //     chunk_model.clone(),
+        //                 // );
+        //                 // self.waiting_assets.insert(chunk_save_handle);
+        //             }
+        //             ChunkTreeNode::Empty | ChunkTreeNode::Enqeueud | ChunkTreeNode::Unloaded => {}
+        //         }
+        //     }
+        // }
 
         //let terrain_asset = VoxelTerrainAsset::from_terrain(&voxel_world.chunks);
         //let terrain_save_handle =

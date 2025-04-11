@@ -31,8 +31,8 @@ use super::{
     esvo::VoxelModelESVO,
     flat::VoxelModelFlat,
     unit::VoxelModelUnit,
+    voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
-    voxel_world::VoxelModelId,
 };
 
 pub struct VoxelModelRange {
@@ -74,7 +74,8 @@ pub trait VoxelModelGpuImpl: Send + Sync {
     // Can encode other model specific data here as well.
     fn aggregate_model_info(&self) -> Option<Vec<u32>>;
 
-    /// Makes any necessary allocations and returns true if the owned allocations have changed.
+    /// Makes any necessary allocations for the model to work and returns true if the
+    /// model info needs to be re-registered, i.e. model allocation pointers have changed.
     fn update_gpu_objects(
         &mut self,
         allocator: &mut GpuBufferAllocator,

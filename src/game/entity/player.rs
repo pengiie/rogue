@@ -26,9 +26,9 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn new() -> Self {
+    pub fn new(euler: Vector3<f32>) -> Self {
         Self {
-            euler: Vector3::zeros(),
+            euler,
             paused: true,
             movement_speed: 4.0,
         }
@@ -38,7 +38,7 @@ impl Player {
         ecs_world: ResMut<ECSWorld>,
         input: Res<Input>,
         time: Res<Time>,
-        settings: Res<Settings>,
+        mut settings: ResMut<Settings>,
         window: Res<Window>,
         ui: Res<UI>,
     ) {
@@ -88,18 +88,24 @@ impl Player {
 
         transform.isometry.translation.vector +=
             translation * speed * time.delta_time().as_secs_f32();
+        settings.player_position = transform.isometry.translation.vector;
+        settings.player_rotation = player.euler;
     }
 
-    pub fn spawn(mut ecs_world: ResMut<ECSWorld>, mut main_camera: ResMut<MainCamera>) {
+    pub fn spawn(
+        mut ecs_world: ResMut<ECSWorld>,
+        mut main_camera: ResMut<MainCamera>,
+        settings: Res<Settings>,
+    ) {
         if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
             panic!("Player already spawned.");
         }
 
         let player = ecs_world.spawn((
             GameEntity::new(GameEntityType::Player).set_name("a_player_name"),
-            Player::new(),
+            Player::new(settings.player_rotation),
             Camera::new(90.0),
-            Transform::with_translation(Translation3::new(-0.0, -2.0, -6.0)),
+            Transform::with_translation(Translation3::from(settings.player_position)),
         ));
         main_camera.set_camera(player, "player_camera");
     }

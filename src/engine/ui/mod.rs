@@ -16,7 +16,7 @@ use super::{
     asset::asset::Assets,
     graphics::renderer::Renderer,
     resource::{Res, ResMut},
-    voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
+    voxel::voxel_world::{self, VoxelWorld, VoxelWorldGpu},
     window::{
         time::{Instant, Time},
         window::Window,
@@ -46,6 +46,8 @@ pub struct DebugUIState {
     pub polling_time_ms: u32,
     pub draw_grid: bool,
 
+    pub generate_radius: u32,
+
     pub brush_size: u32,
     pub brush_color: Color,
 
@@ -62,6 +64,8 @@ impl Default for DebugUIState {
             delta_time_ms: 0.0,
             polling_time_ms: 250,
             draw_grid: true,
+
+            generate_radius: 0,
 
             brush_size: 1,
             brush_color: Color::new_srgb(1.0, 0.2, 1.0),
@@ -101,14 +105,16 @@ impl UI {
         mut egui: ResMut<Egui>,
         mut ui: ResMut<UI>,
         mut game_world: ResMut<GameWorld>,
-        voxel_world: Res<VoxelWorldGpu>,
+        mut voxel_world: ResMut<VoxelWorld>,
+        voxel_world_pu: Res<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
         settings: Res<Settings>,
     ) {
+        let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let debug_state = &mut ui.debug_state;
         egui.resolve_ui(&window, |ctx| {
             let mut total_allocation_str;
-            let al = voxel_world
+            let al = voxel_world_pu
                 .voxel_allocator()
                 .map_or(0, |alloc| alloc.total_allocated_size());
             if al >= 2u64.pow(30) {
@@ -151,14 +157,47 @@ impl UI {
                             ui.disable();
                         }
 
-                        if ui.add(egui::Button::new("Save").rounding(4.0)).clicked() {
-                            game_world.save();
+                        let can_save = !voxel_world.chunks.is_saving();
+                        if ui
+                            .add_enabled(can_save, egui::Button::new("Save").rounding(4.0))
+                            .clicked()
+                        {
+                            voxel_world
+                                .chunks
+                                .save_terrain(&mut assets, &voxel_world.registry);
                         }
 
                         if ui.add(egui::Button::new("Load").rounding(4.0)).clicked() {
                             game_world.load();
                         }
                     });
+
+                    if let Some(player_chunk_position) = voxel_world.chunks.player_chunk_position {
+                        ui.label(egui::RichText::new("Current Chunk:").size(14.0));
+                        ui.label(format!(
+                            "Position: x: {}, y: {}, z: {}",
+                            player_chunk_position.x,
+                            player_chunk_position.y,
+                            player_chunk_position.z
+                        ));
+
+                        ui.label(egui::RichText::new("Current terrain anchor:").size(14.0));
+                        ui.label(format!(
+                            "Position: x: {}, y: {}, z: {}",
+                            voxel_world.chunks.renderable_chunks.chunk_anchor.x,
+                            voxel_world.chunks.renderable_chunks.chunk_anchor.y,
+                            voxel_world.chunks.renderable_chunks.chunk_anchor.z,
+                        ));
+
+                        ui.horizontal(|ui| {
+                            ui.label("Radius:");
+                            ui.add(egui::Slider::new(&mut debug_state.generate_radius, 0..=8));
+                        });
+                        if ui
+                            .add(egui::Button::new("Regenerate chunks").rounding(4.0))
+                            .clicked()
+                        {}
+                    }
                 });
         });
     }

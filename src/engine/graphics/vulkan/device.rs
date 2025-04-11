@@ -29,7 +29,7 @@ use crate::{
         graphics::{
             backend::{
                 BindGroup, Binding, Buffer, ComputePipeline, GfxAddressMode, GfxBlendFactor,
-                GfxBlendOp, GfxBufferCreateInfo, GfxComputePipelineCreateInfo,
+                GfxBlendOp, GfxBufferCreateInfo, GfxBufferInfo, GfxComputePipelineCreateInfo,
                 GfxComputePipelineInfo, GfxCullMode, GfxFilterMode, GfxFrontFace,
                 GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxImageWrite,
                 GfxLoadOp, GfxPresentMode, GfxRasterPipelineBlendStateAttachmentInfo,
@@ -1136,6 +1136,11 @@ impl GraphicsBackendDevice for VulkanDevice {
             self.skipped_gpu_frames
                 .insert(self.context.curr_cpu_frame());
         }
+    }
+
+    fn get_buffer_info(&self, buffer: &ResourceId<Buffer>) -> GfxBufferInfo {
+        let buf = self.context.get_buffer(*buffer);
+        GfxBufferInfo { size: buf.size }
     }
 }
 
@@ -2899,7 +2904,7 @@ impl VulkanResourceManager {
                 continue;
             }
 
-            let remaining_size = staging_buffer.size - (staging_buffer.curr_write_pointer + 1);
+            let remaining_size = staging_buffer.size - staging_buffer.curr_write_pointer;
             if remaining_size >= min_size {
                 return handle;
             }

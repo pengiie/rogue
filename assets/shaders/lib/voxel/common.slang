@@ -10,13 +10,17 @@ const static uint INVALID_PTR = 0xFFFFFFFF;
 public struct Terrain {
   public uint side_length;
   uint volume;
+  int3 anchor;
+  uint3 window_offset;
   ByteAddressBuffer data;
 
   // World-space AABB corresponding to the entire terrain's bounds.
   [ForceInline]
   public AABB aabb() {
-    let meter_side_length = consts::TERRAIN_CHUNK_METER_LENGTH * this.side_length * 0.5;
-    return AABB.new_center_extents(float3(0.0), float3(meter_side_length));
+    let meter_side_length = consts::TERRAIN_CHUNK_METER_LENGTH * this.side_length;
+    let min = (float3) this.anchor * consts::TERRAIN_CHUNK_METER_LENGTH;
+    let max = min + meter_side_length;
+    return AABB.new_min_max(min, max);
   }
 
   public static RayTerrainTest trace(Ray ray) {
@@ -33,8 +37,12 @@ public struct Terrain {
                      terrain.side_length);
     var i = 0;
     while (dda.in_bounds() && i < 1024 /* just in case */) {
-      let curr_morton = dda.curr_morton();
-      let chunk_model_ptr = terrain.data.Load<uint>(curr_morton << 2);
+      let curr_grid_pos = (uint3) ((dda.curr_grid_pos() + terrain.window_offset) % terrain.side_length);
+      var curr_index = curr_grid_pos.x + 
+                       curr_grid_pos.y * terrain.side_length + 
+                       curr_grid_pos.z * (terrain.side_length * terrain.side_length);
+
+      let chunk_model_ptr = terrain.data.Load<uint>(curr_index << 2);
       if (chunk_model_ptr != INVALID_PTR) {
         let chunk_offset = consts::TERRAIN_CHUNK_METER_LENGTH * ((float3) dda.curr_grid_pos() + 0.5);
         let chunk_center = terrain_aabb.min() + chunk_offset; 
@@ -43,6 +51,7 @@ public struct Terrain {
 
         let model_test = trace_model(ray, chunk_aabb, chunk_model_ptr);
         if (model_test.did_hit) {
+
           return RayTerrainTest.hit(model_test.color, model_test.depth_t);
         }
       }
@@ -51,7 +60,6 @@ public struct Terrain {
     }
 
      return RayTerrainTest.hit(float3(i / 512.0), 0.0);
-     //return RayTerrainTest.hit(float3(0.1), 0.0);
   }
 }
 

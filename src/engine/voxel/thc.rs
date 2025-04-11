@@ -5,7 +5,10 @@ use nalgebra::Vector3;
 use petgraph::matrix_graph::Zero;
 
 use crate::{
-    common::{color::Color, morton::morton_decode},
+    common::{
+        color::Color,
+        morton::{self, morton_decode},
+    },
     consts,
     engine::{
         graphics::{
@@ -19,14 +22,17 @@ use crate::{
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentMap},
     flat::VoxelModelFlat,
-    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete},
+    voxel::{
+        VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete,
+        VoxelModelRange,
+    },
 };
 
 // Tetrahexacontree, aka., 64-tree. Essentially an octree where each node is
 // two octree nodes squashed together, resulting in 64 children in each node.
 #[derive(Clone)]
 pub struct VoxelModelTHC {
-    pub length: u32,
+    pub side_length: u32,
     pub node_data: Vec<THCNode>,
     pub attachment_lookup_data: HashMap<AttachmentId, Vec<THCAttachmentLookupNode>>,
     pub attachment_raw_data: HashMap<AttachmentId, Vec<u32>>,
@@ -52,7 +58,6 @@ impl THCNode {
 
 #[derive(Clone)]
 pub struct THCAttachmentLookupNode {
-    // Left most bit determines if this node is a leaf.
     pub data_ptr: u32,
     // A mask designating which children have the attachment.
     pub attachment_mask: u64,
@@ -67,12 +72,17 @@ impl VoxelModelTHC {
         );
         assert!(length >= 4, "Length for a THC must be atleast 4.");
         Self {
-            length,
-            node_data: Vec::new(),
+            side_length: length,
+            node_data: vec![THCNode::new_empty()],
             attachment_lookup_data: HashMap::new(),
             attachment_raw_data: HashMap::new(),
             attachment_map: AttachmentMap::new(),
         }
+    }
+
+    // Just so i can do ChunkModelType::new_empty for flats and thcs.
+    pub fn new_empty(length: Vector3<u32>) -> Self {
+        Self::new(length.x)
     }
 
     pub fn next_power_of_4(x: u32) -> u32 {
@@ -81,6 +91,49 @@ impl VoxelModelTHC {
             return x;
         }
         return x << 1;
+    }
+
+    pub fn tree_height(&self) -> u32 {
+        self.side_length.trailing_zeros() / 2
+    }
+
+    pub fn get_or_create_preleaf(
+        &mut self,
+        local_position: Vector3<u32>,
+    ) -> (
+        /*idx of preleaf*/ usize,
+        /*index into child mask*/ u32,
+    ) {
+        let mut traversal = morton::morton_traversal(
+            morton::morton_encode(local_position),
+            self.side_length.trailing_zeros(),
+        );
+
+        let mut curr_height = 0;
+        let mut curr_node = 0;
+        loop {
+            let curr_idx = traversal & 0b111111;
+            if curr_height + 1 == self.tree_height() {
+                return (curr_node, curr_idx as u32);
+            } else {
+                let n = &self.node_data[curr_node];
+                let is_child_present = (n.child_mask & (1 << curr_idx)) > 0;
+                if is_child_present {
+                } else {
+                }
+            }
+
+            curr_height += 1;
+            traversal <<= 6;
+        }
+    }
+
+    pub fn set_voxel_attachment(
+        &mut self,
+        local_position: Vec<u32>,
+        attachment_id: AttachmentId,
+        data: Option<Vec<u32>>,
+    ) {
     }
 }
 
@@ -97,16 +150,14 @@ impl VoxelModelImpl for VoxelModelTHC {
         todo!()
     }
 
-    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelRange) {
-        todo!()
-    }
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelRange) {}
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
         consts::voxel::MODEL_THC_SCHEMA
     }
 
     fn length(&self) -> nalgebra::Vector3<u32> {
-        Vector3::new(self.length, self.length, self.length)
+        Vector3::new(self.side_length, self.side_length, self.side_length)
     }
 }
 
@@ -228,8 +279,8 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             }
         }
 
-        if self.side_length != model.length {
-            self.side_length = model.length;
+        if self.side_length != model.side_length {
+            self.side_length = model.side_length;
             // We don't technically allocate anything if this changes, however we
             // return true so the model info entry is updated.
             did_allocate = true;
@@ -525,7 +576,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
         // debug!("node data {:?}", &node_data.as_slice()[0..128]);
 
         VoxelModelTHC {
-            length,
+            side_length: length,
             node_data,
             attachment_lookup_data,
             attachment_raw_data,

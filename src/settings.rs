@@ -6,7 +6,7 @@ use std::{
 
 use downcast::Any;
 use log::debug;
-use nalgebra::Vector2;
+use nalgebra::{Vector2, Vector3};
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,10 @@ pub struct Settings {
 
     pub graphics: GraphicsSettings,
     pub frame_rate_cap: u32,
+
+    // Setting for now since I don't like moving my player all the time.
+    pub player_position: Vector3<f32>,
+    pub player_rotation: Vector3<f32>,
 }
 
 impl From<&SettingsAsset> for Settings {
@@ -87,6 +91,8 @@ impl From<&SettingsAsset> for Settings {
 
             graphics: GraphicsSettings::default(),
             frame_rate_cap: 200,
+            player_position: s.player_position,
+            player_rotation: s.player_rotation,
         }
     }
 }
@@ -96,6 +102,8 @@ impl From<&Settings> for SettingsAsset {
         Self {
             mouse_sensitivity: s.mouse_sensitivity,
             chunk_render_distance: s.chunk_render_distance,
+            player_position: s.player_position,
+            player_rotation: s.player_rotation,
         }
     }
 }

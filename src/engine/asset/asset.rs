@@ -137,8 +137,17 @@ impl Assets {
                                         dependencies: 0,
                                     },
                                 );
+                                assets.asset_statuses.insert(*id, AssetStatus::Loaded);
                             }
-                            Err(err) => log::error!("Error loading asset: {}", err.to_string()),
+                            Err(err) => match err {
+                                AssetLoadError::NotFound { path } => {
+                                    assets.asset_statuses.insert(*id, AssetStatus::NotFound);
+                                }
+                                AssetLoadError::Other(err) => {
+                                    log::error!("Error loading asset: {}", err.to_string());
+                                    assets.asset_statuses.insert(*id, AssetStatus::Error(err));
+                                }
+                            },
                         },
                         Err(err) => {
                             match err {
@@ -231,7 +240,10 @@ impl Assets {
         T: AssetLoader + 'static,
     {
         let storage = AssetFile::from_path(&path);
-        T::load(&storage)
+        T::load(&storage).map_err(|err| match err {
+            AssetLoadError::NotFound { .. } => AssetLoadError::NotFound { path: Some(path) },
+            AssetLoadError::Other(e) => AssetLoadError::Other(e),
+        })
     }
 
     /// Enqueues the asset to the loading queue. Status on the asset can be queried using the
@@ -251,11 +263,19 @@ impl Assets {
             let hash = storage.calculate_hash();
             let contents = T::load(&storage);
 
-            contents.map(|c| ProcessedAsset {
-                data: Box::new(c) as Box<dyn Any + Send>,
-                hash,
-                path,
-            })
+            match contents {
+                Ok(c) => Ok(ProcessedAsset {
+                    data: Box::new(c) as Box<dyn Any + Send>,
+                    hash,
+                    path: path.clone(),
+                }),
+                Err(err) => Err(match err {
+                    AssetLoadError::NotFound { .. } => {
+                        AssetLoadError::NotFound { path: Some(path) }
+                    }
+                    AssetLoadError::Other(e) => AssetLoadError::Other(e),
+                }),
+            }
         };
 
         let pin_box = Box::pin(load_fut);
@@ -311,11 +331,19 @@ impl Assets {
             let hash = storage.calculate_hash();
             let contents = T::load(&storage);
 
-            contents.map(|c| ProcessedAsset {
-                data: Box::new(c) as Box<dyn Any + Send>,
-                hash,
-                path: path_clone,
-            })
+            match contents {
+                Ok(c) => Ok(ProcessedAsset {
+                    data: Box::new(c) as Box<dyn Any + Send>,
+                    hash,
+                    path: path_clone.clone(),
+                }),
+                Err(err) => Err(match err {
+                    AssetLoadError::NotFound { path } => AssetLoadError::NotFound {
+                        path: Some(path_clone),
+                    },
+                    AssetLoadError::Other(e) => AssetLoadError::Other(e),
+                }),
+            }
         };
 
         self.currently_loading_assets.insert(handle.id);
@@ -429,7 +457,7 @@ struct ProcessedAsset {
 
 #[derive(Debug)]
 pub enum AssetLoadError {
-    NotFound,
+    NotFound { path: Option<AssetPath> },
     Other(anyhow::Error),
 }
 
@@ -439,10 +467,22 @@ impl From<anyhow::Error> for AssetLoadError {
     }
 }
 
+impl From<std::io::Error> for AssetLoadError {
+    fn from(value: std::io::Error) -> Self {
+        match value.kind() {
+            std::io::ErrorKind::NotFound => AssetLoadError::NotFound { path: None },
+            _ => AssetLoadError::Other(anyhow::format_err!(value)),
+        }
+    }
+}
+
 impl std::fmt::Display for AssetLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AssetLoadError::NotFound => f.write_str("Asset not found."),
+            AssetLoadError::NotFound { path } => f.write_str(&format!(
+                "Asset at {:?} not found.",
+                path.as_ref().map_or("", |p| p.path())
+            )),
             AssetLoadError::Other(err) => err.fmt(f),
         }
     }
@@ -556,7 +596,6 @@ impl AssetPath {
                 .expect("Can't get home directory."),
             _ => unimplemented!("Unsupport OS."),
         };
-        log::error!("path {:?} {}", path, sub_path);
 
         Self {
             // TODO: I don't trust myself with the home directory yet.
@@ -588,6 +627,10 @@ impl AssetPath {
 
     pub fn into_fetch_url(&self) -> String {
         "TODO!!!".to_owned()
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
     }
 }
 pub struct FileHandle(String);
@@ -662,8 +705,8 @@ impl AssetFile {
         self.file_handle.read_contents()
     }
 
-    pub fn read_file(&self) -> std::fs::File {
-        self.file_handle.read_file().unwrap()
+    pub fn read_file(&self) -> std::io::Result<std::fs::File> {
+        self.file_handle.read_file()
     }
 
     pub fn write_file(&self) -> std::fs::File {

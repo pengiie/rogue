@@ -10,6 +10,7 @@ pub mod flat;
 pub mod thc;
 pub mod unit;
 pub mod voxel;
+pub mod voxel_registry;
 pub mod voxel_terrain;
 pub mod voxel_transform;
 pub mod voxel_world;

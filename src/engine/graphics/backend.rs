@@ -64,6 +64,7 @@ pub trait GraphicsBackendDevice {
         self.write_buffer(buffer, offset, data.len() as u64)
             .copy_from_slice(data);
     }
+    fn get_buffer_info(&self, buffer: &ResourceId<Buffer>) -> GfxBufferInfo;
 
     fn create_sampler(&mut self, create_info: GfxSamplerCreateInfo) -> ResourceId<Sampler>;
 
@@ -991,6 +992,10 @@ pub enum GfxImageType {
 pub enum GfxFilterMode {
     Nearest,
     Linear,
+}
+
+pub struct GfxBufferInfo {
+    pub size: u64,
 }
 
 pub struct GfxImageInfo {

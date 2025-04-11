@@ -86,7 +86,7 @@ pub fn game_loop(app: &App) {
     // Discard any inputs and events cached for this frame.
     app.run_system(Input::clear_inputs);
     app.run_system(Events::clear_events);
-    app.run_system(VoxelWorldGpu::clear_frame_state);
+    app.run_system(VoxelWorld::clear_state);
 
     //debug!(
     //    "CPU Frame took {}ms",

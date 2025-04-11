@@ -25,11 +25,12 @@ void main(uint3 id: SV_DispatchThreadID) {
 
   let center = (float2) dimensions / 2.0;
   var over = false;
-  if (abs(coord.x - center.x) <= 3 && abs(coord.y - center.y) <= 10) {
-    //voxel::testglobal = true;
+  if (abs(coord.x - center.x) <= 1 && abs(coord.y - center.y) <= 10) {
+    voxel::testglobal = true;
     over = true;
   }
-  if (abs(coord.x - center.x) <= 10 && abs(coord.y - center.y) <= 3) {
+  if (abs(coord.x - center.x) <= 10 && abs(coord.y - center.y) <= 1) {
+    voxel::testglobal = true;
     over = true;
   }
 

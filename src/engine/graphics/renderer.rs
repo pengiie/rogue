@@ -378,6 +378,14 @@ impl Renderer {
                     "u_frame.voxel.terrain.volume",
                     voxel_world_gpu.terrain_side_length().pow(3),
                 );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.anchor",
+                    voxel_world_gpu.renderable_chunks.terrain_anchor,
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.window_offset",
+                    voxel_world_gpu.renderable_chunks.terrain_window_offset,
+                );
             });
     }
 

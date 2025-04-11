@@ -55,6 +55,25 @@ impl VoxelCursor {
             return;
         };
 
+        if input.is_mouse_button_pressed(mouse::Button::Middle) {
+            let voxel_pos = player_transform
+                .position()
+                .map(|x| (x / consts::voxel::VOXEL_METER_LENGTH).floor() as i32);
+
+            voxel_world.apply_voxel_edit(
+                VoxelEdit {
+                    world_voxel_position: voxel_pos,
+                    world_voxel_length: Vector3::new(1, 1, 1),
+                },
+                |mut flat, world_position, local_position| {
+                    flat.get_voxel_mut(local_position).set_attachment(
+                        Attachment::PTMATERIAL,
+                        Some(PTMaterial::diffuse(Color::new_srgb(1.0, 0.0, 0.0)).encode()),
+                    );
+                },
+            );
+        }
+
         if input.is_mouse_button_pressed(mouse::Button::Right) {
             if let Some(hit_voxel) = voxel_world.trace_terrain(player_transform.get_ray(), 5.0) {
                 let hit_voxel_meter = hit_voxel.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH
@@ -122,8 +141,6 @@ impl VoxelBrush {
         VoxelEdit {
             world_voxel_position: position,
             world_voxel_length: length,
-            mask: self.mask.clone(),
-            color: self.color.clone(),
         }
     }
 }
@@ -133,9 +150,6 @@ pub struct VoxelEdit {
     pub world_voxel_position: Vector3<i32>,
     // Length in voxels of the edit.
     pub world_voxel_length: Vector3<u32>,
-    pub color: Color,
-    // In order list of masks to apply.
-    pub mask: Option<VoxelEditMask>,
 }
 
 #[derive(Clone)]

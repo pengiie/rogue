@@ -41,4 +41,8 @@ impl Transform {
     pub fn rotation(&self) -> Rotation3<f32> {
         self.isometry.rotation.into()
     }
+
+    pub fn position(&self) -> Vector3<f32> {
+        self.isometry.translation.vector
+    }
 }

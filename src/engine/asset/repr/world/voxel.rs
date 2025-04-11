@@ -12,7 +12,7 @@ use crate::{
     common::bitset::Bitset,
     engine::{
         asset::{
-            asset::AssetLoadError,
+            asset::{AssetFile, AssetLoadError, AssetLoader, AssetSaver},
             util::{AssetByteReader, AssetByteWriter},
         },
         voxel::{
@@ -22,8 +22,6 @@ use crate::{
         },
     },
 };
-
-use super::super::asset::{AssetFile, AssetLoader, AssetSaver};
 
 pub struct VoxelModelTHCAsset {
     model: VoxelModelTHC,
@@ -36,7 +34,7 @@ impl AssetLoader for VoxelModelTHC {
     where
         Self: Sized + std::any::Any,
     {
-        let mut file = data.read_file();
+        let mut file = data.read_file()?;
         let mut header = 0x0;
         let Ok(n) = file.read(bytemuck::bytes_of_mut(&mut header)) else {
             return Err(AssetLoadError::Other(anyhow!("Failed to read file bytes.")));
@@ -87,7 +85,7 @@ impl AssetSaver for VoxelModelTHC {
 
         assert_eq!(
             file.write_at(
-                bytemuck::bytes_of(&[0x56544843u32, FILE_VERSION, model.length]),
+                bytemuck::bytes_of(&[0x56544843u32, FILE_VERSION, model.side_length]),
                 0,
             )?,
             HEADER_BYTE_SIZE as usize
@@ -230,7 +228,7 @@ impl AssetLoader for VoxelModelFlat {
     where
         Self: Sized + std::any::Any,
     {
-        let mut reader = AssetByteReader::new(data.read_file(), "FLAT")?;
+        let mut reader = AssetByteReader::new(data.read_file()?, "FLAT")?;
         assert!(reader.version() == 1);
 
         let side_length = reader.read::<Vector3<u32>>()?;
