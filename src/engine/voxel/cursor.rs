@@ -7,7 +7,7 @@ use crate::{
     common::color::Color,
     consts,
     engine::{
-        ecs::ecs_world::ECSWorld,
+        entity::ecs_world::ECSWorld,
         graphics::camera::Camera,
         input::{mouse, Input},
         physics::transform::Transform,
@@ -83,7 +83,7 @@ impl VoxelCursor {
                         consts::voxel::VOXEL_METER_LENGTH * 0.5,
                     );
                 let player_voxel_distance =
-                    (hit_voxel_meter - player_transform.isometry.translation.vector).magnitude();
+                    (hit_voxel_meter - player_transform.position).magnitude();
                 let cursor_data = VoxelCursorData {
                     brush: VoxelBrush::new(ui.debug_state.brush_color.clone()),
                     brush_size: ui.debug_state.brush_size,

@@ -33,21 +33,31 @@ void main(uint3 id: SV_DispatchThreadID) {
     voxel::testglobal = true;
     over = true;
   }
-
-  let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
-
-  var out_color = sample_sky(ray);
-  let ray_terrain = voxel::Terrain.trace(ray);
-  if (ray_terrain.did_hit) {
-    let normalized_depth = ray_terrain.depth_t / u_frame.world_info.camera.far_plane;
-    if (!over) {
-      out_color = ray_terrain.color;
-    } else {
-      out_color = float3(0.2, 0.2, 0.2);
-    }
-
-    u_shader.backbuffer_depth.Store(coord.xy, normalized_depth);
+  if (over) {
+    u_shader.backbuffer_depth.Store(coord.xy, 0.0);
+    u_shader.backbuffer.Store(coord.xy, float4(float3(0.2, 0.2, 0.2), 1.0));
+    return;
   }
 
-  u_shader.backbuffer.Store(coord.xy, float4(out_color, random::rand_f32()));
+  let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
+  var out_color = sample_sky(ray);
+  var depth = u_frame.world_info.camera.far_plane;
+
+  let ray_terrain = voxel::Terrain.trace(ray);
+  if (ray_terrain.did_hit) {
+    depth = ray_terrain.depth_t;
+    out_color = ray_terrain.color;
+  }
+
+  let ray_entity = voxel::EntityData.trace(ray);
+  if (ray_entity.did_hit) {
+    if (ray_entity.depth_t < depth) {
+      depth = ray_entity.depth_t;
+      out_color = ray_entity.color;
+    }
+  }
+
+  let normalized_depth = depth / u_frame.world_info.camera.far_plane;
+  u_shader.backbuffer_depth.Store(coord.xy, normalized_depth);
+  u_shader.backbuffer.Store(coord.xy, float4(out_color, 1.0));
 }

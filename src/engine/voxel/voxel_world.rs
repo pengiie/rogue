@@ -23,7 +23,7 @@ use crate::{
     consts::{self, voxel::VOXEL_METER_LENGTH},
     engine::{
         asset::asset::{AssetHandle, Assets},
-        ecs::ecs_world::ECSWorld,
+        entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
         event::Events,
         graphics::{
             backend::{Buffer, GfxBufferCreateInfo, ResourceId},
@@ -46,8 +46,8 @@ use super::{
     esvo::{VoxelModelESVO, VoxelModelESVOGpu},
     flat::VoxelModelFlat,
     voxel::{
-        RenderableVoxelModelRef, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl,
-        VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
+        VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelImplConcrete, VoxelModelSchema,
     },
     voxel_registry::{VoxelModelId, VoxelModelRegistry},
     voxel_terrain::{self, RenderableChunksGpu, VoxelChunks},
@@ -100,7 +100,7 @@ impl VoxelWorld {
         let chunks: &mut VoxelChunks = &mut voxel_world.chunks;
         let mut player_query = ecs_world.player_query::<&Transform>();
         if let Some((_, player_transform)) = player_query.try_player() {
-            let player_pos = player_transform.isometry.translation.vector;
+            let player_pos = player_transform.position;
             chunks.update_player_position(player_pos);
         }
 
@@ -317,6 +317,8 @@ pub struct VoxelWorldGpu {
     /// The acceleration buffer for rendered entity voxel model bounds interaction, hold the
     /// pointed to voxel model index and the position and rotation matrix data of this entity.
     entity_acceleration_buffer: Option<ResourceId<Buffer>>,
+    entity_count: u32,
+
     /// The buffer for every unique voxel models info such as its data pointers and length.
     voxel_model_info_allocator: Option<GpuBufferAllocator>,
     voxel_model_info_map: HashMap<VoxelModelId, VoxelWorldModelGpuInfo>,
@@ -368,7 +370,10 @@ impl VoxelWorldGpu {
     pub fn new() -> Self {
         Self {
             renderable_chunks: RenderableChunksGpu::new(),
+
             entity_acceleration_buffer: None,
+            entity_count: 0,
+
             voxel_model_info_allocator: None,
             voxel_model_info_map: HashMap::new(),
 
@@ -384,17 +389,46 @@ impl VoxelWorldGpu {
         self.voxel_data_allocator.as_ref()
     }
 
+    pub fn entity_acceleration_struct_size() -> usize {
+        /*aabb_min*/
+        (4 * 4) + // float3
+        /*aabb_max*/
+        (4 * 4) + // float3
+        /*rotation*/ (4 * 11) +// matrix3x3
+        /*model_info_ptr*/ 4 // uint
+    }
+
     pub fn update_gpu_objects(
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         mut device: ResMut<DeviceResource>,
+        ecs_world: Res<ECSWorld>,
     ) {
         let voxel_world_gpu = &mut voxel_world_gpu;
-        if voxel_world_gpu.entity_acceleration_buffer.is_none() {
+
+        // Create or resize entity acceleration buffer.
+        const DEFAULT_INITIAL_COUNT: usize = 10;
+        let entity_count = Self::query_voxel_entities(&ecs_world)
+            .iter()
+            .count()
+            .max(DEFAULT_INITIAL_COUNT);
+        voxel_world_gpu.entity_count = entity_count as u32;
+        let req_entity_data_size = (entity_count * Self::entity_acceleration_struct_size()) as u64;
+        if let Some(entity_acceleration_buffer) = &mut voxel_world_gpu.entity_acceleration_buffer {
+            let buffer_info = device.get_buffer_info(entity_acceleration_buffer);
+            if buffer_info.size < req_entity_data_size {
+                // TODO: Remove old buffer.
+                let new_buffer = device.create_buffer(GfxBufferCreateInfo {
+                    name: "world_entity_acceleration_buffer".to_owned(),
+                    size: req_entity_data_size,
+                });
+                *entity_acceleration_buffer = new_buffer;
+            }
+        } else {
             voxel_world_gpu.entity_acceleration_buffer =
                 Some(device.create_buffer(GfxBufferCreateInfo {
                     name: "world_entity_acceleration_buffer".to_owned(),
-                    size: 4 * 1000,
+                    size: req_entity_data_size,
                 }));
         }
 
@@ -420,6 +454,9 @@ impl VoxelWorldGpu {
             .renderable_chunks
             .update_gpu_objects(&mut device, &voxel_world.chunks.renderable_chunks);
 
+        // Update each renderable model, though just because it's in the registry doesn't mean it's
+        // being used.
+        //
         // TODO: Get entities with transform, then see which models are in view of the camera
         // frustum or near it, then update the voxel model those entities point to. This way we can
         // save on transfer bandwidth by only updating what we need. This will also be why
@@ -477,11 +514,72 @@ impl VoxelWorldGpu {
             );
         }
 
+        // Write terrain acceleration data.
         voxel_world_gpu.renderable_chunks.write_render_data(
             &mut device,
             &voxel_world.chunks.renderable_chunks,
             &voxel_world_gpu.voxel_model_info_map,
         );
+
+        // Write entity acceleration data.
+        let mut voxel_entity_data = Vec::new();
+        let mut voxel_entities_query = Self::query_voxel_entities(&ecs_world);
+        for (entity, (transform, voxel_entity)) in voxel_entities_query.iter() {
+            let Some(model_gpu_info) = voxel_world_gpu
+                .voxel_model_info_map
+                .get(&voxel_entity.voxel_model_id)
+            else {
+                panic!("Model should be loaded by now");
+            };
+
+            let side_length = model_gpu_info.voxel_model_dimensions;
+            let min = transform.position();
+            let max = min + side_length.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH;
+            let r = transform.rotation();
+            let r = r.matrix();
+            voxel_entity_data.extend_from_slice(&min.x.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&min.y.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&min.z.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 4]);
+
+            voxel_entity_data.extend_from_slice(&max.x.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&max.y.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&max.z.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 4]);
+
+            voxel_entity_data.extend_from_slice(&r.m11.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m12.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m13.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 4]);
+            voxel_entity_data.extend_from_slice(&r.m21.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m22.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m23.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 4]);
+            voxel_entity_data.extend_from_slice(&r.m31.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m32.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&r.m33.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 4]);
+            voxel_entity_data.extend_from_slice(
+                &model_gpu_info
+                    .info_allocation
+                    .start_index_stride_dword()
+                    .to_le_bytes(),
+            );
+            voxel_entity_data.extend_from_slice(&[0u8; 8]);
+        }
+        if !voxel_entity_data.is_empty() {
+            device.write_buffer_slice(
+                voxel_world_gpu.world_entity_acceleration_buffer(),
+                0,
+                bytemuck::cast_slice(voxel_entity_data.as_slice()),
+            );
+        }
+    }
+
+    fn query_voxel_entities<'a>(
+        ecs_world: &'a ECSWorld,
+    ) -> hecs::QueryBorrow<'a, (&Transform, &RenderableVoxelEntity)> {
+        ecs_world.query()
     }
 
     fn voxel_model_info_allocator_mut(&mut self) -> &mut GpuBufferAllocator {
@@ -561,10 +659,14 @@ impl VoxelWorldGpu {
         self.renderable_chunks.terrain_side_length
     }
 
-    pub fn world_acceleration_buffer(&self) -> &ResourceId<Buffer> {
-        self.entity_acceleration_buffer
-            .as_ref()
-            .expect("world_acceleration_buffer not initialized when it should have been by now")
+    pub fn world_entity_acceleration_buffer(&self) -> &ResourceId<Buffer> {
+        self.entity_acceleration_buffer.as_ref().expect(
+            "world_entity_acceleration_buffer not initialized when it should have been by now",
+        )
+    }
+
+    pub fn entity_count(&self) -> u32 {
+        self.entity_count
     }
 
     pub fn world_terrain_acceleration_buffer(&self) -> &ResourceId<Buffer> {

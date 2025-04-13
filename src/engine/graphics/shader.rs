@@ -447,11 +447,11 @@ impl ShaderCompiler {
             mut uniform_offset: u32,
         ) {
             let ty_layout = var_layout.type_layout();
-            // debug!(
-            //     "Processing var layout: {:?}, type: {:?}",
-            //     var_layout.variable().name(),
-            //     ty_layout.kind()
-            // );
+            debug!(
+                "Processing var layout: {:?}, type: {:?}",
+                var_layout.variable().name(),
+                ty_layout.kind()
+            );
             let var_name = var_layout.variable().name().unwrap().to_owned();
             let var_name = if parent_var_name.is_empty() {
                 var_name
@@ -502,18 +502,6 @@ impl ShaderCompiler {
 
             match ty_layout.kind() {
                 slang::TypeKind::Resource => 'm: {
-                    let shape = ty_layout.resource_shape();
-                    if shape == slang::ResourceShape::SlangStructuredBuffer {
-                        process_var_layout(
-                            metadata,
-                            set,
-                            ty_layout.element_var_layout(),
-                            var_name,
-                            binding_offset,
-                            uniform_offset,
-                        );
-                        break 'm;
-                    }
                     // debug!("Resource with resource kind {:?}, binding: ", shape);
 
                     let binding_type = match ty_layout.resource_shape() {
@@ -523,7 +511,8 @@ impl ShaderCompiler {
                             _ => unreachable!(),
                         },
                         slang::ResourceShape::SlangTextureCube => todo!(),
-                        slang::ResourceShape::SlangByteAddressBuffer => {
+                        slang::ResourceShape::SlangByteAddressBuffer
+                        | slang::ResourceShape::SlangStructuredBuffer => {
                             ShaderBindingType::StorageBuffer
                         }
                         _ => todo!(),

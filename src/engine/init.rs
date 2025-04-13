@@ -9,7 +9,7 @@ use super::world::game_world::GameWorld;
 use super::{
     asset::asset::Assets,
     audio::Audio,
-    ecs::ecs_world::ECSWorld,
+    entity::ecs_world::ECSWorld,
     event::Events,
     input::Input,
     physics::physics_world::PhysicsWorld,

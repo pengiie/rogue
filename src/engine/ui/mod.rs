@@ -3,20 +3,29 @@ use std::borrow::Borrow;
 use egui::Separator;
 use gui::Egui;
 use log::debug;
+use nalgebra::{Translation3, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
     common::color::Color,
     consts,
     engine::asset::{asset::AssetPath, repr::settings::SettingsAsset},
+    game::entity::GameEntity,
     settings::Settings,
 };
 
 use super::{
     asset::asset::Assets,
+    entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
     graphics::renderer::Renderer,
+    physics::transform::Transform,
     resource::{Res, ResMut},
-    voxel::voxel_world::{self, VoxelWorld, VoxelWorldGpu},
+    voxel::{
+        attachment::{Attachment, PTMaterial},
+        flat::VoxelModelFlat,
+        voxel::VoxelModel,
+        voxel_world::{self, VoxelWorld, VoxelWorldGpu},
+    },
     window::{
         time::{Instant, Time},
         window::Window,
@@ -109,6 +118,7 @@ impl UI {
         voxel_world_pu: Res<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
         settings: Res<Settings>,
+        mut ecs_world: ResMut<ECSWorld>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let debug_state = &mut ui.debug_state;
@@ -197,6 +207,46 @@ impl UI {
                             .add(egui::Button::new("Regenerate chunks").rounding(4.0))
                             .clicked()
                         {}
+
+                        if ui
+                            .add(egui::Button::new("Spawn entity").rounding(4.0))
+                            .clicked()
+                        {
+                            let mut player_query = ecs_world.player_query::<&Transform>();
+                            let player_pos = player_query.player().1.position();
+                            let player_dir = player_query
+                                .player()
+                                .1
+                                .rotation()
+                                .transform_vector(&Vector3::z());
+                            let mut flat_model =
+                                VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
+                            for (local_pos, mut voxel) in flat_model.xyz_iter_mut() {
+                                voxel.set_attachment(
+                                    Attachment::PTMATERIAL,
+                                    Some(
+                                        PTMaterial::diffuse(Color::from(
+                                            local_pos.map(|x| x as f32 / 31.0),
+                                        ))
+                                        .encode(),
+                                    ),
+                                );
+                            }
+                            let model_id = voxel_world.registry.register_renderable_voxel_model(
+                                "entity",
+                                VoxelModel::new(flat_model),
+                            );
+                            drop(player_query);
+                            ecs_world.spawn((
+                                GameEntity::new("new_entity"),
+                                Transform::with_translation(Translation3::from(
+                                    player_pos + player_dir * 2.0,
+                                )),
+                                RenderableVoxelEntity {
+                                    voxel_model_id: model_id,
+                                },
+                            ));
+                        }
                     }
                 });
         });

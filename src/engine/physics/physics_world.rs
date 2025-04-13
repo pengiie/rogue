@@ -1,6 +1,6 @@
 use rogue_macros::Resource;
 
-use crate::engine::{ecs::ecs_world::ECSWorld, resource::ResMut};
+use crate::engine::{entity::ecs_world::ECSWorld, resource::ResMut};
 
 #[derive(Resource)]
 pub struct PhysicsWorld {}

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     common::color::Color,
     engine::{
-        ecs::{self, ecs_world::ECSWorld},
+        entity::{self, ecs_world::ECSWorld},
         resource::{Res, ResMut},
         voxel::voxel_world::{self, VoxelWorldGpu},
         window::{time::Time, window::Window},
@@ -358,9 +358,14 @@ impl Renderer {
                 writer.write_uniform("u_frame.world_info.camera.far_plane", camera.far_plane());
 
                 writer.write_binding(
-                    "u_frame.voxel.terrain.data",
-                    *voxel_world_gpu.world_terrain_acceleration_buffer(),
+                    "u_frame.voxel.entity_data.accel_buf",
+                    *voxel_world_gpu.world_entity_acceleration_buffer(),
                 );
+                writer.write_uniform(
+                    "u_frame.voxel.entity_data.entity_count",
+                    voxel_world_gpu.entity_count(),
+                );
+
                 writer.write_binding(
                     "u_frame.voxel.model_info_data",
                     *voxel_world_gpu.world_voxel_model_info_buffer(),
@@ -370,6 +375,10 @@ impl Renderer {
                     *voxel_world_gpu.world_data_buffer().unwrap(),
                 );
 
+                writer.write_binding(
+                    "u_frame.voxel.terrain.data",
+                    *voxel_world_gpu.world_terrain_acceleration_buffer(),
+                );
                 writer.write_uniform(
                     "u_frame.voxel.terrain.side_length",
                     voxel_world_gpu.terrain_side_length(),

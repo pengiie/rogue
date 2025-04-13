@@ -93,57 +93,7 @@ pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
     fn new() -> Self;
 }
 
-// pub struct VoxelModelGpuNone;
-//
-// impl VoxelModelGpuImpl for VoxelModelGpuNone {
-//     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
-//         unimplemented!("This gpu model is not renderable.")
-//     }
-//
-//     fn update_gpu_objects(
-//         &mut self,
-//         allocator: &mut GpuBufferAllocator,
-//         model: &dyn VoxelModelImpl,
-//     ) -> bool {
-//         unimplemented!("This gpu model is not renderable.")
-//     }
-//
-//     fn write_gpu_updates(
-//         &mut self,
-//         device: &mut ,
-//         allocator: &mut GpuBufferAllocator,
-//         model: &dyn VoxelModelImpl,
-//     ) {
-//         unimplemented!("This gpu model is not renderable.")
-//     }
-// }
-
 pub type VoxelModelSchema = u32;
-
-pub struct RenderableVoxelModelRef(pub VoxelModelId);
-
-impl std::ops::Deref for RenderableVoxelModelRef {
-    type Target = VoxelModelId;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Bundle)]
-pub struct RenderableVoxelModel {
-    pub transform: VoxelModelTransform,
-    pub renderable_voxel_model_ref: RenderableVoxelModelRef,
-}
-
-impl RenderableVoxelModel {
-    pub fn new(transform: VoxelModelTransform, voxel_model_id: VoxelModelId) -> Self {
-        Self {
-            transform,
-            renderable_voxel_model_ref: RenderableVoxelModelRef(voxel_model_id),
-        }
-    }
-}
 
 pub struct VoxelModelGpu<T: VoxelModelGpuImplConcrete> {
     model_gpu: T,

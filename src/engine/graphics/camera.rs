@@ -1,7 +1,7 @@
 use log::debug;
 use rogue_macros::Resource;
 
-use crate::{consts, engine::ecs::ecs_world::Entity};
+use crate::{consts, engine::entity::ecs_world::Entity};
 
 use super::renderer;
 

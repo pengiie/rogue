@@ -16,7 +16,7 @@ use crate::{
         self,
         asset::asset::Assets,
         audio::Audio,
-        ecs::ecs_world::ECSWorld,
+        entity::ecs_world::ECSWorld,
         event::Events,
         graphics::{backend::GraphicsBackendEvent, device::DeviceResource, renderer::Renderer},
         input::Input,

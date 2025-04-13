@@ -6,7 +6,7 @@ use nalgebra::{AbstractRotation, Rotation3, Translation3, UnitQuaternion, Vector
 
 use crate::{
     engine::{
-        ecs::ecs_world::ECSWorld,
+        entity::ecs_world::ECSWorld,
         graphics::camera::{Camera, MainCamera},
         input::{keyboard::Key, Input},
         physics::transform::Transform,
@@ -17,7 +17,7 @@ use crate::{
     settings::Settings,
 };
 
-use super::{GameEntity, GameEntityType};
+use super::GameEntity;
 
 pub struct Player {
     euler: Vector3<f32>,
@@ -59,8 +59,7 @@ impl Player {
                 .clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
             player.euler.y += md.0 * settings.mouse_sensitivity;
         }
-        transform.isometry.rotation =
-            UnitQuaternion::from_euler_angles(player.euler.x, player.euler.y, 0.0);
+        transform.rotation = UnitQuaternion::from_euler_angles(player.euler.x, player.euler.y, 0.0);
 
         let input_axes = Vector2::new(input.horizontal_axis(), input.vertical_axis());
 
@@ -86,9 +85,8 @@ impl Player {
             speed = 10.0;
         }
 
-        transform.isometry.translation.vector +=
-            translation * speed * time.delta_time().as_secs_f32();
-        settings.player_position = transform.isometry.translation.vector;
+        transform.position += translation * speed * time.delta_time().as_secs_f32();
+        settings.player_position = transform.position;
         settings.player_rotation = player.euler;
     }
 
@@ -102,7 +100,7 @@ impl Player {
         }
 
         let player = ecs_world.spawn((
-            GameEntity::new(GameEntityType::Player).set_name("a_player_name"),
+            GameEntity::new("a_player_name"),
             Player::new(settings.player_rotation),
             Camera::new(90.0),
             Transform::with_translation(Translation3::from(settings.player_position)),

@@ -1,6 +1,6 @@
 pub mod asset;
 pub mod audio;
-pub mod ecs;
+pub mod entity;
 pub mod event;
 pub mod graphics;
 pub mod init;

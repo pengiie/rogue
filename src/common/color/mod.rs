@@ -54,6 +54,12 @@ impl Color<ColorSpaceSrgb> {
     }
 }
 
+impl From<nalgebra::Vector3<f32>> for Color<ColorSpaceSrgb> {
+    fn from(vec: nalgebra::Vector3<f32>) -> Self {
+        Self::new_srgb(vec.x, vec.y, vec.z)
+    }
+}
+
 impl<T: ColorSpace> std::fmt::Debug for Color<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Color").field("xyz", &self.xyz).finish()

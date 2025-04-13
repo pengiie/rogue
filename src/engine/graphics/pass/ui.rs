@@ -12,7 +12,7 @@ use rogue_macros::Resource;
 use wgpu::PipelineCompilationOptions;
 
 use crate::engine::{
-    ecs::ecs_world::ECSWorld,
+    entity::ecs_world::ECSWorld,
     graphics::{
         backend::{
             Buffer, GfxAddressMode, GfxFilterMode, GfxImageCreateInfo, GfxImageFormat, GfxImageType, GfxImageWrite, GfxPassOnceImpl, GfxRenderPassAttachment, GfxSamplerCreateInfo, GraphicsBackendDevice, GraphicsBackendRecorder, Image, ResourceId, Sampler

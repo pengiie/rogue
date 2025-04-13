@@ -5,15 +5,16 @@ use std::{
     time::Duration,
 };
 
+use hecs::With;
 use log::debug;
-use nalgebra::{Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Translation3, UnitComplex, UnitQuaternion, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
     common::{aabb::AABB, color::Color},
     engine::{
         asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
-        ecs::ecs_world::ECSWorld,
+        entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
         graphics::camera::{Camera, MainCamera},
         physics::transform::Transform,
         resource::{Res, ResMut},
@@ -23,10 +24,7 @@ use crate::{
             flat::VoxelModelFlat,
             thc::VoxelModelTHC,
             unit::VoxelModelUnit,
-            voxel::{
-                RenderableVoxelModel, RenderableVoxelModelRef, VoxelData, VoxelModel,
-                VoxelModelSchema,
-            },
+            voxel::{VoxelData, VoxelModel, VoxelModelSchema},
             voxel_terrain::{self},
             voxel_transform::VoxelModelTransform,
             voxel_world::VoxelWorld,
@@ -87,6 +85,7 @@ impl GameWorld {
         mut voxel_world: ResMut<VoxelWorld>,
         mut assets: ResMut<Assets>,
         mut ecs_world: ResMut<ECSWorld>,
+        time: Res<Time>,
     ) {
         let voxel_world = &mut voxel_world as &mut VoxelWorld;
 
@@ -97,6 +96,13 @@ impl GameWorld {
             game_world.manual_save = false;
             game_world.perform_game_save(&mut assets, &mut ecs_world, voxel_world);
         } else if game_world.manual_load && can_save_or_load {
+        }
+
+        let mut q = ecs_world.query::<With<&mut Transform, &RenderableVoxelEntity>>();
+        for (entity, (mut transform)) in q.iter() {
+            transform.rotation *= (&UnitQuaternion::new(
+                Vector3::y() * f32::consts::PI * 2.0 * time.delta_time().as_secs_f32() * 0.25,
+            ));
         }
 
         // Check which assets successfully saved.

@@ -22,7 +22,7 @@ use crate::{
     consts,
     engine::{
         asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
-        ecs::ecs_world::ECSWorld,
+        entity::ecs_world::ECSWorld,
         event::Events,
         graphics::{
             backend::{Buffer, GfxBufferCreateInfo, ResourceId},
@@ -33,7 +33,7 @@ use crate::{
             attachment::{Attachment, PTMaterial},
             esvo::VoxelModelESVO,
             flat::VoxelModelFlat,
-            voxel::{RenderableVoxelModel, VoxelModel},
+            voxel::VoxelModel,
         },
         window::time::Timer,
     },
@@ -90,16 +90,6 @@ impl VoxelChunkRegionData {
 
     pub fn get_chunk_traversal(&self, world_chunk_pos: &Vector3<i32>) -> u64 {
         let local_chunk_pos = (world_chunk_pos - self.region_chunk_anchor).map(|x| x as u32);
-        debug!(
-            "World chunk pos is {:?} so the region pos is {:?}, local: {:?}, traversal is {:?}",
-            world_chunk_pos,
-            self.region_chunk_anchor,
-            local_chunk_pos,
-            morton::morton_traversal(
-                morton::morton_encode(local_chunk_pos),
-                consts::voxel::TERRAIN_REGION_TREE_HEIGHT,
-            )
-        );
 
         return morton::morton_traversal(
             morton::morton_encode(local_chunk_pos),
@@ -470,7 +460,6 @@ impl VoxelChunks {
                     .or_default()
                     .drain()
                 {
-                    log::debug!("Loaded region now loads the chunk at {:?}", chunk_pos);
                     let chunk_node = region.get_chunk(&chunk_pos);
                     if let VoxelRegionLeafNode::Existing { uuid, model } = chunk_node {
                         assert!(model.is_none(), "We shouldn't be loading this chunk if it already has an existing model.");

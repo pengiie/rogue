@@ -25,15 +25,12 @@ impl AssetLoader for VoxelChunkRegionData {
         Self: Sized + std::any::Any,
     {
         let mut reader = AssetByteReader::new(data.read_file()?, consts::io::REGION_FILE_HEADER)?;
-        log::debug!("GOT here WHOOOOOOO");
         let region_pos = reader.read::<Vector3<i32>>()?;
         let mut region = VoxelChunkRegionData::empty(region_pos);
 
         let node_size = reader.read::<u32>()?;
-        log::debug!("GOT here WHOOOOOOO 22222");
         let mut nodes = vec![0u32; node_size as usize];
         reader.read_to_slice(&mut nodes)?;
-        log::debug!("GOT here WHOOOOOOO 22222 333333");
 
         let mut stack = vec![(0u32, 0u32, 0u64)];
         while (!stack.is_empty()) {
@@ -53,10 +50,6 @@ impl AssetLoader for VoxelChunkRegionData {
                             + local_chunk_pos.cast::<i32>()),
                     );
                     if !chunk_uuid.is_nil() {
-                        log::debug!(
-                            "GOT a laoded valid uuid we are submitting whic is uuid {:?}",
-                            chunk_uuid
-                        );
                         *node = VoxelRegionLeafNode::Existing {
                             uuid: chunk_uuid,
                             model: None,
