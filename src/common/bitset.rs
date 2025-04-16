@@ -5,9 +5,13 @@ pub struct Bitset {
 }
 
 impl Bitset {
+    pub fn required_size_for_count(bits: usize) -> usize {
+        bits.next_multiple_of(32) / 32
+    }
+
     pub fn new(bits: usize) -> Self {
         Self {
-            data: vec![0; bits.next_multiple_of(32) / 32],
+            data: vec![0; Self::required_size_for_count(bits)],
             bits,
         }
     }

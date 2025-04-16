@@ -388,35 +388,37 @@ impl FrameGraph {
         let mut used_passes = vec![];
         for pass_handle in builder.pass_order.iter().rev() {
             let mut pass_info = builder.passes.remove(&pass_handle).unwrap();
-            if pass_info
+            if !pass_info
                 .outputs
                 .iter()
                 .find(|output| required_resources.contains(*output))
                 .is_some()
             {
-                // Additional implicit inputs due to any raster pipeline inputs.
-                let mut raster_image_inputs = Vec::new();
-                for pass_input in &pass_info.inputs {
-                    if let Some(raster_info) = builder
-                        .raster_pipelines
-                        .get(&pass_input.as_typed::<RasterPipeline>())
-                    {
-                        for input_image in &raster_info.color_attachments {
-                            raster_image_inputs.push(*input_image);
-                        }
-                    }
-                    required_resources.insert(*pass_input);
-                }
-                for image_input in raster_image_inputs {
-                    pass_info.inputs.insert(image_input.as_untyped());
-                }
-
-                debug!(
-                    "Using pass `{}`.",
-                    builder.resource_infos[pass_info.id.id as usize].name
-                );
-                used_passes.push(pass_info);
+                // TODO: Figure out the buffer situation.
+                // continue;
             }
+            // Additional implicit inputs due to any raster pipeline inputs.
+            let mut raster_image_inputs = Vec::new();
+            for pass_input in &pass_info.inputs {
+                if let Some(raster_info) = builder
+                    .raster_pipelines
+                    .get(&pass_input.as_typed::<RasterPipeline>())
+                {
+                    for input_image in &raster_info.color_attachments {
+                        raster_image_inputs.push(*input_image);
+                    }
+                }
+                required_resources.insert(*pass_input);
+            }
+            for image_input in raster_image_inputs {
+                pass_info.inputs.insert(image_input.as_untyped());
+            }
+
+            debug!(
+                "Using pass `{}`.",
+                builder.resource_infos[pass_info.id.id as usize].name
+            );
+            used_passes.push(pass_info);
         }
 
         used_passes.reverse();

@@ -22,6 +22,7 @@ use super::{
     resource::{Res, ResMut},
     voxel::{
         attachment::{Attachment, PTMaterial},
+        chunk_generator::{self, ChunkGenerator},
         flat::VoxelModelFlat,
         voxel::VoxelModel,
         voxel_world::{self, VoxelWorld, VoxelWorldGpu},
@@ -44,6 +45,8 @@ pub fn initialize_debug_ui_resource(app: &mut crate::app::App) {
 #[derive(Resource)]
 pub struct UI {
     pub debug_state: DebugUIState,
+
+    pub chunk_generator: ChunkGenerator,
 }
 
 pub struct DebugUIState {
@@ -88,6 +91,7 @@ impl UI {
     pub fn new() -> Self {
         UI {
             debug_state: DebugUIState::default(),
+            chunk_generator: ChunkGenerator::new(0),
         }
     }
 
@@ -121,7 +125,9 @@ impl UI {
         mut ecs_world: ResMut<ECSWorld>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
+        let ui: &mut UI = &mut ui;
         let debug_state = &mut ui.debug_state;
+        let chunk_generator = &mut ui.chunk_generator;
         egui.resolve_ui(&window, |ctx| {
             let mut total_allocation_str;
             let al = voxel_world_pu
@@ -206,7 +212,9 @@ impl UI {
                         if ui
                             .add(egui::Button::new("Regenerate chunks").rounding(4.0))
                             .clicked()
-                        {}
+                        {
+                            chunk_generator.generate_chunk(voxel_world, player_chunk_position);
+                        }
 
                         if ui
                             .add(egui::Button::new("Spawn entity").rounding(4.0))

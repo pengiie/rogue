@@ -165,8 +165,13 @@ impl Assets {
                 ProcessingAsset::Save { id, asset_recv } => {
                     match asset_recv.try_recv() {
                         Ok(res) => match res {
-                            _ => {}
-                            Err(err) => log::error!("Error saving asset: {}", err.to_string()),
+                            _ => {
+                                assets.asset_statuses.insert(*id, AssetStatus::Saved);
+                            }
+                            Err(err) => {
+                                log::error!("Error saving asset: {}", err.to_string());
+                                assets.asset_statuses.insert(*id, AssetStatus::Error(err));
+                            }
                         },
                         Err(err) => {
                             match err {
@@ -422,12 +427,23 @@ impl Assets {
 pub enum AssetStatus {
     // Still loading or saving.
     InProgress,
+    // Saved successfully.
+    Saved,
     // Loaded successfully.
     Loaded,
     // Asset path could not be found.
     NotFound,
     // Asset errored while loading.
     Error(anyhow::Error),
+}
+
+impl AssetStatus {
+    pub fn is_saved(&self) -> bool {
+        match &self {
+            Self::Saved => true,
+            _ => false,
+        }
+    }
 }
 
 enum QueuedAsset {

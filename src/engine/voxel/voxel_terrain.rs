@@ -278,8 +278,6 @@ pub struct VoxelChunks {
     pub waiting_io_regions: HashMap<Vector3<i32>, AssetHandle>,
     pub waiting_io_region_chunks: HashMap<Vector3<i32>, HashSet<Vector3<i32>>>,
     pub waiting_io_chunks: Vec<(Vector3<i32>, AssetHandle)>,
-
-    pub chunk_generator: ChunkGenerator,
 }
 
 impl VoxelChunks {
@@ -300,8 +298,6 @@ impl VoxelChunks {
             waiting_io_regions: HashMap::new(),
             waiting_io_region_chunks: HashMap::new(),
             waiting_io_chunks: Vec::new(),
-
-            chunk_generator: ChunkGenerator::new(0),
         }
     }
 
@@ -340,6 +336,15 @@ impl VoxelChunks {
                     self.waiting_save_handles.insert(save_handle);
                 }
             }
+        }
+    }
+
+    pub fn try_update_chunk_normal(
+        renderable_chunks: &mut RenderableChunks,
+        chunk_pos: &Vector3<i32>,
+    ) {
+        if renderable_chunks.in_bounds(chunk_pos) && renderable_chunks.chunk_exists(*chunk_pos) {
+            renderable_chunks.to_update_chunk_normals.insert(*chunk_pos);
         }
     }
 
@@ -413,6 +418,7 @@ impl VoxelChunks {
                     return;
                 };
                 self.renderable_chunks.try_load_chunk(&chunk_pos, *model_id);
+                Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
             }
         }
     }
@@ -450,6 +456,7 @@ impl VoxelChunks {
                     region_pos.z,
                     err
                 ),
+                _ => unreachable!(),
             }
 
             to_remove_waiting_regions.push(*region_pos);
@@ -532,6 +539,7 @@ impl VoxelChunks {
                         err
                     );
                 }
+                _ => unreachable!(),
             }
 
             if let Some(chunk_model) = chunk_model {
@@ -556,6 +564,7 @@ impl VoxelChunks {
                 *model = Some(model_id);
                 self.renderable_chunks
                     .try_load_chunk(chunk_position, model_id);
+                Self::try_update_chunk_normal(&mut self.renderable_chunks, chunk_position);
             }
             to_remove_waiting_chunks.push(i);
         }
@@ -568,6 +577,7 @@ impl VoxelChunks {
 
     pub fn mark_chunk_edited(&mut self, chunk_pos: Vector3<i32>) {
         self.edited_chunks.insert(chunk_pos);
+        Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
     }
 
     pub fn mark_region_edited(&mut self, region_pos: Vector3<i32>) {
@@ -579,6 +589,16 @@ impl VoxelChunks {
     }
 
     pub fn update_chunk_queue(&mut self, assets: &mut Assets, registry: &mut VoxelModelRegistry) {
+        let mut to_remove_handles = Vec::new();
+        for handle in self.waiting_save_handles.iter() {
+            if assets.get_asset_status(handle).is_saved() {
+                to_remove_handles.push(handle.clone());
+            }
+        }
+        for handle in to_remove_handles {
+            self.waiting_save_handles.remove(&handle);
+        }
+
         if self.player_chunk_position.is_none() || self.is_saving() {
             return;
         }
@@ -710,6 +730,8 @@ pub struct RenderableChunks {
     pub window_offset: Vector3<u32>,
     pub chunk_anchor: Vector3<i32>,
     pub is_dirty: bool,
+
+    pub to_update_chunk_normals: HashSet<Vector3<i32>>,
 }
 
 impl RenderableChunks {
@@ -721,6 +743,7 @@ impl RenderableChunks {
             window_offset: Vector3::new(0, 0, 0),
             chunk_anchor: Vector3::new(0, 0, 0),
             is_dirty: false,
+            to_update_chunk_normals: HashSet::new(),
         }
     }
 
@@ -811,6 +834,11 @@ impl RenderableChunks {
     fn unload_chunk(&mut self, local_chunk_pos: Vector3<u32>) {
         let index = self.get_chunk_index(local_chunk_pos) as usize;
         self.chunk_model_pointers[index] = VoxelModelId::null();
+    }
+
+    pub fn chunk_exists(&self, world_chunk_pos: Vector3<i32>) -> bool {
+        let local_pos = world_chunk_pos - self.chunk_anchor;
+        return self.get_chunk_model(local_pos.map(|x| x as u32)).is_some();
     }
 
     /// local_chunk_pos is local to self.chunk_anchor, with sliding window offset not taken into

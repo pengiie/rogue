@@ -35,7 +35,7 @@ use super::{
     voxel_transform::VoxelModelTransform,
 };
 
-pub struct VoxelModelRange {
+pub struct VoxelModelEdit {
     pub offset: Vector3<u32>,
     pub data: VoxelModelFlat,
 }
@@ -44,8 +44,8 @@ pub trait VoxelModelImpl: Send + Sync + Any {
     // Returns the local voxel hit if it was hit.
     fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<Vector3<u32>>;
 
-    fn set_voxel_range_impl(&mut self, range: &VoxelModelRange);
-    fn set_voxel_range(&mut self, range: &VoxelModelRange) {
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit);
+    fn set_voxel_range(&mut self, range: &VoxelModelEdit) {
         // Asserts that the range's position with its length fits within this voxel model.
         assert!(range
             .data

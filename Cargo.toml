@@ -58,3 +58,6 @@ web-sys = { version = "0.3.72", features = [
   "Response",
   "RequestInit",
 ]}
+
+[profile.dev]
+opt-level = 1

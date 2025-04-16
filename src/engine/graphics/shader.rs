@@ -447,11 +447,11 @@ impl ShaderCompiler {
             mut uniform_offset: u32,
         ) {
             let ty_layout = var_layout.type_layout();
-            debug!(
-                "Processing var layout: {:?}, type: {:?}",
-                var_layout.variable().name(),
-                ty_layout.kind()
-            );
+            // debug!(
+            //     "Processing var layout: {:?}, type: {:?}",
+            //     var_layout.variable().name(),
+            //     ty_layout.kind()
+            // );
             let var_name = var_layout.variable().name().unwrap().to_owned();
             let var_name = if parent_var_name.is_empty() {
                 var_name

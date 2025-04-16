@@ -23,8 +23,8 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentMap},
     flat::VoxelModelFlat,
     voxel::{
-        VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplConcrete,
-        VoxelModelRange,
+        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelImplConcrete,
     },
 };
 
@@ -150,7 +150,7 @@ impl VoxelModelImpl for VoxelModelTHC {
         todo!()
     }
 
-    fn set_voxel_range_impl(&mut self, range: &VoxelModelRange) {}
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {}
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
         consts::voxel::MODEL_THC_SCHEMA

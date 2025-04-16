@@ -78,6 +78,7 @@ pub fn game_loop(app: &App) {
     app.run_system(Renderer::acquire_swapchain_image);
     if app.get_resource::<Renderer>().did_acquire_swapchain() {
         app.run_system(UIPass::write_ui_pass);
+        app.run_system(VoxelWorldGpu::write_normal_calc_pass);
         app.run_system(Renderer::finish_frame);
     }
 

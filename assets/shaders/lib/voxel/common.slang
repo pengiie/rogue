@@ -6,11 +6,11 @@ public interface IVoxelModel {
 
 }
 
-const static uint INVALID_PTR = 0xFFFFFFFF;
+public const static uint INVALID_PTR = 0xFFFFFFFF;
 public struct Terrain {
   public uint side_length;
   uint volume;
-  int3 anchor;
+  public int3 anchor;
   uint3 window_offset;
   ByteAddressBuffer data;
 
@@ -21,6 +21,21 @@ public struct Terrain {
     let min = (float3) this.anchor * consts::TERRAIN_CHUNK_METER_LENGTH;
     let max = min + meter_side_length;
     return AABB.new_min_max(min, max);
+  }
+
+  public static uint get_chunk_index(uint3 pos) {
+      let side_length = u_frame.voxel.terrain.side_length;
+      return pos.x + 
+             pos.y * side_length + 
+             pos.z * (side_length * side_length);
+  }
+
+  public static uint get_chunk_ptr(uint3 pos) {
+      let terrain = u_frame.voxel.terrain;
+      let window_pos = (uint3) ((pos + terrain.window_offset) % terrain.side_length);
+      let index = Terrain.get_chunk_index(window_pos);
+      let chunk_model_ptr = terrain.data.Load<uint>(index << 2);
+      return chunk_model_ptr;
   }
 
   public static RayTerrainTest trace(Ray ray) {
@@ -153,24 +168,22 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
       let thc = THC(aabb, voxel_model_ptr);
       return thc.trace(ray);
     case consts::VOXEL_MODEL_SCHEMA_FLAT:
-      let flat = Flat(aabb, voxel_model_ptr);
-      return flat.trace(ray);
+      let flat = Flat(voxel_model_ptr);
+      return flat.trace(ray, aabb);
   }
 
   return RayModelTest.miss();
 }
 
 public struct Flat {
-  AABB root_aabb;
   uint voxel_model_ptr;
   uint3 side_length; 
                         
   uint presence_data_ptr;
 
-  public __init(AABB in_aabb, uint in_voxel_model_ptr) {
+  public __init(uint in_voxel_model_ptr) {
     let info_data = u_frame.voxel.model_info_data;
     
-    root_aabb = in_aabb;
     voxel_model_ptr = in_voxel_model_ptr;
     side_length = uint3(
       info_data.Load<uint>((voxel_model_ptr + 1) << 2),
@@ -180,30 +193,43 @@ public struct Flat {
     presence_data_ptr = info_data.Load<uint>((voxel_model_ptr + 4) << 2);
   }
 
-  public RayModelTest trace(Ray in_ray) {
-    let root_hit_info = ray_aabb_test(in_ray, this.root_aabb);
+  public uint get_voxel_index(uint3 pos) {
+      return pos.x + this.side_length.x * pos.y + (this.side_length.x * this.side_length.y) * pos.z;
+  }
+
+  public bool voxel_exists(uint voxel_index) {
+      let presence_u32 = u_frame.voxel.model_voxel_data.Load<uint>((this.presence_data_ptr + (voxel_index / 32)) << 2);
+      let is_present = (presence_u32 & (1 << (voxel_index % 32))) > 0;
+      return is_present;
+  }
+
+  public RayModelTest trace(Ray in_ray, AABB root_aabb) {
+    let root_hit_info = ray_aabb_test(in_ray, root_aabb);
 
     var dda = RayDDA(in_ray.advance_clone(root_hit_info.t_enter),
-                     this.root_aabb,
+                     root_aabb,
                      this.side_length);
     var i = 0;
     var last_grid_pos = dda.curr_grid_pos();
     while (dda.in_bounds() && i < 4321) {
       let grid_pos = dda.curr_grid_pos();
-      let voxel_index = grid_pos.x + this.side_length.x * grid_pos.y + (this.side_length.x * this.side_length.y) * grid_pos.z;
-      let presence_u32 = u_frame.voxel.model_voxel_data.Load<uint>((this.presence_data_ptr + (voxel_index / 32)) << 2);
-      let is_present = (presence_u32 & (1 << (voxel_index % 32))) > 0;
-      if (is_present) {
+      let voxel_index = this.get_voxel_index((uint3) grid_pos);
+      if (this.voxel_exists(voxel_index)) {
         if (let pt_material = this.load_ptmaterial(voxel_index)) {
+          var color = pt_material;
+          if (let normal = this.load_normal(voxel_index)) {
+            let l = dot(normal, normalize(-float3(0.7,-1,-0.2)));
+            color *= max(l, 0.2);
+          }
           //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
-          let t_scaling = (this.root_aabb.max() - this.root_aabb.min()) / (float3) this.side_length;
-          let next_point = this.root_aabb.min() + ((float3) last_grid_pos + ((float3) dda.unit_grid * 0.5 + 0.5)) * t_scaling;
+          let t_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;
+          let next_point = root_aabb.min() + ((float3) last_grid_pos + ((float3) dda.unit_grid * 0.5 + 0.5)) * t_scaling;
           let hit_t = ray_point_test(in_ray, next_point);
           var depth = min3(hit_t.x, hit_t.y, hit_t.z);
           if (i == 0) {
             depth = root_hit_info.t_enter;
           }
-          return RayModelTest.hit(pt_material, depth);
+          return RayModelTest.hit(color, depth);
         }
       }
 
@@ -215,7 +241,7 @@ public struct Flat {
     return RayModelTest.miss();
   }
 
-  private Optional<uint> load_attachment_ptr(uint attachment_index, uint voxel_index) {
+  private Optional<Tuple<uint, uint>> load_attachment_ptrs(uint attachment_index) {
     let info_data = u_frame.voxel.model_info_data;
     let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 5 + attachment_index) << 2);
     if (attachment_presence_ptr == 0xFFFFFFFF) {
@@ -227,6 +253,17 @@ public struct Flat {
       return none;
     }
 
+    return makeTuple(attachment_presence_ptr, attachment_raw_ptr);
+  }
+
+  private Optional<uint> load_voxel_attachment(uint attachment_index, uint voxel_index) {
+    let attachment_ptr_pair = load_attachment_ptrs(attachment_index);
+    if (attachment_ptr_pair == none) {
+      return none;
+    }
+    let attachment_presence_ptr = attachment_ptr_pair.value._0;
+    let attachment_raw_ptr = attachment_ptr_pair.value._1;
+
     let attachment_mask = u_frame.voxel.model_voxel_data.Load<uint>((attachment_presence_ptr + (voxel_index / 32)) << 2);
     let is_attachment_present = (attachment_mask & (1 << (voxel_index % 32))) > 0;
     if (!is_attachment_present) {
@@ -237,7 +274,7 @@ public struct Flat {
   }
 
   private Optional<float3> load_ptmaterial(uint voxel_index) {
-    let ptmaterial_data_ptr_opt = this.load_attachment_ptr(0, voxel_index);
+    let ptmaterial_data_ptr_opt = this.load_voxel_attachment(0, voxel_index);
     if (ptmaterial_data_ptr_opt == none) {
       return none;
     }
@@ -252,6 +289,36 @@ public struct Flat {
       (float) ((compressed_ptmaterial >> 8) & 0xFF) / 255.0,
       (float) (compressed_ptmaterial & 0xFF) / 255.0,
     ));
+  }
+
+  private Optional<float3> load_normal(uint voxel_index) {
+    let normal_data_ptrs = load_attachment_ptrs(1);
+    if (normal_data_ptrs == none) {
+      return none;
+    }
+    let normal_data_ptr = normal_data_ptrs.value._1 + voxel_index;
+    let compressed_normal = u_frame.voxel.model_voxel_data.Load<uint>(normal_data_ptr << 2);
+
+    return float3(
+      ((float) ((compressed_normal >> 16) & 0xFF) / 255.0) * 2.0 - 1.0,
+      ((float) ((compressed_normal >> 8) & 0xFF) / 255.0) * 2.0 - 1.0,
+      ((float) (compressed_normal & 0xFF) / 255.0) * 2.0 - 1.0,
+    );
+  }
+
+  public void set_normal(uint voxel_index, float3 normal) {
+    let normal_data_ptrs = load_attachment_ptrs(1);
+    if (normal_data_ptrs == none) {
+      return;
+    }
+    let presence_ptr = normal_data_ptrs.value._0;
+    let data_ptr = normal_data_ptrs.value._1;
+
+    let compressed_normal = (((uint) floor((normal.x * 0.5 + 0.5) * 255.0)) << 16) |
+                            (((uint) floor((normal.y * 0.5 + 0.5) * 255.0)) << 8) |
+                            (uint) floor((normal.z * 0.5 + 0.5) * 255.0);
+
+    u_frame.voxel.rw_model_voxel_data.Store<uint>((data_ptr + voxel_index) << 2, compressed_normal);
   }
 }
 

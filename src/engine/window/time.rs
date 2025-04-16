@@ -129,3 +129,27 @@ impl Timer {
         self.last_instant = Instant::now();
     }
 }
+
+pub struct Stopwatch {
+    name: String,
+    creation_instant: Instant,
+}
+
+impl Stopwatch {
+    pub fn new(name: impl ToString) -> Self {
+        Self {
+            name: name.to_string(),
+            creation_instant: Instant::now(),
+        }
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.creation_instant.elapsed()
+    }
+}
+
+impl Drop for Stopwatch {
+    fn drop(&mut self) {
+        log::info!("Stopwatch {}: Dropped in {:?}.", self.name, self.elapsed());
+    }
+}

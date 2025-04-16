@@ -809,7 +809,7 @@ impl VoxelModelImpl for VoxelModelESVO {
         todo!()
     }
 
-    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelRange) {
+    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelEdit) {
         todo!()
     }
 

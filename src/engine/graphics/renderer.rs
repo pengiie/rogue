@@ -57,6 +57,12 @@ pub struct GraphConstantsDebugUI {
     pub pass_ui: &'static str,
 }
 
+pub struct GraphConstantsNormalCalc {
+    pub pipeline_compute_terrain: &'static str,
+    pub pipeline_compute_terrain_info: FrameGraphComputeInfo<'static>,
+    pub pass_normal_calc: &'static str,
+}
+
 pub struct GraphConstantsVoxel {
     pub buffer_terrain_acceleration_data: &'static str,
     pub buffer_model_info_data: &'static str,
@@ -84,6 +90,7 @@ pub struct GraphConstantsPostProcess {
 
 pub struct GraphConstants {
     pub voxel: GraphConstantsVoxel,
+    pub normal_calc: GraphConstantsNormalCalc,
     pub rt: GraphConstantsRT,
     pub debug_ui: GraphConstantsDebugUI,
     pub post_process: GraphConstantsPostProcess,
@@ -101,6 +108,14 @@ impl Renderer {
             buffer_terrain_acceleration_data: "rt_buffer_terrain_acceleration_data",
             buffer_model_info_data: "rt_buffer_model_info_data",
             buffer_model_voxel_data: "rt_buffer_model_voxel_data",
+        },
+        normal_calc: GraphConstantsNormalCalc {
+            pipeline_compute_terrain: "normal_calc_compute",
+            pipeline_compute_terrain_info: FrameGraphComputeInfo {
+                shader_path: "normal_calc_terrain",
+                entry_point_fn: "main",
+            },
+            pass_normal_calc: "normal_calc_pass",
         },
         rt: GraphConstantsRT {
             image_albedo: "rt_image_albedo",
@@ -199,6 +214,15 @@ impl Renderer {
 
         let swapchain_image = builder.create_input_image(Self::GRAPH.image_swapchain);
         let swapchain_size_input = builder.create_input(Self::GRAPH.image_swapchain_size);
+
+        // Normal calc
+        {
+            builder.create_compute_pipeline(
+                Self::GRAPH.normal_calc.pipeline_compute_terrain,
+                Self::GRAPH.normal_calc.pipeline_compute_terrain_info,
+            );
+            builder.create_input_pass(Self::GRAPH.normal_calc.pass_normal_calc, &[], &[]);
+        }
 
         // RT passes
         let rt_albedo_image = builder.create_frame_image(
@@ -372,6 +396,10 @@ impl Renderer {
                 );
                 writer.write_binding(
                     "u_frame.voxel.model_voxel_data",
+                    *voxel_world_gpu.world_data_buffer().unwrap(),
+                );
+                writer.write_binding(
+                    "u_frame.voxel.rw_model_voxel_data",
                     *voxel_world_gpu.world_data_buffer().unwrap(),
                 );
 

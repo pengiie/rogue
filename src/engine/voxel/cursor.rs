@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    attachment::{Attachment, PTMaterial},
+    attachment::{Attachment, AttachmentMap, PTMaterial},
     voxel_world::VoxelWorld,
 };
 
@@ -64,6 +64,7 @@ impl VoxelCursor {
                 VoxelEdit {
                     world_voxel_position: voxel_pos,
                     world_voxel_length: Vector3::new(1, 1, 1),
+                    attachment_map: AttachmentMap::new(),
                 },
                 |mut flat, world_position, local_position| {
                     flat.get_voxel_mut(local_position).set_attachment(
@@ -141,6 +142,7 @@ impl VoxelBrush {
         VoxelEdit {
             world_voxel_position: position,
             world_voxel_length: length,
+            attachment_map: AttachmentMap::new(),
         }
     }
 }
@@ -150,6 +152,8 @@ pub struct VoxelEdit {
     pub world_voxel_position: Vector3<i32>,
     // Length in voxels of the edit.
     pub world_voxel_length: Vector3<u32>,
+    // Known attachment map so we can skip checking that for each voxel.
+    pub attachment_map: AttachmentMap,
 }
 
 #[derive(Clone)]

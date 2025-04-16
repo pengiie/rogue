@@ -20,6 +20,7 @@ namespace uniforms {
     public voxel::EntityData entity_data;
     ByteAddressBuffer model_info_data;
     ByteAddressBuffer model_voxel_data;
+    RWByteAddressBuffer rw_model_voxel_data;
   };
 
 

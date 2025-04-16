@@ -2,13 +2,15 @@ use core::f32;
 
 use log::debug;
 use nalgebra::Vector3;
-use noise::NoiseFn;
+use noise::{MultiFractal, NoiseFn};
 
 use crate::{common::color::Color, consts};
 
 use super::{
-    attachment::{Attachment, PTMaterial},
+    attachment::{Attachment, AttachmentMap, PTMaterial},
+    cursor::VoxelEdit,
     flat::VoxelModelFlat,
+    voxel_world::VoxelWorld,
 };
 
 #[derive(Clone)]
@@ -23,65 +25,54 @@ impl ChunkGenerator {
         }
     }
 
-    pub fn generate_chunk(&mut self, chunk_position: Vector3<i32>) -> Option<VoxelModelFlat> {
-        let mut flat = VoxelModelFlat::new_empty(Vector3::new(
-            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-        ));
+    pub fn generate_chunk(&self, voxel_world: &mut VoxelWorld, chunk_position: Vector3<i32>) {
+        let mut used_attachments = AttachmentMap::new();
+        used_attachments.register_attachment(&Attachment::PTMATERIAL);
 
-        // if chunk_position.y < -2 || chunk_position.y > 3 {
-        //     return None;
-        // }
+        let color_noise = noise::Fbm::<noise::Perlin>::new(0).set_octaves(3);
+        let perlin = self.perlin.clone();
+        voxel_world.apply_voxel_edit_async(
+            VoxelEdit {
+                world_voxel_position: chunk_position
+                    * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
+                world_voxel_length: Vector3::new(
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                ),
+                attachment_map: used_attachments,
+            },
+            move |flat, world_pos, local_pos| {
+                let freq = 24.0;
+                let x = world_pos.x as f64;
+                let y = world_pos.y as f64;
+                let z = world_pos.z as f64;
+                let nx = world_pos.x as f64 / freq;
+                let ny = y / (freq);
+                let nz = world_pos.z as f64 / freq;
 
-        let world_voxel_min = chunk_position * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32;
-        let world_voxel_max = world_voxel_min
-            + Vector3::new(
-                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
-                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
-                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
-            );
+                let mut density = perlin.get([nx, ny, nz]);
 
-        for x in world_voxel_min.x..world_voxel_max.x {
-            for y in world_voxel_min.y..world_voxel_max.y {
-                for z in world_voxel_min.z..world_voxel_max.z {
-                    let target_y = (f32::atan(f32::sin(x as f32 / 10.0)) * 16.0) as i32
-                        + (f32::cos(z as f32 / 17.0) * 20.5) as i32;
-                    let freq = 24.0;
-                    let nx = x as f64 / freq;
-                    let ny = y as f64 / (freq);
-                    let nz = z as f64 / freq;
-                    let noise_three = self.perlin.get([nx, ny, nz]);
-                    //let target_y = (noise_y as i32).clamp(
-                    //    -(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32),
-                    //    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
-                    //);
-                    //if y >= target_y - 4 && y <= target_y {
-                    let local_pos = Vector3::new(
-                        x - world_voxel_min.x,
-                        y - world_voxel_min.y,
-                        z - world_voxel_min.z,
+                const SHAPING_ANCHOR: f64 = -50.0;
+                // Higher y meaning higher shaping, aka. less density.
+                let shaping = (((y - SHAPING_ANCHOR) / 64.0) * 0.5 + 0.5).clamp(0.0, 1.0);
+                // Smoothstep
+                let shaping = 3.0 * (shaping * shaping) - 2.0 * shaping * shaping * shaping;
+                // Higher shaping value correlates to more dense.
+                let shaping = 1.0 - shaping;
+
+                if (shaping * shaping * density + shaping > 0.5) {
+                    let mut voxel = flat.get_voxel_mut(local_pos);
+                    let r_var = color_noise.get([x / 7.0, y / 7.0, z / 7.0]);
+                    let color = Color::new_srgb(0.5 + 0.2 * r_var as f32, 0.9, 0.05);
+                    voxel.set_attachment_id(
+                        Attachment::PTMATERIAL_ID,
+                        &[Attachment::encode_ptmaterial(&PTMaterial::diffuse(
+                            color.into(),
+                        ))],
                     )
-                    .map(|x| x as u32);
-                    if (y <= target_y && y >= target_y - 5) {
-                        //if local_pos.y == 0 {
-                        let mut voxel = flat.get_voxel_mut(local_pos);
-                        let color = Color::new_srgb(
-                            local_pos.x as f32 / 64.0,
-                            local_pos.y as f32 / 64.0,
-                            local_pos.z as f32 / 64.0,
-                        );
-                        voxel.set_attachment(
-                            Attachment::PTMATERIAL,
-                            Some(Attachment::encode_ptmaterial(&PTMaterial::diffuse(
-                                color.into(),
-                            ))),
-                        )
-                    }
                 }
-            }
-        }
-
-        return Some(flat);
+            },
+        );
     }
 }

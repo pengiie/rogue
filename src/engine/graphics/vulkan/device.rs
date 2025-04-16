@@ -2656,6 +2656,8 @@ impl VulkanResourceManager {
             .filter_map(|set_binding| {
                 let Some(mut new_set_data) = binding_data.remove(&set_binding.set_index) else {
                     if set_binding.name == "u_frame" {
+                        // TODO: Figure out why this is included in the egui pipeline so we can
+                        // remove this work around and require the cache slots to be used.
                         return None;
                     }
 
