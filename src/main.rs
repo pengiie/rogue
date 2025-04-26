@@ -3,7 +3,6 @@
 mod app;
 mod common;
 mod consts;
-mod editor;
 mod engine;
 mod game;
 mod game_loop;

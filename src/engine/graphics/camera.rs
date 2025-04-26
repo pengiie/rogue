@@ -1,4 +1,5 @@
 use log::debug;
+use nalgebra::{Isometry3, Matrix4};
 use rogue_macros::Resource;
 
 use crate::{consts, engine::entity::ecs_world::Entity};
@@ -30,6 +31,7 @@ impl MainCamera {
 
 pub struct Camera {
     fov: f32,
+    near_plane: f32,
     far_plane: f32,
 }
 
@@ -37,12 +39,26 @@ impl Camera {
     pub fn new(fov: f32) -> Self {
         Self {
             fov,
+            near_plane: consts::gfx::CAMERA_NEAR_PLANE,
             far_plane: consts::gfx::CAMERA_FAR_PLANE,
         }
     }
 
+    pub fn projection_matrix(&self, aspect_ratio: f32) -> Matrix4<f32> {
+        let mut mat = Matrix4::identity();
+        mat.m11 = 1.0 / aspect_ratio;
+        mat.m43 = 1.0;
+        mat.m44 = 0.0;
+        //mat.m34 *= -1.0;
+        mat
+    }
+
     pub fn fov(&self) -> f32 {
         self.fov
+    }
+
+    pub fn near_plane(&self) -> f32 {
+        self.near_plane
     }
 
     pub fn far_plane(&self) -> f32 {

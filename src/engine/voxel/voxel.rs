@@ -30,26 +30,31 @@ use super::{
     attachment::{Attachment, AttachmentId, PTMaterial},
     esvo::VoxelModelESVO,
     flat::VoxelModelFlat,
-    unit::VoxelModelUnit,
     voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
+    voxel_world::VoxelModelFlatEdit,
 };
 
 pub struct VoxelModelEdit {
     pub offset: Vector3<u32>,
-    pub data: VoxelModelFlat,
+    pub data: VoxelModelFlatEdit,
+}
+
+pub struct VoxelModelTrace {
+    pub local_position: Vector3<u32>,
+    pub depth_t: f32,
 }
 
 pub trait VoxelModelImpl: Send + Sync + Any {
     // Returns the local voxel hit if it was hit.
-    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<Vector3<u32>>;
+    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace>;
 
     fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit);
     fn set_voxel_range(&mut self, range: &VoxelModelEdit) {
         // Asserts that the range's position with its length fits within this voxel model.
         assert!(range
             .data
-            .length()
+            .side_length()
             .zip_map(&(self.length() - range.offset), |x, y| x <= y)
             .iter()
             .all(|x| *x));

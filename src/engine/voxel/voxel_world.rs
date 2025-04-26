@@ -16,6 +16,7 @@ use crate::{
     common::{
         aabb::AABB,
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
+        bitset::Bitset,
         dyn_vec::TypeInfo,
         morton::{self, morton_encode, morton_traversal},
         ray::Ray,
@@ -45,8 +46,8 @@ use crate::{
 };
 
 use super::{
-    attachment::AttachmentMap,
-    cursor::VoxelEdit,
+    attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
+    cursor::VoxelEditInfo,
     esvo::{VoxelModelESVO, VoxelModelESVOGpu},
     flat::VoxelModelFlat,
     voxel::{
@@ -67,14 +68,92 @@ pub struct AsyncVoxelEdit {
     chunk_pos: Vector3<i32>,
     local_min: Vector3<u32>,
     local_max: Vector3<u32>,
-    attachment_map: AttachmentMap,
+    attachment_map: AttachmentInfoMap,
     edit_fn: Box<
         dyn Fn(
-                &mut VoxelModelFlat,
+                VoxelEdit,
                 /*world_voxel_pos*/ Vector3<i32>,
                 /*local_voxel_pos=*/ Vector3<u32>,
             ) + Send,
     >,
+}
+
+pub struct VoxelModelFlatEdit {
+    pub flat: VoxelModelFlat,
+}
+
+impl VoxelModelFlatEdit {
+    // Leaves the whole voxel range untouched, meaning if the edit is applied nothing will happen.
+    pub fn new_empty(side_length: Vector3<u32>, attachment_map: AttachmentInfoMap) -> Self {
+        let mut flat = VoxelModelFlat::new_empty(side_length);
+        for (_, attachment) in attachment_map.iter() {
+            flat.initialize_attachment_buffers(attachment);
+        }
+        Self { flat }
+    }
+
+    pub fn side_length(&self) -> &Vector3<u32> {
+        self.flat.side_length()
+    }
+
+    // Only enable when we do the override setting property.
+    // pub fn set_untouched(&mut self, voxel_index: usize) {
+    //     self.flat.presence_data.set_bit(voxel_index, false);
+    //     for (_, data) in &mut self.flat.attachment_presence_data {
+    //         data.set_bit(voxel_index, false);
+    //     }
+    // }
+
+    pub fn set_removed(&mut self, voxel_index: usize) {
+        self.flat.presence_data.set_bit(voxel_index, true);
+        for (_, data) in self.flat.attachment_presence_data.iter_mut() {
+            data.set_bit(voxel_index, false);
+        }
+    }
+
+    pub fn set_attachment(
+        &mut self,
+        voxel_index: usize,
+        attachment_id: AttachmentId,
+        data: &[u32],
+    ) {
+        let attachment = self.flat.attachment_map.get_unchecked(attachment_id);
+        self.flat.presence_data.set_bit(voxel_index, true);
+        self.flat
+            .attachment_presence_data
+            .get_mut(attachment_id)
+            .unwrap()
+            .set_bit(voxel_index, true);
+        let initial_offset = voxel_index * attachment.size() as usize;
+        self.flat.attachment_data.get_mut(attachment_id).unwrap()
+            [initial_offset..(initial_offset + attachment.size() as usize)]
+            .copy_from_slice(data);
+    }
+}
+
+pub struct VoxelEdit<'a> {
+    flat: &'a mut VoxelModelFlatEdit,
+    voxel_index: usize,
+}
+
+impl<'a> VoxelEdit<'a> {
+    pub fn new(flat: &'a mut VoxelModelFlatEdit, local_pos: Vector3<u32>) -> Self {
+        let voxel_index = flat.flat.get_voxel_index(local_pos);
+        Self { flat, voxel_index }
+    }
+
+    //pub fn set_untouched(&mut self) {
+    //    self.flat.set_untouched(self.voxel_index);
+    //}
+
+    pub fn set_removed(&mut self) {
+        self.flat.set_removed(self.voxel_index);
+    }
+
+    pub fn set_attachment(&mut self, attachment_id: AttachmentId, data: &[u32]) {
+        self.flat
+            .set_attachment(self.voxel_index, attachment_id, data);
+    }
 }
 
 #[derive(Resource)]
@@ -121,24 +200,25 @@ impl VoxelWorld {
                 let finish_sender = self.finished_chunk_edit_send.clone();
                 self.chunk_edit_handler_count += 1;
                 self.chunk_edit_handler_pool.spawn(move || {
-                    log::info!("STARTING the EDIT.");
                     let stopwatch = Stopwatch::new("edit_handler scope");
 
                     let mi = next_async_edit.local_min;
                     let ma = next_async_edit.local_max;
                     let chunk_voxel_pos = next_async_edit.chunk_pos
                         * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32;
-                    let mut flat = VoxelModelFlat::new_empty(ma - mi);
-                    for (_, attachment) in next_async_edit.attachment_map.iter() {
-                        flat.initialize_attachment_buffers(attachment);
-                    }
 
+                    let mut flat_edit =
+                        VoxelModelFlatEdit::new_empty(ma - mi, next_async_edit.attachment_map);
                     for z in mi.z..ma.z {
                         for y in mi.y..ma.y {
                             for x in mi.x..ma.x {
                                 let local_pos = Vector3::new(x, y, z);
                                 let world_pos = chunk_voxel_pos + local_pos.cast::<i32>();
-                                (*next_async_edit.edit_fn)(&mut flat, world_pos, local_pos);
+                                (*next_async_edit.edit_fn)(
+                                    VoxelEdit::new(&mut flat_edit, local_pos),
+                                    world_pos,
+                                    local_pos,
+                                );
                             }
                         }
                     }
@@ -147,7 +227,7 @@ impl VoxelWorld {
                         chunk_position: next_async_edit.chunk_pos,
                         edit_result: VoxelModelEdit {
                             offset: next_async_edit.local_min,
-                            data: flat,
+                            data: flat_edit,
                         },
                     });
                 });
@@ -202,8 +282,71 @@ impl VoxelWorld {
         voxel_world.process_chunk_edits(&mut assets);
     }
 
+    pub fn trace_world(&self, mut ecs_world: &ECSWorld, mut ray: Ray) -> Option<VoxelTraceInfo> {
+        let mut closest_entity: Option<(f32, hecs::Entity, VoxelModelId, Vector3<u32>)> = None;
+
+        let mut renderable_model_query = ecs_world.query::<(&Transform, &RenderableVoxelEntity)>();
+        for (entity_id, (transform, renderable)) in renderable_model_query.iter() {
+            let model = self.registry.get_dyn_model(renderable.voxel_model_id);
+
+            let half_side_length =
+                model.length().cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH * 0.5;
+            let min = transform.position() - half_side_length;
+            let max = transform.position() + half_side_length;
+            let aabb = AABB::new_two_point(min, max);
+            let rotation_anchor = transform.position();
+            let r = transform.rotation().inverse();
+
+            let rotated_ray_origin = r.matrix() * (ray.origin - rotation_anchor) + rotation_anchor;
+            let rotated_ray_dir = r.matrix() * ray.dir;
+            let rotated_ray = Ray::new(rotated_ray_origin, rotated_ray_dir);
+            let Some(model_trace) = model.trace(&rotated_ray, &aabb) else {
+                continue;
+            };
+
+            if let Some(last_closest) = &closest_entity {
+                if last_closest.0 < model_trace.depth_t {
+                    continue;
+                }
+            };
+
+            closest_entity = Some((
+                model_trace.depth_t,
+                entity_id,
+                renderable.voxel_model_id,
+                model_trace.local_position,
+            ));
+        }
+
+        if let Some((world_voxel_hit, depth_t)) = self.trace_terrain(ray, 100.0) {
+            let mut is_closer = true;
+            if let Some((entity_t, _, _, _)) = &closest_entity {
+                is_closer = is_closer && depth_t < *entity_t;
+            }
+            if is_closer {
+                return Some(VoxelTraceInfo::Terrain {
+                    world_voxel_pos: world_voxel_hit,
+                });
+            }
+        }
+
+        if let Some((entity_t, entity_id, entity_model_id, entity_local_voxel)) = closest_entity {
+            return Some(VoxelTraceInfo::Entity {
+                entity_id,
+                voxel_model_id: entity_model_id,
+                local_voxel_pos: entity_local_voxel,
+            });
+        }
+
+        return None;
+    }
+
     /// Returns the hit voxel with the corresponding ray.
-    pub fn trace_terrain(&self, mut ray: Ray, _max_t: f32) -> Option<Vector3<i32>> {
+    pub fn trace_terrain(
+        &self,
+        mut ray: Ray,
+        _max_t: f32,
+    ) -> Option<(Vector3<i32>, /*depth_t=*/ f32)> {
         let chunks_aabb = self.chunks.renderable_chunks_aabb();
         let Some(terrain_t) = ray.intersect_aabb(&chunks_aabb) else {
             return None;
@@ -232,11 +375,11 @@ impl VoxelWorld {
                         ),
                 );
                 if let Some(local_chunk_hit) = chunk_local.trace(&ray, &chunk_aabb) {
-                    return Some(
-                        (self.chunks.renderable_chunks.chunk_anchor + chunk_dda.curr_grid_pos())
-                            .map(|x| x * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32)
-                            + local_chunk_hit.cast::<i32>(),
-                    );
+                    let world_voxel_pos = (self.chunks.renderable_chunks.chunk_anchor
+                        + chunk_dda.curr_grid_pos())
+                    .map(|x| x * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32)
+                        + local_chunk_hit.local_position.cast::<i32>();
+                    return Some((world_voxel_pos, local_chunk_hit.depth_t));
                 }
             }
             chunk_dda.step();
@@ -266,46 +409,46 @@ impl VoxelWorld {
                 let mut node = chunks
                     .get_or_create_chunk_node_mut(world_chunk_pos)
                     .expect("Region should be loaded by now");
-                let spans_chunk = chunk_edit
-                    .data
-                    .side_length()
-                    .iter()
-                    .all(|x| *x == consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
-                if spans_chunk {
-                    // Make edit override the chunk.
-                    let new_model_id = registry.register_renderable_voxel_model(
-                        format!(
-                            "chunk_{}_{}_{}",
-                            world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
-                        ),
-                        VoxelModel::new(ChunkModelType::from(chunk_edit.data)),
-                    );
+                // let spans_chunk = chunk_edit
+                //     .data
+                //     .side_length()
+                //     .iter()
+                //     .all(|x| *x == consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
+                // if spans_chunk {
+                //     // Make edit override the chunk.
+                //     let new_model_id = registry.register_renderable_voxel_model(
+                //         format!(
+                //             "chunk_{}_{}_{}",
+                //             world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
+                //         ),
+                //         VoxelModel::new(ChunkModelType::from(chunk_edit.data.flat)),
+                //     );
 
-                    *node = VoxelRegionLeafNode::new_with_model(new_model_id);
-                    chunks
-                        .renderable_chunks
-                        .try_load_chunk(&world_chunk_pos, new_model_id);
-                } else {
-                    let mut new_chunk_model = ChunkModelType::new_empty(Vector3::new(
-                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                    ));
-                    new_chunk_model.set_voxel_range(&chunk_edit);
+                //     *node = VoxelRegionLeafNode::new_with_model(new_model_id);
+                //     chunks
+                //         .renderable_chunks
+                //         .try_load_chunk(&world_chunk_pos, new_model_id);
+                // } else {
+                let mut new_chunk_model = ChunkModelType::new_empty(Vector3::new(
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                ));
+                new_chunk_model.set_voxel_range(&chunk_edit);
 
-                    let new_model_id = registry.register_renderable_voxel_model(
-                        format!(
-                            "chunk_{}_{}_{}",
-                            world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
-                        ),
-                        VoxelModel::new(new_chunk_model),
-                    );
+                let new_model_id = registry.register_renderable_voxel_model(
+                    format!(
+                        "chunk_{}_{}_{}",
+                        world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
+                    ),
+                    VoxelModel::new(new_chunk_model),
+                );
 
-                    *node = VoxelRegionLeafNode::new_with_model(new_model_id);
-                    chunks
-                        .renderable_chunks
-                        .try_load_chunk(&world_chunk_pos, new_model_id);
-                }
+                *node = VoxelRegionLeafNode::new_with_model(new_model_id);
+                chunks
+                    .renderable_chunks
+                    .try_load_chunk(&world_chunk_pos, new_model_id);
+                // }
                 chunks.mark_chunk_edited(world_chunk_pos);
                 chunks.mark_region_edited(VoxelChunks::chunk_to_region_pos(&world_chunk_pos));
             }
@@ -327,9 +470,9 @@ impl VoxelWorld {
 
     pub fn apply_voxel_edit(
         &mut self,
-        edit: VoxelEdit,
+        edit: VoxelEditInfo,
         f: impl Fn(
-            &mut VoxelModelFlat,
+            VoxelEdit,
             /*world_voxel_pos*/ Vector3<i32>,
             /*local_voxel_pos=*/ Vector3<u32>,
         ),
@@ -364,16 +507,28 @@ impl VoxelWorld {
                             consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
                         ))
                     .zip_map(&edit_voxel_max, |x, y| x.min(y));
-                    debug!("min offset {:?}, max offset {:?}", min_offset, max_offset);
-                    let mut voxel_data =
-                        VoxelModelFlat::new_empty((max_offset - min_offset).map(|x| x as u32));
-                    for voxel_x in min_offset.x..max_offset.x {
+                    let mut voxel_data = VoxelModelFlatEdit::new_empty(
+                        (max_offset - min_offset).map(|x| x as u32),
+                        edit.attachment_map.clone(),
+                    );
+                    debug!(
+                        "min offset {:?}, min_chunk_offset: {:?}, max offset {:?}, max-min {:?}",
+                        min_offset,
+                        min_chunk_offset,
+                        max_offset,
+                        (max_offset - min_offset).map(|x| x as u32),
+                    );
+                    for voxel_z in min_offset.z..max_offset.z {
                         for voxel_y in min_offset.y..max_offset.y {
-                            for voxel_z in min_offset.z..max_offset.z {
+                            for voxel_x in min_offset.x..max_offset.x {
                                 let world_voxel_pos = Vector3::new(voxel_x, voxel_y, voxel_z);
                                 let local_voxel_pos =
                                     (world_voxel_pos - min_offset).map(|x| x as u32);
-                                f(&mut voxel_data, world_voxel_pos, local_voxel_pos);
+                                f(
+                                    VoxelEdit::new(&mut voxel_data, local_voxel_pos),
+                                    world_voxel_pos,
+                                    local_voxel_pos,
+                                );
                             }
                         }
                     }
@@ -383,6 +538,7 @@ impl VoxelWorld {
                         offset: (min_offset - min_chunk_offset).map(|x| x as u32),
                         data: voxel_data,
                     };
+                    log::info!("APplying iwth offset {:?}", chunk_edit.offset);
                     Self::apply_edit_to_chunk(
                         &mut self.chunks,
                         &mut self.registry,
@@ -397,9 +553,9 @@ impl VoxelWorld {
 
     pub fn apply_voxel_edit_async(
         &mut self,
-        edit: VoxelEdit,
+        edit: VoxelEditInfo,
         f: impl Fn(
-                &mut VoxelModelFlat,
+                VoxelEdit,
                 /*world_voxel_pos*/ Vector3<i32>,
                 /*local_voxel_pos=*/ Vector3<u32>,
             ) + Send
@@ -703,11 +859,16 @@ impl VoxelWorldGpu {
                 panic!("Model should be loaded by now");
             };
 
-            let side_length = model_gpu_info.voxel_model_dimensions;
-            let min = transform.position();
-            let max = min + side_length.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH;
+            let side_length = model_gpu_info.voxel_model_dimensions.cast::<f32>()
+                * consts::voxel::VOXEL_METER_LENGTH
+                * 0.5
+                * transform.scale;
+            let min = transform.position() - side_length;
+            let max = transform.position + side_length;
             let r = transform.rotation();
-            let r = r.matrix();
+            // Transpose cause its inverse and nalgebra is clockwise? i dunno for sure.
+            let r = r.matrix().transpose();
+            let model_ptr = model_gpu_info.info_allocation.start_index_stride_dword() as u32;
             voxel_entity_data.extend_from_slice(&min.x.to_le_bytes());
             voxel_entity_data.extend_from_slice(&min.y.to_le_bytes());
             voxel_entity_data.extend_from_slice(&min.z.to_le_bytes());
@@ -730,13 +891,8 @@ impl VoxelWorldGpu {
             voxel_entity_data.extend_from_slice(&r.m32.to_le_bytes());
             voxel_entity_data.extend_from_slice(&r.m33.to_le_bytes());
             voxel_entity_data.extend_from_slice(&[0u8; 4]);
-            voxel_entity_data.extend_from_slice(
-                &model_gpu_info
-                    .info_allocation
-                    .start_index_stride_dword()
-                    .to_le_bytes(),
-            );
-            voxel_entity_data.extend_from_slice(&[0u8; 8]);
+            voxel_entity_data.extend_from_slice(&model_ptr.to_le_bytes());
+            voxel_entity_data.extend_from_slice(&[0u8; 12]);
         }
         if !voxel_entity_data.is_empty() {
             device.write_buffer_slice(

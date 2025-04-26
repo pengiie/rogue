@@ -20,11 +20,11 @@ use crate::{
 };
 
 use super::{
-    attachment::{Attachment, AttachmentId, AttachmentMap},
+    attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,
     voxel::{
         VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete,
+        VoxelModelImplConcrete, VoxelModelTrace,
     },
 };
 
@@ -36,7 +36,7 @@ pub struct VoxelModelTHC {
     pub node_data: Vec<THCNode>,
     pub attachment_lookup_data: HashMap<AttachmentId, Vec<THCAttachmentLookupNode>>,
     pub attachment_raw_data: HashMap<AttachmentId, Vec<u32>>,
-    pub attachment_map: AttachmentMap,
+    pub attachment_map: AttachmentInfoMap,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -146,7 +146,7 @@ impl VoxelModelImpl for VoxelModelTHC {
         &self,
         ray: &crate::common::ray::Ray,
         aabb: &crate::common::aabb::AABB,
-    ) -> Option<Vector3<u32>> {
+    ) -> Option<VoxelModelTrace> {
         todo!()
     }
 
@@ -447,10 +447,10 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
 
         let mut attachment_lookup_data = HashMap::new();
         let mut attachment_raw_data = HashMap::new();
-        for (present_attachment, _) in &flat.attachment_presence_data {
-            attachment_lookup.insert(*present_attachment, (None, 0));
+        for (present_attachment, _) in flat.attachment_presence_data.iter() {
+            attachment_lookup.insert(present_attachment, (None, 0));
             attachment_lookup_data.insert(
-                *present_attachment,
+                present_attachment,
                 vec![
                     THCAttachmentLookupNode {
                         data_ptr: 0,
@@ -459,7 +459,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                     node_data_len as usize
                 ],
             );
-            attachment_raw_data.insert(*present_attachment, Vec::new());
+            attachment_raw_data.insert(present_attachment, Vec::new());
         }
 
         let mut to_process = vec![(
@@ -510,7 +510,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                 // Append the voxels flat data from the
                 let voxel_morton = curr_morton_traversal << 6 | child as u64;
                 let voxel_pos = morton_decode(voxel_morton);
-                for (attachment_id, presence_bitset) in &flat.attachment_presence_data {
+                for (attachment_id, presence_bitset) in flat.attachment_presence_data.iter() {
                     let flat_voxel_index = flat.get_voxel_index(voxel_pos);
                     //debug!("voxel pos {:?}", voxel_pos);
                     let is_attachment_present = presence_bitset.get_bit(flat_voxel_index);
@@ -520,7 +520,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                         continue;
                     }
 
-                    let attachment = flat.attachment_map.get_attachment(*attachment_id);
+                    let attachment = flat.attachment_map.get_unchecked(attachment_id);
                     let (attachment_raw_ptr, attachment_mask) =
                         attachment_lookup.get_mut(&attachment_id).unwrap();
                     if attachment_raw_ptr.is_none() {
@@ -538,7 +538,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                         [voxel_raw_attachment_data_start
                             ..(voxel_raw_attachment_data_start + attachment.size() as usize)];
                     attachment_raw_data
-                        .get_mut(attachment_id)
+                        .get_mut(&attachment_id)
                         .unwrap()
                         .extend_from_slice(voxel_raw_attachment_data);
                     //attachment_raw_data

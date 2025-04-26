@@ -1,5 +1,7 @@
 pub mod asset;
 pub mod audio;
+pub mod debug;
+pub mod editor;
 pub mod entity;
 pub mod event;
 pub mod graphics;

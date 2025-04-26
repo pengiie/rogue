@@ -18,6 +18,7 @@ use super::{
     asset::asset::Assets,
     entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
     graphics::renderer::Renderer,
+    input::Input,
     physics::transform::Transform,
     resource::{Res, ResMut},
     voxel::{
@@ -100,6 +101,7 @@ impl UI {
         mut ui: ResMut<UI>,
         time: Res<Time>,
         renderer: Res<Renderer>,
+        input: Res<Input>,
     ) {
         // Determine if we should poll for the current fps, ensures the fps doesn't change
         // rapidly where it is unreadable.

@@ -36,7 +36,7 @@ impl Player {
 
     pub fn update(
         ecs_world: ResMut<ECSWorld>,
-        input: Res<Input>,
+        mut input: ResMut<Input>,
         time: Res<Time>,
         mut settings: ResMut<Settings>,
         window: Res<Window>,
@@ -50,18 +50,25 @@ impl Player {
             player.paused = !player.paused;
             window.set_cursor_grabbed(!player.paused);
             window.set_cursor_visible(player.paused);
+            input.set_cursor_locked(!player.paused);
         }
 
-        let md = input.mouse_delta();
-        if (md.0 != 0.0 || md.1 != 0.0) && !player.paused {
+        let mut md = input.camera_axes();
+        if (md.x != 0.0 || md.y != 0.0) && (!player.paused || input.is_controller_camera()) {
             // Clamp up and down yaw.
-            player.euler.x = (player.euler.x + md.1 * settings.mouse_sensitivity)
-                .clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
-            player.euler.y += md.0 * settings.mouse_sensitivity;
+            if input.is_controller_camera() {
+                md *= settings.controller_sensitity * time.delta_time().as_secs_f32();
+            } else {
+                md *= settings.mouse_sensitivity;
+            }
+
+            player.euler.x =
+                (player.euler.x - md.y).clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
+            player.euler.y += md.x;
         }
         transform.rotation = UnitQuaternion::from_euler_angles(player.euler.x, player.euler.y, 0.0);
 
-        let input_axes = Vector2::new(input.horizontal_axis(), input.vertical_axis());
+        let input_axes = input.movement_axes();
 
         let mut translation = Vector3::new(0.0, 0.0, 0.0);
         if input_axes.x != 0.0 || input_axes.y != 0.0 {
@@ -102,7 +109,7 @@ impl Player {
         let player = ecs_world.spawn((
             GameEntity::new("a_player_name"),
             Player::new(settings.player_rotation),
-            Camera::new(90.0),
+            Camera::new(90.0f32.to_radians()),
             Transform::with_translation(Translation3::from(settings.player_position)),
         ));
         main_camera.set_camera(player, "player_camera");

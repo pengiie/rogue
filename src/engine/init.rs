@@ -4,6 +4,8 @@ use crate::{consts, engine};
 
 use super::asset::asset::AssetPath;
 use super::asset::repr::settings::SettingsAsset;
+use super::debug::DebugRenderer;
+use super::editor::editor::Editor;
 use super::graphics::camera::MainCamera;
 use super::world::game_world::GameWorld;
 use super::{
@@ -48,6 +50,8 @@ pub fn init_pre_graphics(app: &mut App) {
 pub fn init_post_graphics(app: &mut App) {
     engine::ui::initialize_debug_ui_resource(app);
 
+    app.insert_resource(Editor::new());
+    app.insert_resource(DebugRenderer::new());
     engine::graphics::initialize_graphics_resources(app);
     engine::voxel::initialize_voxel_world_resources(app);
 }

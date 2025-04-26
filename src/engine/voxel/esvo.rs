@@ -22,10 +22,10 @@ use crate::{
 };
 
 use super::{
-    attachment::{Attachment, AttachmentId, AttachmentMap},
+    attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     voxel::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema,
+        VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace,
     },
 };
 
@@ -40,7 +40,7 @@ pub(crate) struct VoxelModelESVO {
 
     pub attachment_lookup_data: HashMap<AttachmentId, Vec<VoxelModelESVOAttachmentLookupNode>>,
     pub attachment_raw_data: HashMap<AttachmentId, Vec<u32>>,
-    pub attachment_map: AttachmentMap,
+    pub attachment_map: AttachmentInfoMap,
     pub bucket_metadata: Vec<BucketMetadata>,
 
     pub updates: Option<Vec<VoxelModelESVOUpdate>>,
@@ -532,7 +532,7 @@ impl<'a> VoxelModelESVOVoxelAccessMut<'a> {
                 (
                     self.esvo_model
                         .attachment_map
-                        .get_attachment(*attachment_id)
+                        .get_unchecked(*attachment_id)
                         .clone(),
                     data,
                 )
@@ -805,7 +805,7 @@ impl VoxelModelImpl for VoxelModelESVO {
         &self,
         ray: &crate::common::ray::Ray,
         aabb: &crate::common::aabb::AABB,
-    ) -> Option<Vector3<u32>> {
+    ) -> Option<VoxelModelTrace> {
         todo!()
     }
 

@@ -162,7 +162,10 @@ impl AllocatorTree {
         if needed_size == self.size {
             // Ensure it doesnt have any children, if it does then that mean something is allocated
             // within it's range.
-            if self.left.is_some() || self.right.is_some() {
+            if self.left.is_some()
+                || self.right.is_some()
+                || self.start_index % required_alignment as u64 != 0
+            {
                 return None;
             } else {
                 return Some(self.make_allocated());

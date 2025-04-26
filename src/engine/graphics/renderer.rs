@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use log::{debug, warn};
-use nalgebra::{Vector2, Vector3};
+use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,7 @@ pub struct Renderer {
     pub frame_graph_executor: Box<dyn GraphicsBackendFrameGraphExecutor>,
     frame_graph: Option<FrameGraph>,
     acquired_swapchain: bool,
+    swapchain_size: Vector2<u32>,
 }
 
 pub struct GraphConstantsDebugUI {
@@ -55,6 +56,14 @@ pub struct GraphConstantsDebugUI {
     pub pipeline_raster_ui: &'static str,
     pub pipeline_raster_ui_info: FrameGraphRasterInfo<'static>,
     pub pass_ui: &'static str,
+}
+
+pub struct GraphConstantsDebug3D {
+    pub buffer_lines: &'static str,
+
+    pub pipeline_compute_shapes: &'static str,
+    pub pipeline_compute_shapes_info: FrameGraphComputeInfo<'static>,
+    pub pass_debug: &'static str,
 }
 
 pub struct GraphConstantsNormalCalc {
@@ -93,6 +102,7 @@ pub struct GraphConstants {
     pub normal_calc: GraphConstantsNormalCalc,
     pub rt: GraphConstantsRT,
     pub debug_ui: GraphConstantsDebugUI,
+    pub debug_3d: GraphConstantsDebug3D,
     pub post_process: GraphConstantsPostProcess,
 
     pub image_backbuffer: &'static str,
@@ -134,6 +144,16 @@ impl Renderer {
                 entry_point_fn: "main",
             },
             pass_gi_sample: "rt_pass_gi_sample",
+        },
+        debug_3d: GraphConstantsDebug3D {
+            buffer_lines: "debug_3d_buffer_lines",
+
+            pipeline_compute_shapes: "debug_3d_compute_shapes",
+            pipeline_compute_shapes_info: FrameGraphComputeInfo {
+                shader_path: "debug_shapes",
+                entry_point_fn: "main",
+            },
+            pass_debug: "debug_3d_pass_debug",
         },
         debug_ui: GraphConstantsDebugUI {
             buffer_vertex_buffer: "debug_ui_buffer_vertex_buffer",
@@ -204,6 +224,7 @@ impl Renderer {
             frame_graph_executor,
             frame_graph: None,
             acquired_swapchain: false,
+            swapchain_size: Vector2::zeros(),
         }
     }
 
@@ -298,6 +319,25 @@ impl Renderer {
             );
         }
 
+        // Debug gizmos and shapes.
+        {
+            builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_lines);
+
+            builder.create_compute_pipeline(
+                &Self::GRAPH.debug_3d.pipeline_compute_shapes,
+                Self::GRAPH.debug_3d.pipeline_compute_shapes_info,
+            );
+            builder.create_input_pass(
+                Self::GRAPH.debug_3d.pass_debug,
+                &[
+                    &Self::GRAPH.image_backbuffer,
+                    &Self::GRAPH.rt.image_depth,
+                    &Self::GRAPH.debug_3d.buffer_lines,
+                ],
+                &[&Self::GRAPH.image_backbuffer],
+            );
+        }
+
         // Overlay debug ui.
         {
             builder.create_frame_buffer(Self::GRAPH.debug_ui.buffer_vertex_buffer);
@@ -363,6 +403,10 @@ impl Renderer {
         ecs_world: Res<ECSWorld>,
         main_camera: Res<MainCamera>,
     ) {
+        assert!(renderer.acquired_swapchain);
+        let swapchain_aspect_ratio =
+            renderer.swapchain_size.x as f32 / renderer.swapchain_size.y as f32;
+
         renderer
             .frame_graph_executor
             .write_uniforms(&mut |writer, ctx| {
@@ -372,14 +416,47 @@ impl Renderer {
                     time.start_time().elapsed().as_millis() as u32,
                 );
 
-                let mut camera_query = ecs_world.get_main_camera(&main_camera);
-                let (camera_transform, camera) = camera_query.get().unwrap();
-                let view_matrix = camera_transform.to_view_matrix();
-                let view_matrix_3x3 = view_matrix.fixed_resize::<3, 3>(0.0);
-                writer.write_uniform_mat4("u_frame.world_info.camera.transform", &view_matrix);
-                writer.write_uniform_mat3("u_frame.world_info.camera.rotation", &view_matrix_3x3);
-                writer.write_uniform("u_frame.world_info.camera.fov", camera.fov());
-                writer.write_uniform("u_frame.world_info.camera.far_plane", camera.far_plane());
+                if let Some(mut camera_query) = ecs_world.try_get_main_camera(&main_camera) {
+                    let (camera_transform, camera) = camera_query.get().unwrap();
+
+                    let proj_view_matrix = camera.projection_matrix(swapchain_aspect_ratio)
+                        * camera_transform.to_view_matrix();
+                    writer.write_uniform_mat4(
+                        "u_frame.world_info.camera.proj_view",
+                        &proj_view_matrix,
+                    );
+
+                    let transformation_matrix = camera_transform.to_transformation_matrix();
+                    writer.write_uniform_mat4(
+                        "u_frame.world_info.camera.transform",
+                        &transformation_matrix,
+                    );
+
+                    let rot_matrix_3x3 = transformation_matrix.fixed_resize::<3, 3>(0.0);
+                    writer
+                        .write_uniform_mat3("u_frame.world_info.camera.rotation", &rot_matrix_3x3);
+                    writer.write_uniform("u_frame.world_info.camera.fov", camera.fov());
+                    writer
+                        .write_uniform("u_frame.world_info.camera.near_plane", camera.near_plane());
+                    writer.write_uniform("u_frame.world_info.camera.far_plane", camera.far_plane());
+                } else {
+                    log::error!("Main camera doesn't exist.");
+                    writer.write_uniform_mat4(
+                        "u_frame.world_info.camera.proj_view",
+                        &Matrix4::zeros(),
+                    );
+                    writer.write_uniform_mat4(
+                        "u_frame.world_info.camera.transform",
+                        &Matrix4::zeros(),
+                    );
+                    writer.write_uniform_mat3(
+                        "u_frame.world_info.camera.rotation",
+                        &Matrix3::zeros(),
+                    );
+                    writer.write_uniform("u_frame.world_info.camera.fov", 0.0);
+                    writer.write_uniform("u_frame.world_info.camera.near_plane", 0.0);
+                    writer.write_uniform("u_frame.world_info.camera.far_plane", 0.0);
+                }
 
                 writer.write_binding(
                     "u_frame.voxel.entity_data.accel_buf",
@@ -444,6 +521,7 @@ impl Renderer {
 
         // Write swapchain related inputs.
         renderer.acquired_swapchain = true;
+        renderer.swapchain_size = swapchain_image_info.resolution_xy();
         renderer
             .frame_graph_executor
             .supply_image_ref(Self::GRAPH.image_swapchain, &swapchain_image);

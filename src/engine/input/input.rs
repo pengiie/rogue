@@ -1,10 +1,14 @@
+use nalgebra::Vector2;
 use rogue_macros::Resource;
 
+use crate::engine::resource::Res;
 use crate::engine::resource::ResMut;
+use crate::engine::window::window::Window;
 
 use winit::event::DeviceEvent as WinitDeviceEvent;
 use winit::event::DeviceId as WinitDeviceId;
 
+use super::gamepad::Gamepad;
 use super::{
     keyboard::{self, Keyboard},
     mouse::{self, Mouse},
@@ -14,6 +18,7 @@ use super::{
 pub struct Input {
     keyboard: Keyboard,
     mouse: Mouse,
+    gamepad: Gamepad,
 }
 
 impl Input {
@@ -21,35 +26,68 @@ impl Input {
         Self {
             keyboard: Keyboard::new(),
             mouse: Mouse::new(),
+            gamepad: Gamepad::new(),
         }
     }
 
-    pub fn clear_inputs(mut input: ResMut<Input>) {
+    pub fn clear_inputs(mut input: ResMut<Input>, window: Res<Window>) {
         input.keyboard.clear_inputs();
         input.mouse.clear_inputs();
+        input.mouse.update_screen_center(Vector2::new(
+            window.inner_size().width as f32,
+            window.inner_size().height as f32,
+        ));
+        input.gamepad.clear_inputs();
+    }
+
+    pub fn set_cursor_locked(&mut self, locked: bool) {
+        self.mouse.is_locked = locked;
+    }
+
+    pub fn is_cursor_locked(&self) -> bool {
+        self.mouse.is_locked
+    }
+
+    pub fn collect_gamepad_events(mut input: ResMut<Input>) {
+        input.gamepad.collect_events();
     }
 
     // General Input
-    pub fn horizontal_axis(&self) -> f32 {
-        let mut axis = 0.0;
+    pub fn movement_axes(&self) -> Vector2<f32> {
+        if self.gamepad.left_axis().x.abs() >= self.gamepad.deadzone
+            || self.gamepad.left_axis().y.abs() >= self.gamepad.deadzone
+        {
+            return *self.gamepad.left_axis();
+        }
+
+        let mut axes = Vector2::new(0.0, 0.0);
         if self.keyboard.is_key_down(keyboard::Key::A) {
-            axis -= 1.0;
+            axes.x -= 1.0;
         }
         if self.keyboard.is_key_down(keyboard::Key::D) {
-            axis += 1.0;
+            axes.x += 1.0;
         }
-        axis
-    }
-
-    pub fn vertical_axis(&self) -> f32 {
-        let mut axis = 0.0;
         if self.keyboard.is_key_down(keyboard::Key::S) {
-            axis -= 1.0;
+            axes.y -= 1.0;
         }
         if self.keyboard.is_key_down(keyboard::Key::W) {
-            axis += 1.0;
+            axes.y += 1.0;
         }
-        axis
+
+        return axes;
+    }
+
+    pub fn is_controller_camera(&self) -> bool {
+        return self.gamepad.right_axis().x.abs() >= self.gamepad.deadzone
+            || self.gamepad.right_axis().y.abs() >= self.gamepad.deadzone;
+    }
+
+    pub fn camera_axes(&self) -> Vector2<f32> {
+        if self.is_controller_camera() {
+            return *self.gamepad.right_axis();
+        }
+
+        return self.mouse.mouse_delta();
     }
 
     // Keyboard functions
@@ -108,11 +146,11 @@ impl Input {
         self.mouse.is_mouse_button_released(button)
     }
 
-    pub fn mouse_position(&self) -> (f32, f32) {
+    pub fn mouse_position(&self) -> Vector2<f32> {
         self.mouse.mouse_position()
     }
 
-    pub fn mouse_delta(&self) -> (f32, f32) {
+    pub fn mouse_delta(&self) -> Vector2<f32> {
         self.mouse.mouse_delta()
     }
 

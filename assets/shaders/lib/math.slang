@@ -2,6 +2,7 @@ implementing lib;
 
 static const float EPSILON = 0.01;
 
+public typealias matrix2x2 = matrix<float, 2, 2>;
 public typealias matrix3x3 = matrix<float, 3, 3>;
 public typealias matrix4x4 = matrix<float, 4, 4>;
 
@@ -20,6 +21,10 @@ public struct Ray {
     origin = in_origin;
     dir = in_dir;
     inv_dir = in_inv_dir;
+  }
+
+  public Ray clone() {
+    return Ray(this.origin, this.dir, this.inv_dir);
   }
 
   [mutating]

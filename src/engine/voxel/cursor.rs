@@ -7,7 +7,11 @@ use crate::{
     common::color::Color,
     consts,
     engine::{
-        entity::ecs_world::ECSWorld,
+        debug::{DebugLine, DebugRenderer},
+        entity::{
+            ecs_world::{ECSWorld, Entity},
+            RenderableVoxelEntity,
+        },
         graphics::camera::Camera,
         input::{mouse, Input},
         physics::transform::Transform,
@@ -18,17 +22,18 @@ use crate::{
 };
 
 use super::{
-    attachment::{Attachment, AttachmentMap, PTMaterial},
-    voxel_world::VoxelWorld,
+    attachment::{Attachment, AttachmentInfoMap, AttachmentMap, PTMaterial},
+    voxel_world::{VoxelTraceInfo, VoxelWorld},
 };
 
 #[derive(Resource)]
 pub struct VoxelCursor {
     data: Option<VoxelCursorData>,
+    selected_entity: Option<Entity>,
 }
 
 pub struct VoxelCursorData {
-    brush: VoxelBrush,
+    brush: Option<VoxelBrush>,
     brush_size: u32,
     // The locked distance the edit will be.
     ray_distance: f32,
@@ -37,7 +42,10 @@ pub struct VoxelCursorData {
 
 impl VoxelCursor {
     pub fn new() -> Self {
-        Self { data: None }
+        Self {
+            data: None,
+            selected_entity: None,
+        }
     }
 
     pub fn update_post_physics(
@@ -46,6 +54,7 @@ impl VoxelCursor {
         ecs_world: Res<ECSWorld>,
         input: Res<Input>,
         ui: Res<UI>,
+        mut debug: ResMut<DebugRenderer>,
     ) {
         let mut player_query =
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();
@@ -55,51 +64,166 @@ impl VoxelCursor {
             return;
         };
 
+        if cursor.selected_entity.is_some() && !ecs_world.contains(cursor.selected_entity.unwrap())
+        {
+            cursor.selected_entity = None;
+        }
+        if let Some(entity) = &cursor.selected_entity {
+            let mut query = ecs_world
+                .query_one::<(&Transform, &RenderableVoxelEntity)>(*entity)
+                .unwrap();
+            let (entity_transform, entity_renderable) = query.get().unwrap();
+            let dimensions = voxel_world
+                .get_dyn_model(entity_renderable.voxel_model_id)
+                .length();
+
+            let thickness = 0.1;
+            let color = Color::new_srgb(1.0, 1.0, 1.0);
+            let alpha = 1.0;
+            let line = |start, end| DebugLine {
+                start,
+                end,
+                thickness,
+                color: color.clone(),
+                alpha,
+            };
+
+            let obb = entity_transform.as_voxel_model_obb(dimensions);
+            let rot = obb.rotation;
+            let (min, max) = obb.rotated_min_max();
+            let forward = rot.transform_vector(&Vector3::z())
+                * dimensions.z as f32
+                * consts::voxel::VOXEL_METER_LENGTH;
+            let right = rot.transform_vector(&Vector3::x())
+                * dimensions.x as f32
+                * consts::voxel::VOXEL_METER_LENGTH;
+            let up = rot.transform_vector(&Vector3::y())
+                * dimensions.y as f32
+                * consts::voxel::VOXEL_METER_LENGTH;
+            // Draws the edges of an OBB.
+            debug.draw_line(line(min, min + forward));
+            debug.draw_line(line(min, min + right));
+            debug.draw_line(line(min + forward, min + right + forward));
+            debug.draw_line(line(min + right, min + right + forward));
+
+            debug.draw_line(line(min + up, min + forward + up));
+            debug.draw_line(line(min + up, min + right + up));
+            debug.draw_line(line(min + forward + up, max));
+            debug.draw_line(line(min + right + up, max));
+
+            debug.draw_line(line(min, min + up));
+            debug.draw_line(line(min + right, min + right + up));
+            debug.draw_line(line(min + forward, min + forward + up));
+            debug.draw_line(line(min + forward + right, max));
+
+            //debug.draw_line(line(max, Vector3::new(min.x, max.y, max.z)));
+            //debug.draw_line(line(max, Vector3::new(max.x, min.y, max.z)));
+            //debug.draw_line(line(max, Vector3::new(max.x, max.y, min.z)));
+
+            //debug.draw_line(line(
+            //    Vector3::new(min.x, max.y, min.z),
+            //    Vector3::new(max.x, max.y, min.z),
+            //));
+            //debug.draw_line(line(
+            //    Vector3::new(min.x, max.y, min.z),
+            //    Vector3::new(min.x, max.y, max.z),
+            //));
+            //debug.draw_line(line(
+            //    Vector3::new(min.x, max.y, max.z),
+            //    Vector3::new(min.x, min.y, max.z),
+            //));
+
+            //debug.draw_line(line(
+            //    Vector3::new(max.x, min.y, max.z),
+            //    Vector3::new(max.x, min.y, min.z),
+            //));
+            //debug.draw_line(line(
+            //    Vector3::new(max.x, min.y, max.z),
+            //    Vector3::new(min.x, min.y, max.z),
+            //));
+            //debug.draw_line(line(
+            //    Vector3::new(max.x, min.y, min.z),
+            //    Vector3::new(max.x, max.y, min.z),
+            //));
+        }
+
         if input.is_mouse_button_pressed(mouse::Button::Middle) {
             let voxel_pos = player_transform
                 .position()
                 .map(|x| (x / consts::voxel::VOXEL_METER_LENGTH).floor() as i32);
 
+            let mut attachment_map = AttachmentMap::new();
+            attachment_map.register_attachment(Attachment::PTMATERIAL);
             voxel_world.apply_voxel_edit(
-                VoxelEdit {
+                VoxelEditInfo {
                     world_voxel_position: voxel_pos,
                     world_voxel_length: Vector3::new(1, 1, 1),
-                    attachment_map: AttachmentMap::new(),
+                    attachment_map,
                 },
-                |mut flat, world_position, local_position| {
-                    flat.get_voxel_mut(local_position).set_attachment(
-                        Attachment::PTMATERIAL,
-                        Some(PTMaterial::diffuse(Color::new_srgb(1.0, 0.0, 0.0)).encode()),
+                |mut voxel, world_position, local_position| {
+                    voxel.set_attachment(
+                        Attachment::PTMATERIAL_ID,
+                        &[PTMaterial::diffuse(Color::new_srgb(1.0, 0.0, 0.0)).encode()],
                     );
                 },
             );
         }
 
-        if input.is_mouse_button_pressed(mouse::Button::Right) {
-            if let Some(hit_voxel) = voxel_world.trace_terrain(player_transform.get_ray(), 5.0) {
-                let hit_voxel_meter = hit_voxel.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH
-                    + Vector3::new(
-                        consts::voxel::VOXEL_METER_LENGTH * 0.5,
-                        consts::voxel::VOXEL_METER_LENGTH * 0.5,
-                        consts::voxel::VOXEL_METER_LENGTH * 0.5,
-                    );
-                let player_voxel_distance =
-                    (hit_voxel_meter - player_transform.position).magnitude();
-                let cursor_data = VoxelCursorData {
-                    brush: VoxelBrush::new(ui.debug_state.brush_color.clone()),
-                    brush_size: ui.debug_state.brush_size,
-                    ray_distance: player_voxel_distance,
-                    last_voxel: hit_voxel,
-                };
-                Self::apply_edit(&cursor_data, &mut voxel_world);
-                cursor.data = Some(cursor_data);
-            } else {
-                log::info!("Missed terrain when tracing");
+        if input.is_mouse_button_pressed(mouse::Button::Right)
+            || input.is_mouse_button_pressed(mouse::Button::Left)
+        {
+            if let Some(trace_info) =
+                voxel_world.trace_world(&&ecs_world, player_transform.get_ray())
+            {
+                match trace_info {
+                    VoxelTraceInfo::Terrain { world_voxel_pos } => {
+                        let hit_voxel_meter = world_voxel_pos.cast::<f32>()
+                            * consts::voxel::VOXEL_METER_LENGTH
+                            + Vector3::new(
+                                consts::voxel::VOXEL_METER_LENGTH * 0.5,
+                                consts::voxel::VOXEL_METER_LENGTH * 0.5,
+                                consts::voxel::VOXEL_METER_LENGTH * 0.5,
+                            );
+                        let player_voxel_distance =
+                            (hit_voxel_meter - player_transform.position).magnitude();
+
+                        let mut cursor_data = VoxelCursorData {
+                            brush: Some(VoxelBrush::new(ui.debug_state.brush_color.clone())),
+                            brush_size: ui.debug_state.brush_size,
+                            ray_distance: player_voxel_distance,
+                            last_voxel: world_voxel_pos,
+                        };
+                        if input.is_mouse_button_pressed(mouse::Button::Left) {
+                            cursor_data.brush = None;
+                        }
+
+                        Self::apply_edit(&cursor_data, &mut voxel_world);
+                        cursor.data = Some(cursor_data);
+                    }
+                    VoxelTraceInfo::Entity {
+                        entity_id,
+                        voxel_model_id,
+                        local_voxel_pos,
+                    } => {
+                        if input.is_mouse_button_pressed(mouse::Button::Left) {
+                            assert!(ecs_world.get::<&Transform>(entity_id).is_ok());
+                            if cursor.selected_entity.is_some()
+                                && cursor.selected_entity.unwrap() == entity_id
+                            {
+                                cursor.selected_entity = None;
+                            } else {
+                                cursor.selected_entity = Some(entity_id);
+                            }
+                        }
+                    }
+                }
             }
         }
 
         if let Some(cursor_data) = &mut cursor.data {
-            if input.is_mouse_button_down(mouse::Button::Right) {
+            if input.is_mouse_button_down(mouse::Button::Right)
+                || input.is_mouse_button_down(mouse::Button::Left)
+            {
                 let mut player_ray = player_transform.get_ray();
                 player_ray.advance(cursor_data.ray_distance);
                 let new_voxel = player_ray
@@ -116,15 +240,40 @@ impl VoxelCursor {
     }
 
     fn apply_edit(cursor_data: &VoxelCursorData, voxel_world: &mut VoxelWorld) {
-        let edit = cursor_data
-            .brush
-            .create_edit(cursor_data.last_voxel, Vector3::new(2, 2, 2));
-        voxel_world.apply_voxel_edit(edit, |mut flat, world_position, local_position| {
-            flat.get_voxel_mut(local_position).set_attachment(
-                Attachment::PTMATERIAL,
-                Some(PTMaterial::diffuse(cursor_data.brush.color.clone()).encode()),
-            );
-        });
+        if let Some(brush) = &cursor_data.brush {
+            let half_length = Vector3::new(3, 3, 3);
+            let mut attachment_map = AttachmentMap::new();
+            attachment_map.register_attachment(Attachment::PTMATERIAL);
+            let edit = VoxelEditInfo {
+                world_voxel_position: cursor_data.last_voxel - half_length,
+                world_voxel_length: half_length.map(|x| x as u32) * 2 + Vector3::new(1, 1, 1),
+                attachment_map,
+            };
+            let center = half_length.cast::<f32>();
+            voxel_world.apply_voxel_edit(edit, |mut voxel, world_position, local_position| {
+                let distance = local_position.cast::<f32>().metric_distance(&center);
+                if distance <= 4.0 {
+                    voxel.set_attachment(
+                        Attachment::PTMATERIAL_ID,
+                        &[PTMaterial::diffuse(brush.color.clone()).encode()],
+                    );
+                }
+            });
+        } else {
+            let half_length = Vector3::new(7, 7, 7);
+            let edit = VoxelEditInfo {
+                world_voxel_position: cursor_data.last_voxel - half_length,
+                world_voxel_length: half_length.map(|x| x as u32) * 2 + Vector3::new(1, 1, 1),
+                attachment_map: AttachmentMap::new(),
+            };
+            let center = half_length.cast::<f32>();
+            voxel_world.apply_voxel_edit(edit, |mut voxel, world_position, local_position| {
+                let distance = local_position.cast::<f32>().metric_distance(&center);
+                if distance <= 8.0 {
+                    voxel.set_removed();
+                }
+            });
+        }
     }
 }
 
@@ -138,22 +287,24 @@ impl VoxelBrush {
         Self { color, mask: None }
     }
 
-    pub fn create_edit(&self, position: Vector3<i32>, length: Vector3<u32>) -> VoxelEdit {
-        VoxelEdit {
+    pub fn create_edit(&self, position: Vector3<i32>, length: Vector3<u32>) -> VoxelEditInfo {
+        let mut attachment_map = AttachmentInfoMap::new();
+        attachment_map.register_attachment(Attachment::PTMATERIAL);
+        VoxelEditInfo {
             world_voxel_position: position,
             world_voxel_length: length,
-            attachment_map: AttachmentMap::new(),
+            attachment_map,
         }
     }
 }
 
-pub struct VoxelEdit {
+pub struct VoxelEditInfo {
     // Minimum bottom-down-left origin.
     pub world_voxel_position: Vector3<i32>,
     // Length in voxels of the edit.
     pub world_voxel_length: Vector3<u32>,
     // Known attachment map so we can skip checking that for each voxel.
-    pub attachment_map: AttachmentMap,
+    pub attachment_map: AttachmentInfoMap,
 }
 
 #[derive(Clone)]

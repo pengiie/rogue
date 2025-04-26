@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use log::warn;
 use nalgebra::Vector3;
 
-use crate::common::color::{Color, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceXYZ};
+use crate::{
+    common::color::{Color, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceXYZ},
+    consts::voxel::attachment,
+};
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Attachment {
@@ -138,20 +141,25 @@ impl std::fmt::Debug for PTMaterial {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct AttachmentMap {
-    map: HashMap<AttachmentId, Attachment>,
-}
+pub type AttachmentInfoMap = AttachmentMap<Attachment>;
 
-impl AttachmentMap {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
+impl AttachmentInfoMap {
+    pub fn inherit_other(&mut self, other: &AttachmentInfoMap) {
+        for (attachment_id, attachment) in other.iter() {
+            self.register_attachment(attachment.clone());
         }
     }
 
-    pub fn register_attachment(&mut self, attachment: &Attachment) {
-        if let Some(old) = self.map.insert(attachment.id(), attachment.clone()) {
+    pub fn get_unchecked(&self, id: AttachmentId) -> &Attachment {
+        self.map[id as usize].as_ref().unwrap()
+    }
+
+    pub fn name(&self, id: AttachmentId) -> &str {
+        self.get_unchecked(id).name()
+    }
+
+    pub fn register_attachment(&mut self, attachment: Attachment) {
+        if let Some(old) = &self.map[attachment.id() as usize] {
             // This shouldn't be a performance issue since attachment map inheritance or
             // construction is rare. If this is in a hot loop then that is an upstream design
             // issue.
@@ -161,30 +169,68 @@ impl AttachmentMap {
                 "Overriding existing attachment with different name but the same id"
             );
         }
+        let id = attachment.id();
+        self.map[id as usize] = Some(attachment);
     }
+}
 
-    pub fn get_attachment(&self, id: AttachmentId) -> &Attachment {
-        self.map.get(&id).expect(&format!(
-            "Attachment with id {} doesn't exist in the attachment map.",
-            id
-        ))
-    }
+#[derive(Clone, PartialEq, Eq)]
+pub struct AttachmentMap<T> {
+    map: Vec<Option<T>>,
+}
 
-    pub fn contains(&self, attachment_id: AttachmentId) -> bool {
-        self.map.contains_key(&attachment_id)
-    }
-
-    pub fn inherit_other(&mut self, other: &AttachmentMap) {
-        for (attachment_id, attachment) in other.iter() {
-            self.register_attachment(attachment);
+impl<T> AttachmentMap<T> {
+    pub fn new() -> Self {
+        Self {
+            map: (0..Attachment::MAX_ATTACHMENT_ID)
+                .map(|x| None)
+                .collect::<Vec<_>>(),
         }
     }
 
-    pub fn name(&self, id: AttachmentId) -> &str {
-        self.get_attachment(id).name()
+    pub fn insert(&mut self, attachment_id: AttachmentId, val: T) {
+        //if let Some(old) = &self.map[attachment_id as usize] {
+        //}
+        self.map[attachment_id as usize] = Some(val);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&u8, &Attachment)> {
-        self.map.iter()
+    pub fn get(&self, id: AttachmentId) -> Option<&T> {
+        self.map[id as usize].as_ref()
+    }
+
+    pub fn get_mut(&mut self, id: AttachmentId) -> Option<&mut T> {
+        self.map[id as usize].as_mut()
+    }
+
+    pub fn contains(&self, attachment_id: AttachmentId) -> bool {
+        self.map[attachment_id as usize].is_some()
+    }
+
+    // pub fn inherit_other(&mut self, other: &AttachmentMap) {
+    //     for (attachment_id, attachment) in other.iter() {
+    //         self.register_attachment(attachment);
+    //     }
+    // }
+
+    // pub fn name(&self, id: AttachmentId) -> &str {
+    //     self.get_attachment(id).name()
+    // }
+
+    pub fn iter(&self) -> impl Iterator<Item = (AttachmentId, &T)> {
+        self.map
+            .iter()
+            .enumerate()
+            .filter_map(|(id, a)| a.as_ref().map(|a| (id as AttachmentId, a)))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (AttachmentId, &mut T)> {
+        self.map
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(id, a)| a.as_mut().map(|a| (id as AttachmentId, a)))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.map.iter().filter_map(|a| a.as_ref())
     }
 }

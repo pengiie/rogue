@@ -23,7 +23,6 @@ use crate::{
             esvo::VoxelModelESVO,
             flat::VoxelModelFlat,
             thc::VoxelModelTHC,
-            unit::VoxelModelUnit,
             voxel::{VoxelData, VoxelModel, VoxelModelSchema},
             voxel_terrain::{self},
             voxel_transform::VoxelModelTransform,
@@ -100,8 +99,10 @@ impl GameWorld {
 
         let mut q = ecs_world.query::<With<&mut Transform, &RenderableVoxelEntity>>();
         for (entity, (mut transform)) in q.iter() {
-            transform.rotation *= (&UnitQuaternion::new(
-                Vector3::y() * f32::consts::PI * 2.0 * time.delta_time().as_secs_f32() * 0.25,
+            transform.rotation *= (&UnitQuaternion::from_axis_angle(
+                &Vector3::y_axis(),
+                f32::consts::PI * 2.0 * time.delta_time().as_secs_f32() * 0.25, // 4 seconds per
+                                                                                // rot
             ));
         }
 

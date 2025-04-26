@@ -16,6 +16,13 @@ impl Bitset {
         }
     }
 
+    pub fn new_filled(bits: usize, value: u32) -> Self {
+        Self {
+            data: vec![value; Self::required_size_for_count(bits)],
+            bits,
+        }
+    }
+
     pub fn set_bit(&mut self, bit: usize, value: bool) {
         let n = bit / 32;
         let mask = 1 << (bit % 32);

@@ -686,9 +686,10 @@ impl VulkanFrameGraphExecutor {
                     .frame_buffers
                     .contains(&input.as_typed::<Buffer>())
                 {
-                    log::warn!(
-                        "Frame graph frame buffer `{}` hasn't been written to yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
-                    );
+                    // TODO: Add a Executor::mark_ignored for buffers to ignore this warning.
+                    // log::warn!(
+                    //     "Frame graph frame buffer `{}` hasn't been written to yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
+                    // );
                     continue;
                 } else if frame_graph.inputs.contains_key(&input) {
                     panic!(

@@ -38,7 +38,7 @@ impl Default for GraphicsSettings {
             // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
             rt_size: Vector2::new(1280, 720),
             antialiasing: Antialiasing::None,
-            present_mode: GfxPresentMode::Vsync,
+            present_mode: GfxPresentMode::NoVsync,
             triple_buffering: true,
         }
     }
@@ -56,6 +56,9 @@ pub struct Settings {
 
     /// The mouse sensitivity of pixels per degree of rotation.
     pub mouse_sensitivity: f32,
+
+    /// The controller sensitivity of degrees per second.
+    pub controller_sensitity: f32,
 
     /// The chunk render distance, also acts as the load
     /// and simulation distance for simplicity.
@@ -81,6 +84,7 @@ impl From<&SettingsAsset> for Settings {
         Self {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: s.mouse_sensitivity,
+            controller_sensitity: s.controller_sensitivity,
 
             chunk_render_distance: s.chunk_render_distance,
             chunk_queue_capacity: std::thread::available_parallelism()
@@ -101,6 +105,7 @@ impl From<&Settings> for SettingsAsset {
     fn from(s: &Settings) -> Self {
         Self {
             mouse_sensitivity: s.mouse_sensitivity,
+            controller_sensitivity: s.controller_sensitity,
             chunk_render_distance: s.chunk_render_distance,
             player_position: s.player_position,
             player_rotation: s.player_rotation,

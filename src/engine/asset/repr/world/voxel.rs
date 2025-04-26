@@ -201,20 +201,20 @@ impl AssetSaver for VoxelModelFlat {
         writer.write(&(data.attachment_map.iter().count() as u32));
         let mut attachment_positions = HashMap::new();
         for (attachment_id, _) in data.attachment_map.iter() {
-            writer.write(attachment_id);
+            writer.write(&attachment_id);
             let presence_pointer = writer.write_later::<u32>();
             let raw_pointer = writer.write_later::<u32>();
-            attachment_positions.insert(*attachment_id, (presence_pointer, raw_pointer));
+            attachment_positions.insert(attachment_id, (presence_pointer, raw_pointer));
         }
         writer.write_slice(data.presence_data.data());
         for (attachment_id, data) in data.attachment_presence_data.iter() {
             let presence_pointer = writer.cursor_pos() as u32;
-            writer.write_at(attachment_positions[attachment_id].0, &presence_pointer);
+            writer.write_at(attachment_positions[&attachment_id].0, &presence_pointer);
             writer.write_slice(data.data());
         }
         for (attachment_id, data) in data.attachment_data.iter() {
             let raw_pointer = writer.cursor_pos() as u32;
-            writer.write_at(attachment_positions[attachment_id].1, &raw_pointer);
+            writer.write_at(attachment_positions[&attachment_id].1, &raw_pointer);
             writer.write_slice(data.as_slice());
         }
         writer.finish_writes()?;
@@ -247,7 +247,7 @@ impl AssetLoader for VoxelModelFlat {
             let presence_pointer = reader.read::<u32>()?;
             let data_pointer = reader.read::<u32>()?;
             flat.attachment_map
-                .register_attachment(&Attachment::from_id(id));
+                .register_attachment(Attachment::from_id(id));
             attachment_presence_map.insert(presence_pointer, id);
             attachment_data_map.insert(data_pointer, id);
         }
@@ -259,7 +259,7 @@ impl AssetLoader for VoxelModelFlat {
             flat.attachment_presence_data.insert(*attachment_id, bitset);
         }
         while let Some(attachment_id) = attachment_data_map.get(&(reader.cursor_pos()? as u32)) {
-            let attachment = flat.attachment_map.get_attachment(*attachment_id);
+            let attachment = flat.attachment_map.get_unchecked(*attachment_id);
             let mut data = vec![0u32; flat.volume() * attachment.size() as usize];
             reader.read_to_slice(&mut data);
             flat.attachment_data.insert(*attachment_id, data);

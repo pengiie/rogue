@@ -25,6 +25,10 @@ impl AABB {
         }
     }
 
+    pub fn center(&self) -> Vector3<f32> {
+        (self.max - self.min) * 0.5
+    }
+
     pub fn side_length(&self) -> Vector3<f32> {
         self.max - self.min
     }

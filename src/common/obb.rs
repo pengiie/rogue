@@ -20,41 +20,19 @@ impl OBB {
         }
     }
 
-    pub fn as_acceleration_data(&self) -> Vec<u32> {
-        let rotation_matrix = self
+    pub fn length(&self) -> Vector3<f32> {
+        self.aabb.max - self.aabb.min
+    }
+
+    pub fn rotated_min_max(&self) -> (Vector3<f32>, Vector3<f32>) {
+        let min = self
             .rotation
-            .to_rotation_matrix()
-            .matrix()
-            .map(|x| x.to_bits());
-
-        let min_bits = self.aabb.min.map(|x| x.to_bits());
-        let max_bits = self.aabb.max.map(|x| x.to_bits());
-
-        let rotation_anchor = self.rotation_anchor;
-        let rotation_anchor_bits = rotation_anchor.map(|x| x.to_bits());
-
-        vec![
-            // AABB
-            min_bits.x,
-            min_bits.y,
-            min_bits.z,
-            max_bits.x,
-            max_bits.y,
-            max_bits.z,
-            // Rotation anchor (what the ray origin rotates about)
-            rotation_anchor_bits.x,
-            rotation_anchor_bits.y,
-            rotation_anchor_bits.z,
-            // Rotation matrix
-            rotation_matrix.m11,
-            rotation_matrix.m12,
-            rotation_matrix.m13,
-            rotation_matrix.m21,
-            rotation_matrix.m22,
-            rotation_matrix.m23,
-            rotation_matrix.m31,
-            rotation_matrix.m32,
-            rotation_matrix.m33,
-        ]
+            .transform_vector(&(self.aabb.min - self.rotation_anchor))
+            + self.rotation_anchor;
+        let max = self
+            .rotation
+            .transform_vector(&(self.aabb.max - self.rotation_anchor))
+            + self.rotation_anchor;
+        (min, max)
     }
 }

@@ -218,7 +218,7 @@ public struct Flat {
         if (let pt_material = this.load_ptmaterial(voxel_index)) {
           var color = pt_material;
           if (let normal = this.load_normal(voxel_index)) {
-            let l = dot(normal, normalize(-float3(0.7,-1,-0.2)));
+            let l = sqrt(dot(normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
             color *= max(l, 0.2);
           }
           //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);

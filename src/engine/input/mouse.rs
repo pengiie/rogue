@@ -1,28 +1,41 @@
 use std::collections::HashSet;
 
+use nalgebra::Vector2;
+
 pub struct Mouse {
-    position: (f32, f32),
-    delta: (f32, f32),
+    position: Vector2<f32>,
+    delta: Vector2<f32>,
     pressed_buttons: HashSet<Button>,
     down_buttons: HashSet<Button>,
     released_buttons: HashSet<Button>,
+
+    // Locked to center of screen and is invisible/confined.
+    pub is_locked: bool,
+    screen_center: Vector2<f32>,
 }
 
 impl Mouse {
     pub fn new() -> Self {
         Self {
-            position: (0.0, 0.0),
-            delta: (0.0, 0.0),
+            position: Vector2::new(0.0, 0.0),
+            delta: Vector2::new(0.0, 0.0),
             pressed_buttons: HashSet::new(),
             down_buttons: HashSet::new(),
             released_buttons: HashSet::new(),
+
+            is_locked: false,
+            screen_center: Vector2::new(0.0, 0.0),
         }
     }
 
     pub fn clear_inputs(&mut self) {
         self.pressed_buttons.clear();
         self.released_buttons.clear();
-        self.delta = (0.0, 0.0);
+        self.delta = Vector2::new(0.0, 0.0);
+    }
+
+    pub fn update_screen_center(&mut self, screen_size: Vector2<f32>) {
+        self.screen_center = screen_size * 0.5;
     }
 
     pub fn submit_input(&mut self, input: SubmitInput) {
@@ -36,10 +49,11 @@ impl Mouse {
                 self.down_buttons.remove(&button);
             }
             SubmitInput::Position(x, y) => {
-                self.position = (x, y);
+                self.position = Vector2::new(x, y);
             }
             SubmitInput::Delta(x, y) => {
-                self.delta = (self.delta.0 + x, self.delta.1 + y);
+                self.delta.x += x;
+                self.delta.y -= y;
             }
         }
     }
@@ -56,11 +70,14 @@ impl Mouse {
         self.released_buttons.contains(&button)
     }
 
-    pub fn mouse_position(&self) -> (f32, f32) {
+    pub fn mouse_position(&self) -> Vector2<f32> {
+        if self.is_locked {
+            return self.screen_center;
+        }
         self.position
     }
 
-    pub fn mouse_delta(&self) -> (f32, f32) {
+    pub fn mouse_delta(&self) -> Vector2<f32> {
         self.delta
     }
 }

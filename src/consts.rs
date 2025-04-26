@@ -30,10 +30,22 @@ pub mod gfx {
     /// the the entire pipeline cache.
     pub const PIPELINE_INVALIDATION_TIMER_MS: u32 = 250;
 
+    pub const CAMERA_NEAR_PLANE: f32 = 0.01;
     pub const CAMERA_FAR_PLANE: f32 = 10_000.0;
 }
 
 pub mod io {
     pub const SETTINGS_FILE: &str = "settings::json";
     pub const REGION_FILE_HEADER: &str = "vcr ";
+}
+
+pub mod actions {
+
+    pub mod keybind {
+        use crate::engine::input::keyboard::Key;
+
+        pub const EDITOR_TOGGLE: Key = Key::E;
+    }
+
+    pub const EDITOR_TOGGLE: &str = "editor_toggle";
 }

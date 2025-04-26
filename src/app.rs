@@ -128,12 +128,15 @@ impl winit::application::ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        // If egui exists then input exists.
         if self.resource_bank().has_resource::<Egui>() {
             let window = self.resource_bank().get_resource::<Window>();
-            if self
-                .resource_bank()
-                .get_resource_mut::<Egui>()
-                .handle_window_event(&window, &event)
+            let input = self.resource_bank().get_resource::<Input>();
+            if !input.is_cursor_locked()
+                && self
+                    .resource_bank()
+                    .get_resource_mut::<Egui>()
+                    .handle_window_event(&window, &event)
             {
                 return;
             }

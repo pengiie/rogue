@@ -8,7 +8,7 @@ use crate::{common::color::Color, consts};
 
 use super::{
     attachment::{Attachment, AttachmentMap, PTMaterial},
-    cursor::VoxelEdit,
+    cursor::VoxelEditInfo,
     flat::VoxelModelFlat,
     voxel_world::VoxelWorld,
 };
@@ -27,12 +27,12 @@ impl ChunkGenerator {
 
     pub fn generate_chunk(&self, voxel_world: &mut VoxelWorld, chunk_position: Vector3<i32>) {
         let mut used_attachments = AttachmentMap::new();
-        used_attachments.register_attachment(&Attachment::PTMATERIAL);
+        used_attachments.insert(Attachment::PTMATERIAL_ID, Attachment::PTMATERIAL);
 
         let color_noise = noise::Fbm::<noise::Perlin>::new(0).set_octaves(3);
         let perlin = self.perlin.clone();
         voxel_world.apply_voxel_edit_async(
-            VoxelEdit {
+            VoxelEditInfo {
                 world_voxel_position: chunk_position
                     * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32,
                 world_voxel_length: Vector3::new(
@@ -42,7 +42,7 @@ impl ChunkGenerator {
                 ),
                 attachment_map: used_attachments,
             },
-            move |flat, world_pos, local_pos| {
+            move |mut voxel, world_pos, local_pos| {
                 let freq = 24.0;
                 let x = world_pos.x as f64;
                 let y = world_pos.y as f64;
@@ -62,10 +62,9 @@ impl ChunkGenerator {
                 let shaping = 1.0 - shaping;
 
                 if (shaping * shaping * density + shaping > 0.5) {
-                    let mut voxel = flat.get_voxel_mut(local_pos);
                     let r_var = color_noise.get([x / 7.0, y / 7.0, z / 7.0]);
                     let color = Color::new_srgb(0.5 + 0.2 * r_var as f32, 0.9, 0.05);
-                    voxel.set_attachment_id(
+                    voxel.set_attachment(
                         Attachment::PTMATERIAL_ID,
                         &[Attachment::encode_ptmaterial(&PTMaterial::diffuse(
                             color.into(),

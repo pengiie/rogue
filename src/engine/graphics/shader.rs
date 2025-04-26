@@ -508,6 +508,7 @@ impl ShaderCompiler {
                         slang::ResourceShape::SlangTexture2d => match ty_layout.resource_access() {
                             slang::ResourceAccess::Read => ShaderBindingType::SampledImage,
                             slang::ResourceAccess::Write => ShaderBindingType::StorageImage,
+                            slang::ResourceAccess::ReadWrite => ShaderBindingType::StorageImage,
                             _ => unreachable!(),
                         },
                         slang::ResourceShape::SlangTextureCube => todo!(),

@@ -1,11 +1,11 @@
-- add map editing
++ add map editing
 + shader system
 - kinematic solver
 - plane and box collider (player with ground)
 - voxel collision solver
 - voxel colliders
-- voxel saving
-- voxel loading
++ voxel saving
++ voxel loading
 - Add voxel based radiance cache/accumulation
 - Finish GI
 - Add particles
@@ -25,3 +25,4 @@
 
 am i cooked?
 or will i do them all?
+i think im cooking finally.

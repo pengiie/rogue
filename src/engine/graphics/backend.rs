@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+use downcast::Any;
 use log::{debug, warn};
 use nalgebra::{Vector2, Vector3};
 use ron::to_string;
@@ -518,6 +519,7 @@ impl<'a> ShaderWriter<'a> {
         full_uniform_name: impl ToString,
         val: &nalgebra::Matrix4<f32>,
     ) {
+        // Slang is by default row-major so we transpose first.
         let arr: [f32; 16] = val.transpose().as_slice().try_into().unwrap();
         self.write_uniform(full_uniform_name, arr);
     }
@@ -656,7 +658,7 @@ impl<'a> ShaderWriter<'a> {
                                 } => {
                                     if !uniform_data.written_uniforms.contains(binding_name) {
                                         panic!(
-                                            "Uniform value of for `{}.{}` has not been set.",
+                                            "Uniform value for `{}.{}` has not been set.",
                                             set_info.name, binding_name
                                         );
                                     }

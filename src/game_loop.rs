@@ -4,6 +4,7 @@ use crate::{
     app::App,
     engine::{
         asset::{self, asset::Assets},
+        debug::DebugRenderer,
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -27,6 +28,7 @@ pub fn game_loop(app: &App) {
     // ------- FRAME SETUP ---------
     app.run_system(DeviceResource::begin_frame);
     app.run_system(Time::update);
+    app.run_system(Input::collect_gamepad_events);
 
     let cpu_time = Instant::now();
 
@@ -70,14 +72,15 @@ pub fn game_loop(app: &App) {
     app.run_system(VoxelWorldGpu::update_gpu_objects);
     app.run_system(VoxelWorldGpu::write_render_data);
 
-    app.run_system(Renderer::write_common_render_data);
-    app.run_system(UIPass::write_debug_ui_render_data);
-
     // Only continue with frame graph pass writing if we successfully acquired the swapchain since
     // some images may rely on swapchain info.
     app.run_system(Renderer::acquire_swapchain_image);
     if app.get_resource::<Renderer>().did_acquire_swapchain() {
+        app.run_system(Renderer::write_common_render_data);
+        app.run_system(UIPass::write_debug_ui_render_data);
+
         app.run_system(UIPass::write_ui_pass);
+        app.run_system(DebugRenderer::write_debug_shapes_pass);
         app.run_system(VoxelWorldGpu::write_normal_calc_pass);
         app.run_system(Renderer::finish_frame);
     }

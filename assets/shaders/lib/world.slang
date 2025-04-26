@@ -5,9 +5,11 @@ public struct FrameWorldInfo {
 }
 
 public struct Camera {
+  public matrix4x4 proj_view;
   matrix4x4 transform;
   matrix3x3 rotation;
   float fov;
+  public float near_plane;
   public float far_plane;
 
   public Ray create_ray(float2 pixel_pos, float2 screen_dimensions) {

@@ -111,6 +111,7 @@ impl DeviceResource {
         mut events: ResMut<Events>,
         settings: Res<Settings>,
     ) {
+        // TODO: Move this before present.
         // Cap framerate.
         if let Some(last_frame_time) = device.last_frame_time {
             let elapsed_time_us = last_frame_time.elapsed().as_micros();

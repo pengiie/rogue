@@ -108,6 +108,10 @@ impl RayDDA {
         self.curr_grid
     }
 
+    pub fn curr_t(&self) -> Vector3<f32> {
+        self.curr_t
+    }
+
     pub fn step(&mut self) {
         let min_t = self.curr_t.min();
         let mask = self.curr_t.map(|x| if x == min_t { 1 } else { 0 });

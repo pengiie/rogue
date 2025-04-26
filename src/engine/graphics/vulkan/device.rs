@@ -1240,6 +1240,7 @@ impl VulkanAllocator {
     fn find_or_create_shared_memory(
         &mut self,
         allocation_size: u64,
+        allocation_alignment: u64,
         memory_property_flags: ash::vk::MemoryPropertyFlags,
     ) -> anyhow::Result<VulkanMemoryIndex> {
         // Check for available shared memory with the sample memory properties.
@@ -1250,8 +1251,8 @@ impl VulkanAllocator {
                 && shared_memory.free_size_remaining >= allocation_size
             {
                 debug!(
-                    "Using shared memory index {} for memory properties {:?}",
-                    memory_index, memory_property_flags
+                    "Using shared memory index {} with {}/{} bytes remaining for memory properties {:?}",
+                    memory_index, shared_memory.free_size_remaining, shared_memory.memory.size, memory_property_flags
                 );
                 return Ok(memory_index as VulkanMemoryIndex);
             }
@@ -1304,8 +1305,11 @@ impl VulkanAllocator {
                     }
                     _ => unreachable!(),
                 };
-                let shared_memory_index =
-                    self.find_or_create_shared_memory(size, memory_property_flags)?;
+                let shared_memory_index = self.find_or_create_shared_memory(
+                    size,
+                    alignment as u64,
+                    memory_property_flags,
+                )?;
                 let shared_memory = self
                     .shared_memory
                     .get_mut(shared_memory_index as usize)
@@ -1354,6 +1358,10 @@ impl VulkanAllocator {
                 };
                 let (mut device_memory, _) =
                     self.allocate_device_memory(size, memory_property_flags)?;
+                log::debug!(
+                    "Allocation dedicated memory of {} bytes",
+                    device_memory.size
+                );
 
                 if mapped && device_memory.mapped_ptr.is_none() {
                     device_memory.mapped_ptr = Some(unsafe {
