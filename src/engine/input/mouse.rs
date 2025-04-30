@@ -4,7 +4,8 @@ use nalgebra::Vector2;
 
 pub struct Mouse {
     position: Vector2<f32>,
-    delta: Vector2<f32>,
+    pos_delta: Vector2<f32>,
+    scroll_delta: f32,
     pressed_buttons: HashSet<Button>,
     down_buttons: HashSet<Button>,
     released_buttons: HashSet<Button>,
@@ -18,7 +19,8 @@ impl Mouse {
     pub fn new() -> Self {
         Self {
             position: Vector2::new(0.0, 0.0),
-            delta: Vector2::new(0.0, 0.0),
+            pos_delta: Vector2::new(0.0, 0.0),
+            scroll_delta: 0.0,
             pressed_buttons: HashSet::new(),
             down_buttons: HashSet::new(),
             released_buttons: HashSet::new(),
@@ -31,7 +33,8 @@ impl Mouse {
     pub fn clear_inputs(&mut self) {
         self.pressed_buttons.clear();
         self.released_buttons.clear();
-        self.delta = Vector2::new(0.0, 0.0);
+        self.pos_delta = Vector2::new(0.0, 0.0);
+        self.scroll_delta = 0.0;
     }
 
     pub fn update_screen_center(&mut self, screen_size: Vector2<f32>) {
@@ -51,9 +54,12 @@ impl Mouse {
             SubmitInput::Position(x, y) => {
                 self.position = Vector2::new(x, y);
             }
-            SubmitInput::Delta(x, y) => {
-                self.delta.x += x;
-                self.delta.y -= y;
+            SubmitInput::PosDelta(x, y) => {
+                self.pos_delta.x += x;
+                self.pos_delta.y -= y;
+            }
+            SubmitInput::ScrollDelta(delta) => {
+                self.scroll_delta = delta;
             }
         }
     }
@@ -78,7 +84,11 @@ impl Mouse {
     }
 
     pub fn mouse_delta(&self) -> Vector2<f32> {
-        self.delta
+        self.pos_delta
+    }
+
+    pub fn scroll_delta(&self) -> f32 {
+        self.scroll_delta
     }
 }
 
@@ -86,7 +96,8 @@ pub enum SubmitInput {
     Pressed(Button),
     Released(Button),
     Position(f32, f32),
-    Delta(f32, f32),
+    PosDelta(f32, f32),
+    ScrollDelta(f32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

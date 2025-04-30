@@ -10,6 +10,7 @@ use crate::{
     engine::{
         entity::{self, ecs_world::ECSWorld},
         resource::{Res, ResMut},
+        ui::UI,
         voxel::voxel_world::{self, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
@@ -49,7 +50,7 @@ pub struct Renderer {
     swapchain_size: Vector2<u32>,
 }
 
-pub struct GraphConstantsDebugUI {
+pub struct GraphConstantsEditorUI {
     pub buffer_vertex_buffer: &'static str,
     pub buffer_index_buffer: &'static str,
 
@@ -101,11 +102,13 @@ pub struct GraphConstants {
     pub voxel: GraphConstantsVoxel,
     pub normal_calc: GraphConstantsNormalCalc,
     pub rt: GraphConstantsRT,
-    pub debug_ui: GraphConstantsDebugUI,
+    pub editor_ui: GraphConstantsEditorUI,
     pub debug_3d: GraphConstantsDebug3D,
     pub post_process: GraphConstantsPostProcess,
 
     pub image_backbuffer: &'static str,
+    pub image_backbuffer_size: &'static str,
+    pub image_preswapchain_composite: &'static str,
     pub image_swapchain: &'static str,
     pub image_swapchain_size: &'static str,
 
@@ -155,11 +158,19 @@ impl Renderer {
             },
             pass_debug: "debug_3d_pass_debug",
         },
-        debug_ui: GraphConstantsDebugUI {
-            buffer_vertex_buffer: "debug_ui_buffer_vertex_buffer",
-            buffer_index_buffer: "debug_ui_buffer_index_buffer",
+        post_process: GraphConstantsPostProcess {
+            pipeline_compute_post_process: "post_process_compute_post_process",
+            pipeline_compute_post_process_info: FrameGraphComputeInfo {
+                shader_path: "post_process",
+                entry_point_fn: "main",
+            },
+            pass_post_process: "post_process_pass_post_process",
+        },
+        editor_ui: GraphConstantsEditorUI {
+            buffer_vertex_buffer: "editor_ui_buffer_vertex_buffer",
+            buffer_index_buffer: "editor_ui_buffer_index_buffer",
 
-            pipeline_raster_ui: "debug_ui_pipeline_raster_ui",
+            pipeline_raster_ui: "editor_ui_pipeline_raster_ui",
             pipeline_raster_ui_info: FrameGraphRasterInfo {
                 vertex_shader_path: "egui",
                 vertex_entry_point_fn: "main_vs",
@@ -196,21 +207,15 @@ impl Renderer {
                 cull_mode: GfxCullMode::None,
                 front_face: GfxFrontFace::Clockwise,
             },
-            pass_ui: "debug_ui_pass_ui",
-        },
-        post_process: GraphConstantsPostProcess {
-            pipeline_compute_post_process: "post_process_compute_post_process",
-            pipeline_compute_post_process_info: FrameGraphComputeInfo {
-                shader_path: "post_process",
-                entry_point_fn: "main",
-            },
-            pass_post_process: "post_process_pass_post_process",
+            pass_ui: "editor_ui_pass_ui",
         },
 
         // The render image before any post processing, ui, or overlays.
         image_backbuffer: "image_backbuffer",
+        image_backbuffer_size: "image_backbuffer_size",
         image_swapchain: "image_swapchain",
         image_swapchain_size: "image_swapchain_size",
+        image_preswapchain_composite: "image_preswapchain_composite",
 
         pass_blit_backbuffer_to_swapchain: "pass_blit_backbuffer_to_swapchain",
     };
@@ -268,14 +273,15 @@ impl Renderer {
             );
         }
 
+        let backbuffer_size_input = builder.create_input(Self::GRAPH.image_backbuffer_size);
         let backbuffer_image = builder.create_frame_image_with_ctx(
             Self::GRAPH.image_backbuffer,
             move |ctx: &FrameGraphContext| {
-                FrameGraphImageInfo::new_rgba8(ctx.get_vec2(swapchain_size_input))
+                FrameGraphImageInfo::new_rgba8(ctx.get_vec2(backbuffer_size_input))
             },
         );
 
-        // Post process, blit to swapchain.
+        // Post process, blit to content backbuffer.
         {
             let post_process_compute_pipline = builder.create_compute_pipeline(
                 Self::GRAPH.post_process.pipeline_compute_post_process,
@@ -291,11 +297,6 @@ impl Renderer {
                     let backbuffer_image = ctx.get_image(Self::GRAPH.image_backbuffer);
                     let backbuffer_image_size =
                         recorder.get_image_info(&backbuffer_image).resolution_xy();
-                    assert_eq!(
-                        backbuffer_image_size,
-                        ctx.get_vec2(Self::GRAPH.image_swapchain_size),
-                        "Swapchain and post-process backbuffer image should be the same size"
-                    );
 
                     {
                         let compute_pipeline =
@@ -319,7 +320,7 @@ impl Renderer {
             );
         }
 
-        // Debug gizmos and shapes.
+        // Draw debug gizmos and shapes on game content backbuffer.
         {
             builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_lines);
 
@@ -338,40 +339,46 @@ impl Renderer {
             );
         }
 
-        // Overlay debug ui.
+        let preswapchain_image = builder.create_frame_image_with_ctx(
+            Self::GRAPH.image_preswapchain_composite,
+            move |ctx: &FrameGraphContext| {
+                FrameGraphImageInfo::new_rgba8(ctx.get_vec2(swapchain_size_input))
+            },
+        );
+
+        // Overlay editor ui and composite game content onto pre-swapchain buffer.
         {
-            builder.create_frame_buffer(Self::GRAPH.debug_ui.buffer_vertex_buffer);
-            builder.create_frame_buffer(Self::GRAPH.debug_ui.buffer_index_buffer);
+            builder.create_frame_buffer(Self::GRAPH.editor_ui.buffer_vertex_buffer);
+            builder.create_frame_buffer(Self::GRAPH.editor_ui.buffer_index_buffer);
 
             builder.create_raster_pipeline(
-                Self::GRAPH.debug_ui.pipeline_raster_ui,
-                Self::GRAPH.debug_ui.pipeline_raster_ui_info,
+                Self::GRAPH.editor_ui.pipeline_raster_ui,
+                Self::GRAPH.editor_ui.pipeline_raster_ui_info,
                 &[&Self::GRAPH.image_backbuffer],
                 None,
             );
 
             builder.create_input_pass(
-                Self::GRAPH.debug_ui.pass_ui,
+                Self::GRAPH.editor_ui.pass_ui,
                 &[
                     &Self::GRAPH.image_backbuffer,
-                    &Self::GRAPH.debug_ui.pipeline_raster_ui,
-                    &Self::GRAPH.debug_ui.buffer_vertex_buffer,
-                    &Self::GRAPH.debug_ui.buffer_index_buffer,
+                    &Self::GRAPH.editor_ui.pipeline_raster_ui,
+                    &Self::GRAPH.editor_ui.buffer_vertex_buffer,
+                    &Self::GRAPH.editor_ui.buffer_index_buffer,
                 ],
-                &[&Self::GRAPH.image_backbuffer],
+                &[&Self::GRAPH.image_preswapchain_composite],
             );
         }
 
-        // Backbuffer to swapchain blit.
+        // Preswapchain composite to swapchain blit.
         builder.create_pass(
             Self::GRAPH.pass_blit_backbuffer_to_swapchain,
-            &[&Self::GRAPH.image_backbuffer],
+            &[&Self::GRAPH.image_preswapchain_composite],
             &[&Self::GRAPH.image_swapchain],
             |recorder, ctx| {
-                let backbuffer_image = ctx.get_image(Self::GRAPH.image_backbuffer);
-
+                let preswapchain_image = ctx.get_image(Self::GRAPH.image_preswapchain_composite);
                 let swapchain_image = ctx.get_image(Self::GRAPH.image_swapchain);
-                recorder.blit(backbuffer_image, swapchain_image, GfxFilterMode::Nearest);
+                recorder.blit_full(preswapchain_image, swapchain_image, GfxFilterMode::Nearest);
             },
         );
 
@@ -402,10 +409,21 @@ impl Renderer {
         voxel_world_gpu: Res<VoxelWorldGpu>,
         ecs_world: Res<ECSWorld>,
         main_camera: Res<MainCamera>,
+        ui: Res<UI>,
     ) {
         assert!(renderer.acquired_swapchain);
-        let swapchain_aspect_ratio =
-            renderer.swapchain_size.x as f32 / renderer.swapchain_size.y as f32;
+        let content_size = Vector2::new(
+            renderer.swapchain_size.x as f32,
+            renderer.swapchain_size.y as f32,
+        ) - Vector2::new(
+            ui.content_padding.z + ui.content_padding.w,
+            ui.content_padding.x + ui.content_padding.y,
+        );
+        renderer.frame_graph_executor.supply_input(
+            Self::GRAPH.image_backbuffer_size,
+            Box::new(content_size.map(|x| x as u32)),
+        );
+        let backbuffer_aspect_ratio = content_size.x / content_size.y;
 
         renderer
             .frame_graph_executor
@@ -419,7 +437,7 @@ impl Renderer {
                 if let Some(mut camera_query) = ecs_world.try_get_main_camera(&main_camera) {
                     let (camera_transform, camera) = camera_query.get().unwrap();
 
-                    let proj_view_matrix = camera.projection_matrix(swapchain_aspect_ratio)
+                    let proj_view_matrix = camera.projection_matrix(backbuffer_aspect_ratio)
                         * camera_transform.to_view_matrix();
                     writer.write_uniform_mat4(
                         "u_frame.world_info.camera.proj_view",

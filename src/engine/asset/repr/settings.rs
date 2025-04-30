@@ -24,34 +24,35 @@ impl Default for SettingsAsset {
     }
 }
 
-impl AssetLoader for SettingsAsset {
-    fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
-    where
-        Self: Sized + std::any::Any,
-    {
-        match data.read_contents() {
-            Ok(contents) => Ok(serde_json::from_str::<SettingsAsset>(&contents)
-                .expect("Failed to deserialize settings file.")),
-            Err(err) => match err.kind() {
-                std::io::ErrorKind::NotFound => Err(AssetLoadError::NotFound { path: None }),
-                _ => Err(AssetLoadError::Other(anyhow::anyhow!(err.to_string()))),
-            },
-        }
-    }
-}
+// Specialization is not a thing so since SettingsAsset implements serde, it uses the default impl.
+// impl AssetLoader for SettingsAsset {
+//     fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
+//     where
+//         Self: Sized + std::any::Any,
+//     {
+//         match data.read_contents() {
+//             Ok(contents) => Ok(serde_json::from_str::<SettingsAsset>(&contents)
+//                 .expect("Failed to deserialize settings file.")),
+//             Err(err) => match err.kind() {
+//                 std::io::ErrorKind::NotFound => Err(AssetLoadError::NotFound { path: None }),
+//                 _ => Err(AssetLoadError::Other(anyhow::anyhow!(err.to_string()))),
+//             },
+//         }
+//     }
+// }
 
-impl AssetSaver for SettingsAsset {
-    fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
-    where
-        Self: Sized,
-    {
-        match out_file.write_contents(
-            serde_json::to_string_pretty(data).expect("Failed to serialize settings."),
-        ) {
-            Ok(()) => Ok(()),
-            Err(err) => match err.kind() {
-                _ => Err(anyhow::anyhow!(err.to_string())),
-            },
-        }
-    }
-}
+// impl AssetSaver for SettingsAsset {
+//     fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
+//     where
+//         Self: Sized,
+//     {
+//         match out_file.write_contents(
+//             serde_json::to_string_pretty(data).expect("Failed to serialize settings."),
+//         ) {
+//             Ok(()) => Ok(()),
+//             Err(err) => match err.kind() {
+//                 _ => Err(anyhow::anyhow!(err.to_string())),
+//             },
+//         }
+//     }
+// }

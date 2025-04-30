@@ -1,9 +1,9 @@
 use std::borrow::Borrow;
 
-use egui::Separator;
+use egui::{Button, Separator};
 use gui::Egui;
 use log::debug;
-use nalgebra::{Translation3, Vector3};
+use nalgebra::{Translation3, Vector3, Vector4};
 use rogue_macros::Resource;
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
 
 use super::{
     asset::asset::Assets,
+    editor::{self, editor::Editor},
     entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
     graphics::renderer::Renderer,
     input::Input,
@@ -46,6 +47,8 @@ pub fn initialize_debug_ui_resource(app: &mut crate::app::App) {
 #[derive(Resource)]
 pub struct UI {
     pub debug_state: DebugUIState,
+    /// Represented as [top, bottom, left, right].
+    pub content_padding: Vector4<f32>,
 
     pub chunk_generator: ChunkGenerator,
 }
@@ -92,6 +95,7 @@ impl UI {
     pub fn new() -> Self {
         UI {
             debug_state: DebugUIState::default(),
+            content_padding: Vector4::zeros(),
             chunk_generator: ChunkGenerator::new(0),
         }
     }
@@ -125,11 +129,14 @@ impl UI {
         mut assets: ResMut<Assets>,
         settings: Res<Settings>,
         mut ecs_world: ResMut<ECSWorld>,
+        editor: Res<Editor>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let ui: &mut UI = &mut ui;
         let debug_state = &mut ui.debug_state;
         let chunk_generator = &mut ui.chunk_generator;
+
+        let pixels_per_point = egui.pixels_per_point();
         egui.resolve_ui(&window, |ctx| {
             let mut total_allocation_str;
             let al = voxel_world_pu
@@ -145,120 +152,128 @@ impl UI {
                 total_allocation_str = format!("{:.3}B", al);
             }
 
-            egui::Window::new("Debug")
-                .current_pos(egui::pos2(4.0, 4.0))
-                .movable(false)
-                .show(ctx, |ui| {
-                    ui.set_width(150.0);
+            ui.content_padding = Vector4::zeros();
+            if editor.is_active {
+                ui.content_padding = editor::ui::egui_editor_ui(ctx, &mut ecs_world);
+            } else {
+                egui::Window::new("Debug")
+                    .current_pos(egui::pos2(4.0, 4.0))
+                    .movable(false)
+                    .show(ctx, |ui| {
+                        ui.set_width(150.0);
 
-                    ui.label(egui::RichText::new("Performance:").size(16.0));
-                    ui.label(format!("FPS: {}", debug_state.fps));
-                    ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
-                    ui.label(format!("Voxel data allocation: {}", total_allocation_str));
+                        ui.label(egui::RichText::new("Performance:").size(16.0));
+                        ui.label(format!("FPS: {}", debug_state.fps));
+                        ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
+                        ui.label(format!("Voxel data allocation: {}", total_allocation_str));
 
-                    if ui
-                        .add(egui::Button::new("Save Settings").rounding(4.0))
-                        .clicked()
-                    {
-                        log::info!("Saving current settings.");
-                        assets.save_asset(
-                            AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
-                            SettingsAsset::from(&settings as &Settings),
-                        );
-                    }
-
-                    ui.separator();
-
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("World:").size(16.0));
-                        if game_world.is_io_busy() {
-                            ui.disable();
-                        }
-
-                        let can_save = !voxel_world.chunks.is_saving();
                         if ui
-                            .add_enabled(can_save, egui::Button::new("Save").rounding(4.0))
+                            .add(egui::Button::new("Save Settings").rounding(4.0))
                             .clicked()
                         {
-                            voxel_world
-                                .chunks
-                                .save_terrain(&mut assets, &voxel_world.registry);
+                            log::info!("Saving current settings.");
+                            assets.save_asset(
+                                AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
+                                SettingsAsset::from(&settings as &Settings),
+                            );
                         }
 
-                        if ui.add(egui::Button::new("Load").rounding(4.0)).clicked() {
-                            game_world.load();
-                        }
-                    });
-
-                    if let Some(player_chunk_position) = voxel_world.chunks.player_chunk_position {
-                        ui.label(egui::RichText::new("Current Chunk:").size(14.0));
-                        ui.label(format!(
-                            "Position: x: {}, y: {}, z: {}",
-                            player_chunk_position.x,
-                            player_chunk_position.y,
-                            player_chunk_position.z
-                        ));
-
-                        ui.label(egui::RichText::new("Current terrain anchor:").size(14.0));
-                        ui.label(format!(
-                            "Position: x: {}, y: {}, z: {}",
-                            voxel_world.chunks.renderable_chunks.chunk_anchor.x,
-                            voxel_world.chunks.renderable_chunks.chunk_anchor.y,
-                            voxel_world.chunks.renderable_chunks.chunk_anchor.z,
-                        ));
+                        ui.separator();
 
                         ui.horizontal(|ui| {
-                            ui.label("Radius:");
-                            ui.add(egui::Slider::new(&mut debug_state.generate_radius, 0..=8));
-                        });
-                        if ui
-                            .add(egui::Button::new("Regenerate chunks").rounding(4.0))
-                            .clicked()
-                        {
-                            chunk_generator.generate_chunk(voxel_world, player_chunk_position);
-                        }
-
-                        if ui
-                            .add(egui::Button::new("Spawn entity").rounding(4.0))
-                            .clicked()
-                        {
-                            let mut player_query = ecs_world.player_query::<&Transform>();
-                            let player_pos = player_query.player().1.position();
-                            let player_dir = player_query
-                                .player()
-                                .1
-                                .rotation()
-                                .transform_vector(&Vector3::z());
-                            let mut flat_model =
-                                VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
-                            for (local_pos, mut voxel) in flat_model.xyz_iter_mut() {
-                                voxel.set_attachment(
-                                    Attachment::PTMATERIAL,
-                                    Some(
-                                        PTMaterial::diffuse(Color::from(
-                                            local_pos.map(|x| x as f32 / 31.0),
-                                        ))
-                                        .encode(),
-                                    ),
-                                );
+                            ui.label(egui::RichText::new("World:").size(16.0));
+                            if game_world.is_io_busy() {
+                                ui.disable();
                             }
-                            let model_id = voxel_world.registry.register_renderable_voxel_model(
-                                "entity",
-                                VoxelModel::new(flat_model),
-                            );
-                            drop(player_query);
-                            ecs_world.spawn((
-                                GameEntity::new("new_entity"),
-                                Transform::with_translation(Translation3::from(
-                                    player_pos + player_dir * 2.0,
-                                )),
-                                RenderableVoxelEntity {
-                                    voxel_model_id: model_id,
-                                },
+
+                            let can_save = !voxel_world.chunks.is_saving();
+                            if ui
+                                .add_enabled(can_save, egui::Button::new("Save").rounding(4.0))
+                                .clicked()
+                            {
+                                voxel_world
+                                    .chunks
+                                    .save_terrain(&mut assets, &voxel_world.registry);
+                            }
+
+                            if ui.add(egui::Button::new("Load").rounding(4.0)).clicked() {
+                                game_world.load();
+                            }
+                        });
+
+                        if let Some(player_chunk_position) =
+                            voxel_world.chunks.player_chunk_position
+                        {
+                            ui.label(egui::RichText::new("Current Chunk:").size(14.0));
+                            ui.label(format!(
+                                "Position: x: {}, y: {}, z: {}",
+                                player_chunk_position.x,
+                                player_chunk_position.y,
+                                player_chunk_position.z
                             ));
+
+                            ui.label(egui::RichText::new("Current terrain anchor:").size(14.0));
+                            ui.label(format!(
+                                "Position: x: {}, y: {}, z: {}",
+                                voxel_world.chunks.renderable_chunks.chunk_anchor.x,
+                                voxel_world.chunks.renderable_chunks.chunk_anchor.y,
+                                voxel_world.chunks.renderable_chunks.chunk_anchor.z,
+                            ));
+
+                            ui.horizontal(|ui| {
+                                ui.label("Radius:");
+                                ui.add(egui::Slider::new(&mut debug_state.generate_radius, 0..=8));
+                            });
+                            if ui
+                                .add(egui::Button::new("Regenerate chunks").rounding(4.0))
+                                .clicked()
+                            {
+                                chunk_generator.generate_chunk(voxel_world, player_chunk_position);
+                            }
+
+                            if ui
+                                .add(egui::Button::new("Spawn entity").rounding(4.0))
+                                .clicked()
+                            {
+                                let mut player_query = ecs_world.player_query::<&Transform>();
+                                let player_pos = player_query.player().1.position();
+                                let player_dir = player_query
+                                    .player()
+                                    .1
+                                    .rotation()
+                                    .transform_vector(&Vector3::z());
+                                let mut flat_model =
+                                    VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
+                                for (local_pos, mut voxel) in flat_model.xyz_iter_mut() {
+                                    voxel.set_attachment(
+                                        Attachment::PTMATERIAL,
+                                        Some(
+                                            PTMaterial::diffuse(Color::from(
+                                                local_pos.map(|x| x as f32 / 31.0),
+                                            ))
+                                            .encode(),
+                                        ),
+                                    );
+                                }
+                                let model_id =
+                                    voxel_world.registry.register_renderable_voxel_model(
+                                        "entity",
+                                        VoxelModel::new(flat_model),
+                                    );
+                                drop(player_query);
+                                ecs_world.spawn((
+                                    GameEntity::new("new_entity"),
+                                    Transform::with_translation(Translation3::from(
+                                        player_pos + player_dir * 2.0,
+                                    )),
+                                    RenderableVoxelEntity {
+                                        voxel_model_id: model_id,
+                                    },
+                                ));
+                            }
                         }
-                    }
-                });
+                    });
+            }
         });
     }
 }

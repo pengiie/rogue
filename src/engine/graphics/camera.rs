@@ -8,7 +8,7 @@ use super::renderer;
 
 #[derive(Resource)]
 pub struct MainCamera {
-    camera: Option<Entity>,
+    pub camera: Option<(Entity, String)>,
 }
 
 impl MainCamera {
@@ -17,7 +17,11 @@ impl MainCamera {
     }
 
     pub fn camera(&self) -> Option<Entity> {
-        self.camera
+        self.camera.as_ref().map(|x| x.0)
+    }
+
+    pub fn camera_name(&self) -> Option<&str> {
+        self.camera.as_ref().map(|x| x.1.as_ref())
     }
 
     pub fn set_camera(&mut self, camera: Entity, camera_name: &str) {
@@ -25,10 +29,11 @@ impl MainCamera {
             "Switched to main camera `{}`, entity id {:?}.",
             camera_name, camera
         );
-        self.camera = Some(camera);
+        self.camera = Some((camera, camera_name.to_owned()));
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     fov: f32,
     near_plane: f32,

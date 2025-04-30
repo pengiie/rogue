@@ -688,11 +688,17 @@ impl<'a> FrameGraphContext<'a> {
         &self,
         resource: impl IntoFrameGraphResource<Vector2<T>>,
     ) -> Vector2<T> {
+        let handle = resource.handle(self.frame_graph);
         let val = self
             .supplied_inputs
-            .get(&resource.handle(self.frame_graph).as_untyped())
+            .get(&handle.as_untyped())
             .expect("Input hasn't been supplied.");
-        val.downcast_ref::<Vector2<T>>().unwrap().clone()
+        val.downcast_ref::<Vector2<T>>()
+            .expect(&format!(
+                "Expected input {} to be vec2 but it wasn't.",
+                self.frame_graph.resource_infos[handle.id() as usize].name,
+            ))
+            .clone()
     }
 }
 

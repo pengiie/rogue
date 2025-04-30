@@ -5,6 +5,7 @@ use crate::{
     engine::{
         asset::{self, asset::Assets},
         debug::DebugRenderer,
+        editor::editor::Editor,
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -50,15 +51,20 @@ pub fn game_loop(app: &App) {
         // TICK UPDATES
     }
 
-    // ------- PHYSICS ---------
+    // ------- PHYSICS/INPUT---------
 
-    // Update player logic.
-    app.run_system(Player::update);
+    app.run_system(Editor::update_toggle);
+    if app.get_resource::<Editor>().is_active {
+        app.run_system(Editor::update_editor);
+    } else {
+        // Update player logic.
+        app.run_system(Player::update_from_input);
+        app.run_system(VoxelCursor::update_post_physics);
+    }
 
     app.run_system(PhysicsWorld::do_physics_update);
 
     // ------- VOXEL WORLD -------
-    app.run_system(VoxelCursor::update_post_physics);
     app.run_system(VoxelWorld::update_post_physics);
 
     // ------- UI ---------

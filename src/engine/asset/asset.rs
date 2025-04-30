@@ -497,7 +497,7 @@ impl std::fmt::Display for AssetLoadError {
         match self {
             AssetLoadError::NotFound { path } => f.write_str(&format!(
                 "Asset at {:?} not found.",
-                path.as_ref().map_or("", |p| p.path())
+                path.as_ref().map_or("", |p| p.path_str())
             )),
             AssetLoadError::Other(err) => err.fmt(f),
         }
@@ -561,6 +561,51 @@ pub trait AssetSaver {
         Self: Sized;
 }
 
+impl<T> AssetLoader for T
+where
+    T: serde::de::DeserializeOwned,
+{
+    fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
+    where
+        Self: Sized + std::any::Any,
+    {
+        match data.path.extension() {
+            "json" => match data.read_contents() {
+                Ok(contents) => {
+                    Ok(serde_json::from_str::<T>(&contents).expect("Failed to deserialize file."))
+                }
+                Err(err) => match err.kind() {
+                    std::io::ErrorKind::NotFound => Err(AssetLoadError::NotFound { path: None }),
+                    _ => Err(AssetLoadError::Other(anyhow::anyhow!(err.to_string()))),
+                },
+            },
+            s => todo!("Support extension .{}", s),
+        }
+    }
+}
+
+impl<T> AssetSaver for T
+where
+    T: serde::Serialize,
+{
+    fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        match out_file.path.extension() {
+            "json" => match out_file
+                .write_contents(serde_json::to_string_pretty(data).expect("Failed to serialize."))
+            {
+                Ok(()) => Ok(()),
+                Err(err) => match err.kind() {
+                    _ => Err(anyhow::anyhow!(err.to_string())),
+                },
+            },
+            s => todo!("Support extension .{}", s),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AssetHandle {
     asset_type: std::any::TypeId,
@@ -583,7 +628,8 @@ impl std::hash::Hash for AssetHandle {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AssetPath {
-    path: String,
+    // Change maybe so we can support a giant asset file.
+    path: PathBuf,
 }
 
 // In the form of module::module::asset
@@ -620,7 +666,7 @@ impl AssetPath {
         }
     }
 
-    pub fn into_file_path(path: &str, asset_prefix: bool) -> String {
+    pub fn into_file_path(path: &str, asset_prefix: bool) -> PathBuf {
         let parts = path.split("::").enumerate().collect::<Vec<_>>();
         let extension_index = parts.len() - 1;
 
@@ -638,32 +684,35 @@ impl AssetPath {
             path.push_str(part);
         }
 
-        path
+        PathBuf::from_str(&path).expect("Path is invalid.")
     }
 
     pub fn into_fetch_url(&self) -> String {
         "TODO!!!".to_owned()
     }
 
-    pub fn path(&self) -> &str {
-        &self.path
+    pub fn path(&self) -> &std::path::Path {
+        self.path.as_path()
+    }
+
+    pub fn path_str(&self) -> &str {
+        self.path.as_path().to_str().unwrap()
+    }
+
+    pub fn extension(&self) -> &str {
+        self.path.extension().unwrap().to_str().unwrap()
     }
 }
 pub struct FileHandle(String);
 
 impl FileHandle {
     fn from_path(path: &AssetPath) -> Self {
-        Self(path.path.clone())
+        Self(path.path.clone().to_str().unwrap().to_owned())
     }
 
     pub fn read_contents(&self) -> std::io::Result<String> {
         let path = self.0.clone();
-        let mut file = self.read_file()?;
-
-        let mut s = String::new();
-        file.read_to_string(&mut s)?;
-
-        Ok(s)
+        std::fs::read_to_string(std::path::Path::new(&path))
     }
 
     pub fn write_contents(&self, contents: String) -> std::io::Result<()> {

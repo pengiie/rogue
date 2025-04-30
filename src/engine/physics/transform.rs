@@ -10,6 +10,7 @@ use crate::{
     consts,
 };
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Transform {
     pub position: Vector3<f32>,
     pub rotation: UnitQuaternion<f32>,

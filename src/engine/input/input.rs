@@ -190,8 +190,16 @@ impl Input {
             }
             WinitDeviceEvent::MouseMotion { delta } => {
                 self.mouse
-                    .submit_input(mouse::SubmitInput::Delta(delta.0 as f32, delta.1 as f32));
+                    .submit_input(mouse::SubmitInput::PosDelta(delta.0 as f32, delta.1 as f32));
             }
+            WinitDeviceEvent::MouseWheel { delta } => match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                    self.mouse.submit_input(mouse::SubmitInput::ScrollDelta(y));
+                }
+                winit::event::MouseScrollDelta::PixelDelta(physical_position) => {
+                    log::warn!("pixel based scrolling not supported yet.")
+                }
+            },
             _ => {}
         }
     }

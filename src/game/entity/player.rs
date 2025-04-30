@@ -34,7 +34,7 @@ impl Player {
         }
     }
 
-    pub fn update(
+    pub fn update_from_input(
         ecs_world: ResMut<ECSWorld>,
         mut input: ResMut<Input>,
         time: Res<Time>,

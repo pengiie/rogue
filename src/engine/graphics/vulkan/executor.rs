@@ -910,7 +910,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         let swapchain_image_id = session
             .resource_map
             .get(&session.frame_graph.swapchain_image.as_untyped())
-            .unwrap();
+            .expect("Swapchain image hasn't been populated in the resource map.");
         let recorder_count = session.recorded_command_buffers.len();
         for (i, recorder) in session.recorded_command_buffers.iter_mut().enumerate() {
             let is_last = i == recorder_count - 1;

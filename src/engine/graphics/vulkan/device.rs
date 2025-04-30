@@ -1622,6 +1622,10 @@ impl VulkanImageRef {
             z: 1,
         }
     }
+
+    pub fn resolution_xy(&self) -> Vector2<u32> {
+        Vector2::new(self.info.extent.width, self.info.extent.height)
+    }
 }
 
 impl From<GfxSamplerCreateInfo> for ash::vk::SamplerCreateInfo<'_> {

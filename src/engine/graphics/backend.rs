@@ -8,6 +8,7 @@ use std::{
     num::NonZeroU32,
     ops::Deref,
     sync::Arc,
+    u32,
 };
 
 use downcast::Any;
@@ -86,10 +87,18 @@ pub trait GraphicsBackendDevice {
 pub trait GraphicsBackendRecorder {
     fn clear_color(&mut self, image: ResourceId<Image>, color: Color<ColorSpaceSrgb>);
     fn blit_full(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode) {
-        self.blit(src, dst, filter);
+        self.blit(GfxBlitInfo {
+            src,
+            src_offset: Vector2::zeros(),
+            src_length: Vector2::new(u32::MAX, u32::MAX),
+            dst,
+            dst_offset: Vector2::zeros(),
+            dst_length: Vector2::new(u32::MAX, u32::MAX),
+            filter,
+        });
     }
     // TODO: Support blitting specific image regions.
-    fn blit(&mut self, src: ResourceId<Image>, dst: ResourceId<Image>, filter: GfxFilterMode);
+    fn blit(&mut self, info: GfxBlitInfo);
     fn begin_compute_pass(&mut self, compute_pipeline: ResourceId<ComputePipeline>) -> ComputePass;
     fn begin_render_pass(
         &mut self,
@@ -117,6 +126,16 @@ pub trait GraphicsBackendRenderPass {
     fn bind_index_buffer(&mut self, index_buffer: ResourceId<Buffer>, offset: u64);
     fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
     fn draw_indexed(&mut self, vertex_count: u32);
+}
+
+pub struct GfxBlitInfo {
+    pub src: ResourceId<Image>,
+    pub src_offset: Vector2<u32>,
+    pub src_length: Vector2<u32>,
+    pub dst: ResourceId<Image>,
+    pub dst_offset: Vector2<u32>,
+    pub dst_length: Vector2<u32>,
+    pub filter: GfxFilterMode,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]

@@ -1,12 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use epaint::image;
-use nalgebra::Vector3;
+use nalgebra::{Vector2, Vector3};
 
 use crate::{
     common::color::{Color, ColorSpaceSrgb},
     engine::graphics::backend::{
-        Binding, Buffer, ComputePass, ComputePipeline, GfxFilterMode, GfxImageInfo,
+        Binding, Buffer, ComputePass, ComputePipeline, GfxBlitInfo, GfxFilterMode, GfxImageInfo,
         GfxRenderPassAttachment, GraphicsBackendComputePass, GraphicsBackendRecorder,
         GraphicsBackendRenderPass, Image, RasterPipeline, RenderPass, ResourceId, ShaderWriter,
     },
@@ -183,24 +183,26 @@ impl GraphicsBackendRecorder for VulkanRecorder {
         };
     }
 
-    fn blit(
-        &mut self,
-        src_id: ResourceId<Image>,
-        dst_id: ResourceId<Image>,
-        filter_mode: GfxFilterMode,
-    ) {
-        let src_image = self.ctx.resource_manager().get_image(src_id);
-        let dst_image = self.ctx.resource_manager().get_image(dst_id);
+    fn blit(&mut self, mut blit_info: GfxBlitInfo) {
+        let src_image = self.ctx.resource_manager().get_image(blit_info.src);
+        let dst_image = self.ctx.resource_manager().get_image(blit_info.dst);
+        const MAX_LENGTH: Vector2<u32> = Vector2::new(u32::MAX, u32::MAX);
+        if blit_info.src_length == MAX_LENGTH {
+            blit_info.src_length = src_image.resolution_xy();
+        }
+        if blit_info.dst_length == MAX_LENGTH {
+            blit_info.dst_length = dst_image.resolution_xy();
+        }
 
         self.transition_images(
             &[
                 VulkanImageTransition {
-                    image_id: src_id,
+                    image_id: blit_info.src,
                     new_layout: ash::vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     new_access_flags: ash::vk::AccessFlags::TRANSFER_READ,
                 },
                 VulkanImageTransition {
-                    image_id: dst_id,
+                    image_id: blit_info.dst,
                     new_layout: ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     new_access_flags: ash::vk::AccessFlags::TRANSFER_WRITE,
                 },
@@ -210,10 +212,34 @@ impl GraphicsBackendRecorder for VulkanRecorder {
         );
 
         const ZERO_IMAGE_OFFSET: ash::vk::Offset3D = ash::vk::Offset3D { x: 0, y: 0, z: 0 };
+        let src_offset = ash::vk::Offset3D {
+            x: blit_info.src_offset.x as i32,
+            y: blit_info.src_offset.y as i32,
+            z: 0,
+        };
+        let dst_offset = ash::vk::Offset3D {
+            x: blit_info.dst_offset.x as i32,
+            y: blit_info.dst_offset.y as i32,
+            z: 0,
+        };
         let regions = [ash::vk::ImageBlit::default()
-            .src_offsets([ZERO_IMAGE_OFFSET, src_image.full_offset_3d()])
+            .src_offsets([
+                src_offset,
+                ash::vk::Offset3D {
+                    x: src_offset.x + blit_info.src_length.x as i32,
+                    y: src_offset.y + blit_info.src_length.y as i32,
+                    z: 1,
+                },
+            ])
             .src_subresource(src_image.full_subresource_layer())
-            .dst_offsets([ZERO_IMAGE_OFFSET, dst_image.full_offset_3d()])
+            .dst_offsets([
+                dst_offset,
+                ash::vk::Offset3D {
+                    x: dst_offset.x + blit_info.dst_length.x as i32,
+                    y: dst_offset.y + blit_info.dst_length.y as i32,
+                    z: 1,
+                },
+            ])
             .dst_subresource(dst_image.full_subresource_layer())];
         unsafe {
             self.ctx.device().cmd_blit_image(
@@ -223,7 +249,7 @@ impl GraphicsBackendRecorder for VulkanRecorder {
                 dst_image.image,
                 ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &regions,
-                filter_mode.into(),
+                blit_info.filter.into(),
             )
         }
     }

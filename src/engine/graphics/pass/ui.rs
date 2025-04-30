@@ -11,21 +11,27 @@ use nalgebra::Vector2;
 use rogue_macros::Resource;
 use wgpu::PipelineCompilationOptions;
 
-use crate::engine::{
-    entity::ecs_world::ECSWorld,
-    graphics::{
-        backend::{
-            Buffer, GfxAddressMode, GfxFilterMode, GfxImageCreateInfo, GfxImageFormat, GfxImageType, GfxImageWrite, GfxPassOnceImpl, GfxRenderPassAttachment, GfxSamplerCreateInfo, GraphicsBackendDevice, GraphicsBackendRecorder, Image, ResourceId, Sampler
+use crate::{
+    common::color::Color,
+    engine::{
+        entity::ecs_world::ECSWorld,
+        graphics::{
+            backend::{
+                Buffer, GfxAddressMode, GfxBlitInfo, GfxFilterMode, GfxImageCreateInfo,
+                GfxImageFormat, GfxImageType, GfxImageWrite, GfxPassOnceImpl,
+                GfxRenderPassAttachment, GfxSamplerCreateInfo, GraphicsBackendDevice,
+                GraphicsBackendRecorder, Image, ResourceId, Sampler,
+            },
+            device::DeviceResource,
+            frame_graph::FrameGraphContext,
+            render_contants,
+            renderer::Renderer,
+            shader,
         },
-        device::DeviceResource,
-        frame_graph::FrameGraphContext,
-        render_contants,
-        renderer::Renderer,
-        shader,
+        resource::{Res, ResMut},
+        ui::{gui::Egui, UI},
+        window::time::Time,
     },
-    resource::{Res, ResMut},
-    ui::gui::Egui,
-   window::time::Time,
 };
 
 #[derive(bytemuck::Pod, Clone, Copy, Zeroable, Debug)]
@@ -184,9 +190,7 @@ impl UIPass {
                         ui_pass.ui_textures.get(id).unwrap().0
                     };
 
-                    if let Some(pos) = delta.pos {
-                        todo!("handle pos;")
-                    }
+                    assert!(delta.pos.is_none());
                     match &delta.image {
                         egui::ImageData::Color(image) => {
                             device.write_image(GfxImageWrite {
@@ -206,8 +210,29 @@ impl UIPass {
                             });
                         }
                     }
-                } else {
-                    todo!("implement unwhole texture updates");
+                } else if let Some(pos) = delta.pos {
+                    // Get or create textures.
+                    let texture = ui_pass.ui_textures.get(id).unwrap().0;
+
+                    match &delta.image {
+                        egui::ImageData::Color(image) => {
+                            device.write_image(GfxImageWrite {
+                                image: texture,
+                                data: bytemuck::cast_slice(image.pixels.as_slice()),
+                                offset: Vector2::new(pos[0] as u32, pos[1] as u32),
+                                extent: Vector2::new(image.width() as u32, image.height() as u32),
+                            });
+                        }
+                        egui::ImageData::Font(font) => {
+                            let data = font.srgba_pixels(None).collect::<Vec<egui::Color32>>();
+                            device.write_image(GfxImageWrite {
+                                image: texture,
+                                data: bytemuck::cast_slice(data.as_slice()),
+                                offset: Vector2::new(pos[0] as u32, pos[1] as u32),
+                                extent: Vector2::new(font.width() as u32, font.height() as u32),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -246,14 +271,14 @@ impl UIPass {
         let writeable_vertex_buffer = renderer
             .frame_graph_executor
             .write_buffer(
-                Renderer::GRAPH.debug_ui.buffer_vertex_buffer,
+                Renderer::GRAPH.editor_ui.buffer_vertex_buffer,
                 required_vertex_size as u64,
             )
             .as_mut_ptr();
         let writeable_index_buffer = renderer
             .frame_graph_executor
             .write_buffer(
-                Renderer::GRAPH.debug_ui.buffer_index_buffer,
+                Renderer::GRAPH.editor_ui.buffer_index_buffer,
                 required_index_size as u64,
             )
             .as_mut_ptr();
@@ -299,89 +324,97 @@ impl UIPass {
         }
     }
 
-    pub fn write_ui_pass(mut ui_pass: ResMut<UIPass>, mut renderer: ResMut<Renderer>) {
+    pub fn write_ui_pass(mut ui_pass: ResMut<UIPass>, mut renderer: ResMut<Renderer>, ui: Res<UI>) {
         let ui_pass: &mut UIPass = &mut ui_pass;
         renderer.frame_graph_executor.supply_pass_ref(
-            Renderer::GRAPH.debug_ui.pass_ui,
-            
-                &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>| {
-                    if ui_pass.ui_render_prims.is_empty() {
-                        return;
-                    }
+            Renderer::GRAPH.editor_ui.pass_ui,
+            &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>| {
+                let backbuffer = ctx.get_image(Renderer::GRAPH.image_backbuffer);
+                let backbuffer_info = recorder.get_image_info(&backbuffer);
+                let preswapchain = ctx.get_image(Renderer::GRAPH.image_preswapchain_composite);
+                let preswapchain_info = recorder.get_image_info(&preswapchain);
 
-                    let backbuffer = ctx.get_image(Renderer::GRAPH.image_backbuffer);
-                    let backbuffer_info = recorder.get_image_info(&backbuffer);
-                    let vertex_buffer =
-                        ctx.get_buffer(Renderer::GRAPH.debug_ui.buffer_vertex_buffer);
-                    let index_buffer = ctx.get_buffer(Renderer::GRAPH.debug_ui.buffer_index_buffer);
+                recorder.clear_color(preswapchain, Color::new_srgb(0.0, 0.0, 0.0));
 
-                    let raster_pipeline =
-                        ctx.get_raster_pipeline(Renderer::GRAPH.debug_ui.pipeline_raster_ui);
-                    let mut render_pass = recorder.begin_render_pass(raster_pipeline, &[GfxRenderPassAttachment::new_load(backbuffer)], None);
+                // Backbuffer is already sized correctly according to the padding.
+                let dst_offset = ui.content_padding.zx().map(|x| x as u32);
+                recorder.blit(GfxBlitInfo { src: backbuffer, src_offset: Vector2::zeros(), src_length: backbuffer_info.resolution_xy(), dst:preswapchain, dst_offset, dst_length: backbuffer_info.resolution_xy(), filter: GfxFilterMode::Linear });
 
-                    let pixels_per_point = ui_pass.pixels_per_egui_point;
-                    let logical_screen_size = Vector2::new(backbuffer_info.resolution.x as f32 / pixels_per_point, backbuffer_info.resolution.y as f32 / pixels_per_point);
-                    for UIRenderPrim {
-                        clip_rect,
-                        vertex_slice,
-                        index_slice,
-                        vertex_count,
-                        texture_id,
-                    } in ui_pass.ui_render_prims.drain(..)
+                if ui_pass.ui_render_prims.is_empty() {
+                    return;
+                }
+
+                let vertex_buffer =
+                    ctx.get_buffer(Renderer::GRAPH.editor_ui.buffer_vertex_buffer);
+                let index_buffer = ctx.get_buffer(Renderer::GRAPH.editor_ui.buffer_index_buffer);
+
+                let raster_pipeline =
+                    ctx.get_raster_pipeline(Renderer::GRAPH.editor_ui.pipeline_raster_ui);
+                let mut render_pass = recorder.begin_render_pass(raster_pipeline, &[GfxRenderPassAttachment::new_load(preswapchain)], None);
+
+                let pixels_per_point = ui_pass.pixels_per_egui_point;
+                let logical_screen_size = Vector2::new(preswapchain_info.resolution.x as f32 / pixels_per_point, preswapchain_info.resolution.y as f32 / pixels_per_point);
+                for UIRenderPrim {
+                    clip_rect,
+                    vertex_slice,
+                    index_slice,
+                    vertex_count,
+                    texture_id,
+                } in ui_pass.ui_render_prims.drain(..)
+                {
+                    // Set scissor.
                     {
-                        // Set scissor.
-                        {
-                            let rect = clip_rect;
-                            if rect.width() == 0.0 || rect.height() == 0.0 {
-                                continue;
-                            }
-
-                            let clip_min_x = pixels_per_point * clip_rect.min.x;
-                            let clip_min_y = pixels_per_point * clip_rect.min.y;
-                            let clip_max_x = pixels_per_point * clip_rect.max.x;
-                            let clip_max_y = pixels_per_point * clip_rect.max.y;
-
-                            // Round to integer:
-                            let clip_min_x = clip_min_x.round() as u32;
-                            let clip_min_y = clip_min_y.round() as u32;
-                            let clip_max_x = clip_max_x.round() as u32;
-                            let clip_max_y = clip_max_y.round() as u32;
-
-                            // Clamp:
-                            let texture_size = backbuffer_info.resolution_xy();
-                            let clip_min_x = clip_min_x.clamp(0, texture_size.x);
-                            let clip_min_y = clip_min_y.clamp(0, texture_size.y);
-                            let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.x);
-                            let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.y);
-                            render_pass.set_scissor(
-                                clip_min_x,
-                                clip_min_y,
-                                clip_max_x - clip_min_x,
-                                clip_max_y - clip_min_y,
-                            );
+                        let rect = clip_rect;
+                        if rect.width() == 0.0 || rect.height() == 0.0 {
+                            continue;
                         }
 
-                        let Some((texture, sampler)) = ui_pass.ui_textures.get(&texture_id) else {
-                            panic!("Debug ui render primitive has a texture ID that hasn't been populated in `ui_pass.ui_textures` yet.");
-                        };
-                        render_pass.bind_uniforms(&mut |writer| {
-                            writer.write_uniform("u_shader.screen_size", logical_screen_size);
-                            writer.write_binding("u_shader.texture", *texture);
-                            writer.write_binding("u_shader.sampler", *sampler);
-                        });
+                        let clip_min_x = pixels_per_point * clip_rect.min.x;
+                        let clip_min_y = pixels_per_point * clip_rect.min.y;
+                        let clip_max_x = pixels_per_point * clip_rect.max.x;
+                        let clip_max_y = pixels_per_point * clip_rect.max.y;
 
-                        render_pass.bind_vertex_buffer(
-                            vertex_buffer,
-                            vertex_slice.start as u64,
-                        );
-                        render_pass.bind_index_buffer(
-                            index_buffer,
-                            index_slice.start as u64,
-                        );
+                        // Round to integer:
+                        let clip_min_x = clip_min_x.round() as u32;
+                        let clip_min_y = clip_min_y.round() as u32;
+                        let clip_max_x = clip_max_x.round() as u32;
+                        let clip_max_y = clip_max_y.round() as u32;
 
-                        render_pass.draw_indexed(vertex_count);
+                        // Clamp:
+                        let texture_size = preswapchain_info.resolution_xy();
+                        let clip_min_x = clip_min_x.clamp(0, texture_size.x);
+                        let clip_min_y = clip_min_y.clamp(0, texture_size.y);
+                        let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.x);
+                        let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.y);
+                        render_pass.set_scissor(
+                            clip_min_x,
+                            clip_min_y,
+                            clip_max_x - clip_min_x,
+                            clip_max_y - clip_min_y,
+                        );
                     }
-                },
+
+                    let Some((texture, sampler)) = ui_pass.ui_textures.get(&texture_id) else {
+                        panic!("Debug ui render primitive has a texture ID that hasn't been populated in `ui_pass.ui_textures` yet.");
+                    };
+                    render_pass.bind_uniforms(&mut |writer| {
+                        writer.write_uniform("u_shader.screen_size", logical_screen_size);
+                        writer.write_binding("u_shader.texture", *texture);
+                        writer.write_binding("u_shader.sampler", *sampler);
+                    });
+
+                    render_pass.bind_vertex_buffer(
+                        vertex_buffer,
+                        vertex_slice.start as u64,
+                    );
+                    render_pass.bind_index_buffer(
+                        index_buffer,
+                        index_slice.start as u64,
+                    );
+
+                    render_pass.draw_indexed(vertex_count);
+                }
+            },
         );
     }
 }

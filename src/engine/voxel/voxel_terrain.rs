@@ -526,7 +526,7 @@ impl VoxelChunks {
                         chunk_position.x,
                         chunk_position.y,
                         chunk_position.z,
-                        chunk_asset_handle.asset_path().path()
+                        chunk_asset_handle.asset_path().path_str()
                     );
                 }
                 AssetStatus::Error(err) => {
@@ -535,7 +535,7 @@ impl VoxelChunks {
                         chunk_position.x,
                         chunk_position.y,
                         chunk_position.z,
-                        chunk_asset_handle.asset_path().path(),
+                        chunk_asset_handle.asset_path().path_str(),
                         err
                     );
                 }

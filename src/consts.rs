@@ -35,6 +35,7 @@ pub mod gfx {
 }
 
 pub mod io {
+    pub const EDITOR_SETTINGS_FILE: &str = "settings_editor::json";
     pub const SETTINGS_FILE: &str = "settings::json";
     pub const REGION_FILE_HEADER: &str = "vcr ";
 }
