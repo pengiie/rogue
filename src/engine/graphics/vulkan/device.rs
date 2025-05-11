@@ -2485,6 +2485,9 @@ impl VulkanResourceManager {
                         match binding {
                             Binding::StorageImage { image } => {
                                 let vk_image_info = self.get_image(*image);
+                                if vk_is_depth_format(vk_image_info.info.format) {
+                                    log::error!("Tried to assign an image with a depth format to a storage buffer which is not allowed.");
+                                }
                                 vk_image_infos.push(
                                     ash::vk::DescriptorImageInfo::default()
                                         .image_view(
@@ -3450,5 +3453,15 @@ impl Drop for VulkanResourceManager {
         for (_, owned_buffers) in self.owned_buffers.write().iter() {
             unsafe { self.ctx.device.destroy_buffer(owned_buffers.buffer, None) };
         }
+    }
+}
+
+pub fn vk_is_depth_format(format: ash::vk::Format) -> bool {
+    match format {
+        ash::vk::Format::D16_UNORM
+        | ash::vk::Format::D32_SFLOAT
+        | ash::vk::Format::D16_UNORM_S8_UINT
+        | ash::vk::Format::D32_SFLOAT_S8_UINT => true,
+        _ => false,
     }
 }

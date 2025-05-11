@@ -37,6 +37,7 @@ bitflags::bitflags! {
     pub struct DebugFlags: u32 {
         const NONE = 0;
         const XRAY = 1;
+        const SHADING = 2;
     }
 }
 

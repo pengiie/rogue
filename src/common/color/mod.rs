@@ -62,6 +62,10 @@ impl Color<ColorSpaceSrgb> {
             _marker: std::marker::PhantomData,
         }
     }
+
+    pub fn multiply_gamma(&mut self, mul: f32) {
+        self.xyz *= mul;
+    }
 }
 
 impl From<nalgebra::Vector3<f32>> for Color<ColorSpaceSrgb> {

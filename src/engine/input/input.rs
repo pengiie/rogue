@@ -244,7 +244,8 @@ impl Input {
         {
             match delta {
                 winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                    self.mouse.submit_input(mouse::SubmitInput::ScrollDelta(*y));
+                    // Use the device one instead.
+                    //self.mouse.submit_input(mouse::SubmitInput::ScrollDelta(*y));
                 }
                 winit::event::MouseScrollDelta::PixelDelta(physical_position) => {
                     log::warn!("pixel based scrolling not supported yet.")

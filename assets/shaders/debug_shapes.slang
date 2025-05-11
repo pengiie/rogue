@@ -32,49 +32,39 @@ void main(uint3 id: SV_DispatchThreadID) {
     return;
   }
 
+  let ray = u_frame.world_info.camera.create_ray(coord, dimensions);
   let far_plane = u_frame.world_info.camera.far_plane;
 
-  var advanced = 0.0;
-  var ray = u_frame.world_info.camera.create_ray(coord, dimensions);
+  var min_distance = far_plane;
   var color = float4(0.0, 0.0, 0.0, 0.0);
-  for (uint k = 0; k < 1000 && advanced < far_plane; k++) {
-    var min_distance = far_plane;
-    var is_xray = false;
-    var normal = float3(0.0);
-    var c = float4(0.0);
-    for (uint i = 0; i < u_shader.line_count; i++) {
-      var li = u_shader.lines.Load(i);
+  var flags = 0;
+  for (uint i = 0; i < u_shader.line_count; i++) {
+    let li = u_shader.lines.Load(i);
+    let do_shading = (li.flags & 2) > 0;
 
-      var d = sdf_sphere(ray.origin, li.start, li.thickness);
-      // if (d < min_distance) {
-      //   min_distance = d;
-      //   normal = normalize(ray.origin - li.start);
-      //   c = li.color;
-      // }
-
-      // d = sdf_sphere(ray.origin, li.end, li.thickness);
-      // if (d < min_distance) {
-      //   min_distance = d;
-      //   normal = normalize(ray.origin - li.end);
-      //   c = li.color;
-      // }
-
-      d = sdf_line_segment(ray.origin, li.start, li.end, li.thickness);
-      let is_line_xray = (li.flags & 1) > 0;
-      if (!is_line_xray && d < min_distance) {
-        min_distance = d;
-        normal = sdf_line_segment_normal(ray.origin, li.start, li.end);
-        c = li.color;
+    var advanced = 0.0;
+    var curr_ray = ray.clone();
+    for (uint k = 0; k < 100 && advanced < far_plane; k++) {
+      let d = sdf_line_segment(curr_ray.origin, li.start, li.end, li.thickness);
+      if (d < 0.001) {
+        let needs_depth_check = ((li.flags & 1) ^ (flags & 1)) == 0;
+        let is_behind = (li.flags & 1) < (flags & 1);
+        if (!is_behind && 
+            (!needs_depth_check || advanced < min_distance)) {
+          float l = 1.0;
+          let normal = sdf_line_segment_normal(curr_ray.origin, li.start, li.end);
+          if (do_shading) {
+            l = pow(dot(normalize(float3(1)), normal) * 0.5 + 0.55, 0.6);
+          }
+          color = float4(l * li.color.rgb, li.color.a);
+          flags = li.flags;
+          min_distance = advanced;
+        }
+        break;
       }
+      curr_ray.advance(d);
+      advanced += d;
     }
-    if (min_distance < 0.01) {
-      float l = pow(dot(normalize(float3(1)), normal) * 0.5 + 0.55, 1.53);
-      //l = dot(normalize(float3(1)), normal);
-      color = float4(l * c.rgb, c.a);
-      break;
-    }
-    ray.advance(min_distance);
-    advanced += min_distance;
   }
     
     // Screen space line and thickness approach.
@@ -143,7 +133,7 @@ void main(uint3 id: SV_DispatchThreadID) {
   let uv = (float2) coord.xy / (float2) dimensions;
   let depth_coord = (uint2) (uv * depth_dimensions);
   let normalized_depth = u_shader.backbuffer_depth.Load(uint3(depth_coord, 0));
-  if (normalized_depth * far_plane < advanced) {
+  if ((flags & 1) == 0 && normalized_depth * far_plane < min_distance) {
     return;
   }
   let original = u_shader.backbuffer.Load(coord.xy);

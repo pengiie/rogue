@@ -80,6 +80,7 @@ pub struct GraphConstantsVoxel {
 }
 
 pub struct GraphConstantsRT {
+    pub image_size: &'static str,
     pub image_albedo: &'static str,
     pub image_depth: &'static str,
 
@@ -131,6 +132,7 @@ impl Renderer {
             pass_normal_calc: "normal_calc_pass",
         },
         rt: GraphConstantsRT {
+            image_size: "rt_image_size",
             image_albedo: "rt_image_albedo",
             image_depth: "rt_image_depth",
 
@@ -250,17 +252,17 @@ impl Renderer {
             builder.create_input_pass(Self::GRAPH.normal_calc.pass_normal_calc, &[], &[]);
         }
 
-        // RT passes
-        let rt_albedo_image = builder.create_frame_image(
-            Self::GRAPH.rt.image_albedo,
-            FrameGraphImageInfo::new_rgba32float(gfx_settings.rt_size),
-        );
+        let rt_size_input = builder.create_input(Self::GRAPH.rt.image_size);
+        let rt_albedo_image = builder
+            .create_frame_image_with_ctx(Self::GRAPH.rt.image_albedo, move |ctx| {
+                FrameGraphImageInfo::new_rgba32float(ctx.get_vec2(rt_size_input))
+            });
 
         {
-            let rt_depth_image = builder.create_frame_image(
-                Self::GRAPH.rt.image_depth,
-                FrameGraphImageInfo::new_r16float(gfx_settings.rt_size),
-            );
+            let rt_depth_image = builder
+                .create_frame_image_with_ctx(Self::GRAPH.rt.image_depth, move |ctx| {
+                    FrameGraphImageInfo::new_r16float(ctx.get_vec2(rt_size_input))
+                });
 
             builder.create_compute_pipeline(
                 Self::GRAPH.rt.pipeline_compute_prepass,
@@ -418,11 +420,14 @@ impl Renderer {
                 renderer.swapchain_size.y as f32,
             ))
             .map(|x| x.max(1.0));
-        renderer.frame_graph_executor.supply_input(
-            Self::GRAPH.image_backbuffer_size,
-            Box::new(content_size.map(|x| x as u32)),
-        );
         let backbuffer_aspect_ratio = content_size.x / content_size.y;
+        let content_size = content_size.map(|x| x as u32);
+        renderer
+            .frame_graph_executor
+            .supply_input(Self::GRAPH.image_backbuffer_size, Box::new(content_size));
+        renderer
+            .frame_graph_executor
+            .supply_input(Self::GRAPH.rt.image_size, Box::new(content_size));
 
         renderer
             .frame_graph_executor

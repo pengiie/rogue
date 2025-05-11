@@ -68,3 +68,12 @@ pub mod egui {
         pub const UNKNOWN_ASSET: &str = "ui::icons::folder::png";
     }
 }
+
+pub mod editor {
+    pub mod gizmo {
+        pub const THICKNESS: f32 = 0.2;
+        pub const LENGTH: f32 = 1.5;
+
+        pub const DRAGGING_SENSITIVITY: f32 = 0.05;
+    }
+}
