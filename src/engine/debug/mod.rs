@@ -1,7 +1,10 @@
 use nalgebra::{Vector2, Vector3};
 use rogue_macros::Resource;
 
-use crate::common::color::{Color, ColorSpaceSrgb};
+use crate::common::{
+    color::{Color, ColorSpaceSrgb},
+    obb::OBB,
+};
 
 use super::{
     graphics::{
@@ -26,6 +29,22 @@ pub struct DebugLine {
     pub thickness: f32,
     pub color: Color<ColorSpaceSrgb>,
     pub alpha: f32,
+    pub flags: DebugFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct DebugFlags: u32 {
+        const NONE = 0;
+        const XRAY = 1;
+    }
+}
+
+pub struct DebugOBB<'a> {
+    pub obb: &'a OBB,
+    pub thickness: f32,
+    pub color: Color<ColorSpaceSrgb>,
+    pub alpha: f32,
 }
 
 impl DebugRenderer {
@@ -41,6 +60,42 @@ impl DebugRenderer {
             return;
         }
         self.debug_lines.push(line);
+    }
+
+    pub fn draw_obb(&mut self, debug_obb: DebugOBB) {
+        if !self.show_debug {
+            return;
+        }
+        let obb = debug_obb.obb;
+        let rot = obb.rotation;
+        let (min, max) = obb.rotated_min_max();
+        let forward = rot.transform_vector(&(Vector3::z() * (obb.aabb.max.z - obb.aabb.min.z)));
+        let right = rot.transform_vector(&(Vector3::x() * (obb.aabb.max.x - obb.aabb.min.x)));
+        let up = rot.transform_vector(&(Vector3::y() * (obb.aabb.max.y - obb.aabb.min.y)));
+
+        // Draws the edges of an OBB.
+        let line = |start, end| DebugLine {
+            start,
+            end,
+            thickness: debug_obb.thickness,
+            color: debug_obb.color.clone(),
+            alpha: debug_obb.alpha,
+            flags: DebugFlags::NONE,
+        };
+        self.draw_line(line(min, min + forward));
+        self.draw_line(line(min, min + right));
+        self.draw_line(line(min + forward, min + right + forward));
+        self.draw_line(line(min + right, min + right + forward));
+
+        self.draw_line(line(min + up, min + forward + up));
+        self.draw_line(line(min + up, min + right + up));
+        self.draw_line(line(min + forward + up, max));
+        self.draw_line(line(min + right + up, max));
+
+        self.draw_line(line(min, min + up));
+        self.draw_line(line(min + right, min + right + up));
+        self.draw_line(line(min + forward, min + forward + up));
+        self.draw_line(line(min + forward + right, max));
     }
 
     pub fn write_debug_shapes_pass(
@@ -62,6 +117,8 @@ impl DebugRenderer {
             for (i, line) in debug.debug_lines.drain(..).enumerate() {
                 let i = i * 48;
                 lines_buffer_ref[i..(i + 12)].copy_from_slice(bytemuck::bytes_of(&line.start));
+                lines_buffer_ref[(i + 12)..(i + 16)]
+                    .copy_from_slice(&line.flags.bits().to_le_bytes());
                 lines_buffer_ref[(i + 16)..(i + 28)].copy_from_slice(bytemuck::bytes_of(&line.end));
                 lines_buffer_ref[(i + 28)..(i + 32)].copy_from_slice(&line.thickness.to_le_bytes());
                 lines_buffer_ref[(i + 32)..(i + 44)]

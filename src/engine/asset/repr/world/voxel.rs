@@ -19,6 +19,7 @@ use crate::{
             attachment::{Attachment, AttachmentId, AttachmentMap},
             flat::VoxelModelFlat,
             thc::VoxelModelTHC,
+            voxel::{VoxelModelImpl, VoxelModelType},
         },
     },
 };
@@ -28,6 +29,27 @@ pub struct VoxelModelTHCAsset {
 }
 
 const FILE_VERSION: u32 = 1;
+
+impl AssetLoader for VoxelModelAnyAsset {
+    fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
+    where
+        Self: Sized + std::any::Any,
+    {
+        let mut reader = AssetByteReader::new_unknown(data.read_file()?)?;
+        match reader.header() {
+            Some("FLAT") => Ok(VoxelModelAnyAsset {
+                model: Box::new(load_flat_model(reader)?),
+                model_type: VoxelModelType::Flat,
+            }),
+            _ => Err(anyhow::anyhow!("Unknown header").into()),
+        }
+    }
+}
+
+pub struct VoxelModelAnyAsset {
+    pub model: Box<dyn VoxelModelImpl>,
+    pub model_type: VoxelModelType,
+}
 
 impl AssetLoader for VoxelModelTHC {
     fn load(data: &AssetFile) -> std::result::Result<VoxelModelTHC, AssetLoadError>
@@ -223,48 +245,51 @@ impl AssetSaver for VoxelModelFlat {
     }
 }
 
+fn load_flat_model(
+    mut reader: AssetByteReader,
+) -> std::result::Result<VoxelModelFlat, AssetLoadError> {
+    assert!(reader.version() == 1);
+
+    let side_length = reader.read::<Vector3<u32>>()?;
+    let attachment_count = reader.read::<u32>()?;
+    let mut flat = VoxelModelFlat::new_empty(side_length);
+    let mut attachment_presence_map: HashMap<
+        /*presence_pointer*/ u32,
+        /*attachment_id*/ u8,
+    > = HashMap::new();
+    let mut attachment_data_map: HashMap</*presence_pointer*/ u32, /*attachment_id*/ u8> =
+        HashMap::new();
+    for i in 0..attachment_count {
+        let id = reader.read::<u8>()?;
+        let presence_pointer = reader.read::<u32>()?;
+        let data_pointer = reader.read::<u32>()?;
+        flat.attachment_map
+            .register_attachment(Attachment::from_id(id));
+        attachment_presence_map.insert(presence_pointer, id);
+        attachment_data_map.insert(data_pointer, id);
+    }
+    reader.read_to_slice(flat.presence_data.data_mut());
+    while let Some(attachment_id) = attachment_presence_map.get(&(reader.cursor_pos()? as u32)) {
+        let mut bitset = Bitset::new(flat.volume());
+        reader.read_to_slice(bitset.data_mut());
+        flat.attachment_presence_data.insert(*attachment_id, bitset);
+    }
+    while let Some(attachment_id) = attachment_data_map.get(&(reader.cursor_pos()? as u32)) {
+        let attachment = flat.attachment_map.get_unchecked(*attachment_id);
+        let mut data = vec![0u32; flat.volume() * attachment.size() as usize];
+        reader.read_to_slice(&mut data);
+        flat.attachment_data.insert(*attachment_id, data);
+    }
+
+    Ok(flat)
+}
+
 impl AssetLoader for VoxelModelFlat {
     fn load(data: &AssetFile) -> std::result::Result<VoxelModelFlat, AssetLoadError>
     where
         Self: Sized + std::any::Any,
     {
         let mut reader = AssetByteReader::new(data.read_file()?, "FLAT")?;
-        assert!(reader.version() == 1);
-
-        let side_length = reader.read::<Vector3<u32>>()?;
-        let attachment_count = reader.read::<u32>()?;
-        let mut flat = VoxelModelFlat::new_empty(side_length);
-        let mut attachment_presence_map: HashMap<
-            /*presence_pointer*/ u32,
-            /*attachment_id*/ u8,
-        > = HashMap::new();
-        let mut attachment_data_map: HashMap<
-            /*presence_pointer*/ u32,
-            /*attachment_id*/ u8,
-        > = HashMap::new();
-        for i in 0..attachment_count {
-            let id = reader.read::<u8>()?;
-            let presence_pointer = reader.read::<u32>()?;
-            let data_pointer = reader.read::<u32>()?;
-            flat.attachment_map
-                .register_attachment(Attachment::from_id(id));
-            attachment_presence_map.insert(presence_pointer, id);
-            attachment_data_map.insert(data_pointer, id);
-        }
-        reader.read_to_slice(flat.presence_data.data_mut());
-        while let Some(attachment_id) = attachment_presence_map.get(&(reader.cursor_pos()? as u32))
-        {
-            let mut bitset = Bitset::new(flat.volume());
-            reader.read_to_slice(bitset.data_mut());
-            flat.attachment_presence_data.insert(*attachment_id, bitset);
-        }
-        while let Some(attachment_id) = attachment_data_map.get(&(reader.cursor_pos()? as u32)) {
-            let attachment = flat.attachment_map.get_unchecked(*attachment_id);
-            let mut data = vec![0u32; flat.volume() * attachment.size() as usize];
-            reader.read_to_slice(&mut data);
-            flat.attachment_data.insert(*attachment_id, data);
-        }
-
-        Ok(flat)
+        return load_flat_model(reader);
     }
 }

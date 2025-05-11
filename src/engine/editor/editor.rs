@@ -1,85 +1,113 @@
 use core::f32;
 
 use hecs::With;
-use nalgebra::{ComplexField, Rotation3, Translation3, Unit, UnitQuaternion, Vector3};
+use nalgebra::{
+    ComplexField, Rotation3, Translation3, Unit, UnitQuaternion, Vector2, Vector3, Vector4,
+};
 use rogue_macros::Resource;
 
 use crate::{
-    common::color::Color,
+    common::{color::Color, ray::Ray},
     consts,
     engine::{
         asset::{
             asset::{AssetPath, Assets},
             repr::editor_settings::EditorSessionAsset,
         },
-        debug::{DebugLine, DebugRenderer},
-        entity::ecs_world::{ECSWorld, Entity},
+        debug::{DebugFlags, DebugLine, DebugOBB, DebugRenderer},
+        editor::ui::init_editor_ui_textures,
+        entity::{
+            ecs_world::{ECSWorld, Entity},
+            RenderableVoxelEntity,
+        },
         graphics::camera::{Camera, MainCamera},
         input::{keyboard, mouse, Input},
         physics::transform::Transform,
         resource::{Res, ResMut},
+        ui::UI,
+        voxel::voxel_world::{VoxelTraceInfo, VoxelWorld},
+        window::window::Window,
     },
     game::entity::player::Player,
+    session::Session,
     settings::Settings,
 };
+
+use super::ui::EditorTab;
+
+pub enum EditorGizmo {
+    Translate,
+    Rotate,
+    Scale,
+}
 
 #[derive(Resource)]
 pub struct Editor {
     last_main_camera: Option<(Entity, String)>,
-    editor_camera: Option<Entity>,
+    pub editor_camera_entity: Option<Entity>,
+    pub editor_camera: EditorCamera,
     pub is_active: bool,
-
     pub initialized: bool,
+
+    pub selected_gizmo: EditorGizmo,
+    pub selected_entity: Option<Entity>,
+    pub hovered_entity: Option<Entity>,
 }
+
+pub struct EditorCameraMarker;
 
 impl Editor {
     pub fn new() -> Self {
-        let mut is_active = std::env::var("ROGUE_EDITOR").is_ok();
+        let mut is_inactive = std::env::var("ROGUE_EDITOR")
+            .map(|var| var.eq_ignore_ascii_case("off"))
+            .unwrap_or(false);
 
         Self {
             last_main_camera: None,
-            editor_camera: None,
-            is_active,
-
+            editor_camera: EditorCamera::new(),
+            editor_camera_entity: None,
+            is_active: !is_inactive,
             initialized: false,
+
+            selected_gizmo: EditorGizmo::Translate,
+            selected_entity: None,
+            hovered_entity: None,
         }
     }
 
-    pub fn init_editor_session(&mut self, main_camera: &mut MainCamera, ecs_world: &mut ECSWorld) {
-        assert!(self.editor_camera.is_none());
+    pub fn init_editor_session(
+        &mut self,
+        session: &Session,
+        main_camera: &mut MainCamera,
+        ecs_world: &mut ECSWorld,
+    ) {
+        assert!(self.editor_camera_entity.is_none());
 
-        let last_session = Assets::load_asset_sync::<EditorSessionAsset>(AssetPath::new_user_dir(
-            consts::io::EDITOR_SETTINGS_FILE,
-        ))
-        .ok();
+        let last_session = &session.project;
 
-        let mut camera_pos = Vector3::zeros();
+        let mut camera_pos = Vector3::new(5.0, 5.0, 4.9);
         let mut camera_fov = f32::consts::FRAC_PI_2;
-        let mut anchor_pos = Vector3::new(0.0, 2.0, -2.0);
-        if let Some(last_session) = last_session {
-            camera_pos = last_session.editor_camera_transform.transform.position;
-            anchor_pos = last_session.rotation_anchor;
-            camera_fov = last_session.editor_camera.camera.fov();
-        }
+        let mut anchor_pos = Vector3::new(0.0, 0.0, 0.0);
+        camera_pos = last_session.editor_camera_transform.transform.position;
+        anchor_pos = last_session.rotation_anchor;
+        camera_fov = last_session.editor_camera.camera.fov();
 
-        let anchor_to_cam = Unit::new_normalize(camera_pos - anchor_pos);
-        let distance = anchor_pos.magnitude();
+        let anchor_to_cam = camera_pos - anchor_pos;
+        let distance = anchor_to_cam.magnitude();
         let euler = Vector3::new(
             (anchor_to_cam.y / distance).asin(),
             // Flip since nalgebra rotates clockwise.
-            (anchor_to_cam.z).atan2(anchor_to_cam.x) - f32::consts::FRAC_PI_2,
+            f32::atan2(anchor_to_cam.z, anchor_to_cam.x) - f32::consts::FRAC_PI_2,
             0.0,
         );
-        log::info!("euler is {:?}", euler);
-        self.editor_camera = Some(ecs_world.spawn((
-            EditorCamera {
-                rotation_anchor: anchor_pos,
-                euler,
-                distance,
-            },
-            Camera::new(camera_fov),
-            Transform::new(),
-        )));
+        self.editor_camera = EditorCamera {
+            rotation_anchor: anchor_pos,
+            euler,
+            distance,
+        };
+        self.editor_camera_entity =
+            Some(ecs_world.spawn((Camera::new(camera_fov), Transform::new())));
+
         self.initialized = true;
     }
 
@@ -87,15 +115,155 @@ impl Editor {
         mut editor: ResMut<Editor>,
         input: Res<Input>,
         ecs_world: ResMut<ECSWorld>,
+        mut voxel_world: ResMut<VoxelWorld>,
         settings: Res<Settings>,
+        window: Res<Window>,
+        ui: Res<UI>,
         mut debug_renderer: ResMut<DebugRenderer>,
     ) {
+        let editor: &mut Editor = &mut editor;
         let mut editor_camera_query = ecs_world
-            .query_one::<(&mut EditorCamera, &mut Transform)>(editor.editor_camera.unwrap())
+            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
             .unwrap();
-        let (mut editor_camera, mut editor_transform) = editor_camera_query.get().unwrap();
+        let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
+        let editor_camera = &mut editor.editor_camera;
 
-        if input.is_mouse_button_pressed(mouse::Button::Left) {}
+        voxel_world.update_render_center(editor_camera.rotation_anchor);
+
+        let mouse_ray = {
+            let content_size = ui.content_size(window.inner_size_vec2().cast::<f32>());
+            let aspect_ratio = content_size.x / content_size.y;
+            let mouse_pos_uv =
+                (input.mouse_position() - ui.content_offset()).component_div(&content_size);
+            let mouse_pos_ndc =
+                Vector2::new(mouse_pos_uv.x * 2.0 - 1.0, 1.0 - mouse_pos_uv.y * 2.0);
+            let scaled_ndc = Vector2::new(mouse_pos_ndc.x * aspect_ratio, mouse_pos_ndc.y)
+                * (camera.fov() * 0.5).tan();
+            let ray_origin = editor_transform.position;
+            let ray_dir = (editor_transform.rotation
+                * Vector3::new(scaled_ndc.x, scaled_ndc.y, 1.0))
+            .normalize();
+            Ray::new(ray_origin, ray_dir)
+        };
+        let hovered_trace = voxel_world.trace_world(&ecs_world, mouse_ray);
+        if input.is_mouse_button_pressed(mouse::Button::Left) {
+            if let Some(VoxelTraceInfo::Entity {
+                entity_id,
+                voxel_model_id,
+                local_voxel_pos,
+            }) = &hovered_trace
+            {
+                editor.selected_entity = Some(*entity_id);
+            } else {
+                editor.selected_entity = None;
+            }
+        }
+        if let Some(hovered_entity) = editor.hovered_entity {
+            if !(editor.selected_entity.is_some()
+                && editor.selected_entity.unwrap() == hovered_entity)
+            {
+                'hovered_entity_block: {
+                    let Ok(mut hovered_entity_query) =
+                        ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(hovered_entity)
+                    else {
+                        break 'hovered_entity_block;
+                    };
+                    let Some((model_transform, renderable_entity)) = hovered_entity_query.get()
+                    else {
+                        break 'hovered_entity_block;
+                    };
+                    if let Some(voxel_model_id) = renderable_entity.voxel_model_id() {
+                        let voxel_model = voxel_world.registry.get_dyn_model(voxel_model_id);
+                        let obb = model_transform.as_voxel_model_obb(voxel_model.length());
+                        debug_renderer.draw_obb(DebugOBB {
+                            obb: &obb,
+                            thickness: 0.1,
+                            color: Color::new_srgb_hex("#4553ad"),
+                            alpha: 1.0,
+                        });
+                    }
+                }
+            }
+        } else if let Some(VoxelTraceInfo::Entity {
+            entity_id,
+            voxel_model_id,
+            local_voxel_pos,
+        }) = &hovered_trace
+        {
+            if !(editor.selected_entity.is_some() && editor.selected_entity.unwrap() == *entity_id)
+            {
+                let voxel_model = voxel_world.registry.get_dyn_model(*voxel_model_id);
+                let model_transform = ecs_world.get::<&Transform>(*entity_id).unwrap();
+                let obb = model_transform.as_voxel_model_obb(voxel_model.length());
+                debug_renderer.draw_obb(DebugOBB {
+                    obb: &obb,
+                    thickness: 0.1,
+                    color: Color::new_srgb_hex("#4553ad"),
+                    alpha: 1.0,
+                });
+            }
+        }
+        'selected_entity_block: {
+            if let Some(selected_entity) = editor.selected_entity {
+                let Ok(mut selected_entity_query) =
+                    ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(selected_entity)
+                else {
+                    break 'selected_entity_block;
+                };
+                let Some((model_transform, renderable_entity)) = selected_entity_query.get() else {
+                    break 'selected_entity_block;
+                };
+                if renderable_entity.is_null() {
+                    break 'selected_entity_block;
+                }
+                let voxel_model = voxel_world
+                    .registry
+                    .get_dyn_model(renderable_entity.voxel_model_id_unchecked());
+                let model_transform = ecs_world.get::<&Transform>(selected_entity).unwrap();
+                let obb = model_transform.as_voxel_model_obb(voxel_model.length());
+                debug_renderer.draw_obb(DebugOBB {
+                    obb: &obb,
+                    thickness: 0.1,
+                    color: Color::new_srgb_hex("#1026b3"),
+                    alpha: 1.0,
+                });
+
+                match editor.selected_gizmo {
+                    EditorGizmo::Translate => {
+                        let center = obb.rotation_anchor;
+                        let s = 1.0;
+                        let t = 0.2;
+                        debug_renderer.draw_line(DebugLine {
+                            start: center,
+                            end: center + Vector3::x() * s,
+                            thickness: t,
+                            color: Color::new_srgb(1.0, 0.0, 0.0),
+                            alpha: 1.0,
+                            flags: DebugFlags::XRAY,
+                        });
+                        debug_renderer.draw_line(DebugLine {
+                            start: center,
+                            end: center + Vector3::y() * s,
+                            thickness: t,
+                            color: Color::new_srgb(0.0, 1.0, 0.0),
+                            alpha: 1.0,
+                            flags: DebugFlags::XRAY,
+                        });
+                        debug_renderer.draw_line(DebugLine {
+                            start: center,
+                            end: center + Vector3::z() * s,
+                            thickness: t,
+                            color: Color::new_srgb(0.0, 0.0, 1.0),
+                            alpha: 1.0,
+                            flags: DebugFlags::XRAY,
+                        });
+                    }
+                    EditorGizmo::Rotate => todo!(),
+                    EditorGizmo::Scale => todo!(),
+                }
+            }
+        }
+        editor.hovered_entity = None;
 
         if input.is_mouse_button_down(mouse::Button::Middle) {
             let delta =
@@ -134,6 +302,7 @@ impl Editor {
             thickness: 1.0,
             color: Color::new_srgb(0.8, 0.1, 0.7),
             alpha: 1.0,
+            flags: DebugFlags::NONE,
         });
     }
 
@@ -141,11 +310,13 @@ impl Editor {
         mut editor: ResMut<Editor>,
         mut main_camera: ResMut<MainCamera>,
         mut ecs_world: ResMut<ECSWorld>,
-        input: Res<Input>,
+        mut input: ResMut<Input>,
+        mut window: ResMut<Window>,
+        session: Res<Session>,
     ) {
         if editor.is_active && !editor.initialized {
-            editor.init_editor_session(&mut main_camera, &mut ecs_world);
-            main_camera.set_camera(editor.editor_camera.unwrap(), "editor_camera");
+            editor.init_editor_session(&session, &mut main_camera, &mut ecs_world);
+            main_camera.set_camera(editor.editor_camera_entity.unwrap(), "editor_camera");
         }
 
         if input.is_key_pressed(keyboard::Key::E) {
@@ -154,10 +325,11 @@ impl Editor {
                     main_camera.set_camera(last_camera.0, &last_camera.1);
                     editor.is_active = false;
                 } else {
-                    let mut player_query = ecs_world.query::<With<(), &Player>>();
-                    if let Some((player_entity, _)) = player_query.into_iter().next() {
+                    let mut player_query = ecs_world.query::<&Player>();
+                    if let Some((player_entity, player)) = player_query.into_iter().next() {
                         editor.is_active = false;
                         main_camera.set_camera(player_entity, "player_cam");
+                        window.set_curser_lock(!player.paused);
                     } else {
                         log::warn!("No camera to switch to from the editor.");
                     }
@@ -166,28 +338,27 @@ impl Editor {
                 editor.is_active = true;
                 editor.last_main_camera = main_camera.camera.clone();
                 if !editor.initialized {
-                    editor.init_editor_session(&mut main_camera, &mut ecs_world);
+                    editor.init_editor_session(&session, &mut main_camera, &mut ecs_world);
                 }
-                main_camera.set_camera(editor.editor_camera.unwrap(), "editor_camera");
+                main_camera.set_camera(editor.editor_camera_entity.unwrap(), "editor_camera");
+                window.set_curser_lock(false);
             }
         }
     }
 }
 
 pub struct EditorCamera {
-    rotation_anchor: Vector3<f32>,
-    euler: Vector3<f32>,
-    distance: f32,
+    pub rotation_anchor: Vector3<f32>,
+    pub euler: Vector3<f32>,
+    pub distance: f32,
 }
 
 impl EditorCamera {
-    pub fn update(ecs_world: ResMut<ECSWorld>, editor: ResMut<Editor>) {
-        let Some(editor_cam_entity) = &editor.editor_camera else {
-            return;
-        };
-        let mut cam_query = ecs_world
-            .query_one::<&EditorCamera>(*editor_cam_entity)
-            .unwrap();
-        let (editor_camera) = cam_query.get().unwrap();
+    pub fn new() -> Self {
+        Self {
+            rotation_anchor: Vector3::zeros(),
+            euler: Vector3::zeros(),
+            distance: 1.0,
+        }
     }
 }

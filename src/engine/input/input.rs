@@ -33,19 +33,7 @@ impl Input {
     pub fn clear_inputs(mut input: ResMut<Input>, window: Res<Window>) {
         input.keyboard.clear_inputs();
         input.mouse.clear_inputs();
-        input.mouse.update_screen_center(Vector2::new(
-            window.inner_size().width as f32,
-            window.inner_size().height as f32,
-        ));
         input.gamepad.clear_inputs();
-    }
-
-    pub fn set_cursor_locked(&mut self, locked: bool) {
-        self.mouse.is_locked = locked;
-    }
-
-    pub fn is_cursor_locked(&self) -> bool {
-        self.mouse.is_locked
     }
 
     pub fn collect_gamepad_events(mut input: ResMut<Input>) {
@@ -246,6 +234,29 @@ impl Input {
                     }
                 }
             }
+        }
+
+        if let winit::event::WindowEvent::MouseWheel {
+            device_id,
+            delta,
+            phase,
+        } = &event
+        {
+            match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                    self.mouse.submit_input(mouse::SubmitInput::ScrollDelta(*y));
+                }
+                winit::event::MouseScrollDelta::PixelDelta(physical_position) => {
+                    log::warn!("pixel based scrolling not supported yet.")
+                }
+            }
+        }
+
+        if let winit::event::WindowEvent::CursorMoved { position, .. } = &event {
+            self.mouse.submit_input(mouse::SubmitInput::Position(
+                position.x as f32,
+                position.y as f32,
+            ));
         }
     }
 }

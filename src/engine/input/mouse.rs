@@ -9,10 +9,6 @@ pub struct Mouse {
     pressed_buttons: HashSet<Button>,
     down_buttons: HashSet<Button>,
     released_buttons: HashSet<Button>,
-
-    // Locked to center of screen and is invisible/confined.
-    pub is_locked: bool,
-    screen_center: Vector2<f32>,
 }
 
 impl Mouse {
@@ -24,9 +20,6 @@ impl Mouse {
             pressed_buttons: HashSet::new(),
             down_buttons: HashSet::new(),
             released_buttons: HashSet::new(),
-
-            is_locked: false,
-            screen_center: Vector2::new(0.0, 0.0),
         }
     }
 
@@ -35,10 +28,6 @@ impl Mouse {
         self.released_buttons.clear();
         self.pos_delta = Vector2::new(0.0, 0.0);
         self.scroll_delta = 0.0;
-    }
-
-    pub fn update_screen_center(&mut self, screen_size: Vector2<f32>) {
-        self.screen_center = screen_size * 0.5;
     }
 
     pub fn submit_input(&mut self, input: SubmitInput) {
@@ -77,9 +66,6 @@ impl Mouse {
     }
 
     pub fn mouse_position(&self) -> Vector2<f32> {
-        if self.is_locked {
-            return self.screen_center;
-        }
         self.position
     }
 

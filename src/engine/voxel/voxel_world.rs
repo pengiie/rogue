@@ -263,6 +263,10 @@ impl VoxelWorld {
             .clear();
     }
 
+    pub fn update_render_center(&mut self, center_pos: Vector3<f32>) {
+        self.chunks.update_player_position(center_pos);
+    }
+
     pub fn update_post_physics(
         events: Res<Events>,
         settings: Res<Settings>,
@@ -272,11 +276,11 @@ impl VoxelWorld {
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let chunks: &mut VoxelChunks = &mut voxel_world.chunks;
-        let mut player_query = ecs_world.player_query::<&Transform>();
-        if let Some((_, player_transform)) = player_query.try_player() {
-            let player_pos = player_transform.position;
-            chunks.update_player_position(player_pos);
-        }
+        // let mut player_query = ecs_world.player_query::<&Transform>();
+
+        // if let Some((_, player_transform)) = player_query.try_player() {
+        //     let player_pos = player_transform.position;
+        // }
 
         chunks.update_chunk_queue(&mut assets, &mut voxel_world.registry);
         voxel_world.process_chunk_edits(&mut assets);
@@ -287,17 +291,24 @@ impl VoxelWorld {
 
         let mut renderable_model_query = ecs_world.query::<(&Transform, &RenderableVoxelEntity)>();
         for (entity_id, (transform, renderable)) in renderable_model_query.iter() {
-            let model = self.registry.get_dyn_model(renderable.voxel_model_id);
+            let Some(voxel_model_id) = renderable.voxel_model_id() else {
+                continue;
+            };
 
-            let half_side_length =
-                model.length().cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH * 0.5;
+            let model = self.registry.get_dyn_model(voxel_model_id);
+
+            let half_side_length = model.length().cast::<f32>()
+                * consts::voxel::VOXEL_METER_LENGTH
+                * 0.5
+                * transform.scale;
             let min = transform.position() - half_side_length;
             let max = transform.position() + half_side_length;
             let aabb = AABB::new_two_point(min, max);
             let rotation_anchor = transform.position();
             let r = transform.rotation().inverse();
 
-            let rotated_ray_origin = r.matrix() * (ray.origin - rotation_anchor) + rotation_anchor;
+            let rotated_ray_origin =
+                (r.matrix() * (ray.origin - rotation_anchor)) + rotation_anchor;
             let rotated_ray_dir = r.matrix() * ray.dir;
             let rotated_ray = Ray::new(rotated_ray_origin, rotated_ray_dir);
             let Some(model_trace) = model.trace(&rotated_ray, &aabb) else {
@@ -313,7 +324,7 @@ impl VoxelWorld {
             closest_entity = Some((
                 model_trace.depth_t,
                 entity_id,
-                renderable.voxel_model_id,
+                voxel_model_id,
                 model_trace.local_position,
             ));
         }
@@ -353,7 +364,6 @@ impl VoxelWorld {
         };
         ray.advance(terrain_t);
         let mut chunk_dda = self.chunks.renderable_chunks_dda(&ray);
-        debug!("PLAYER is in chunk {:?}", chunk_dda.curr_grid_pos());
         while (chunk_dda.in_bounds()) {
             if let Some(chunk_model_id) = self
                 .chunks
@@ -852,9 +862,11 @@ impl VoxelWorldGpu {
         let mut voxel_entity_data = Vec::new();
         let mut voxel_entities_query = Self::query_voxel_entities(&ecs_world);
         for (entity, (transform, voxel_entity)) in voxel_entities_query.iter() {
-            let Some(model_gpu_info) = voxel_world_gpu
-                .voxel_model_info_map
-                .get(&voxel_entity.voxel_model_id)
+            let Some(voxel_model_id) = voxel_entity.voxel_model_id() else {
+                continue;
+            };
+
+            let Some(model_gpu_info) = voxel_world_gpu.voxel_model_info_map.get(&voxel_model_id)
             else {
                 panic!("Model should be loaded by now");
             };
@@ -863,7 +875,7 @@ impl VoxelWorldGpu {
                 * consts::voxel::VOXEL_METER_LENGTH
                 * 0.5
                 * transform.scale;
-            let min = transform.position() - side_length;
+            let min = transform.position - side_length;
             let max = transform.position + side_length;
             let r = transform.rotation();
             // Transpose cause its inverse and nalgebra is clockwise? i dunno for sure.

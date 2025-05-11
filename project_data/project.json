@@ -1,0 +1,59 @@
+{
+  "editor_camera_transform": {
+    "transform": {
+      "position": [
+        11.308599,
+        5.349342,
+        -21.751457
+      ],
+      "rotation": [
+        -0.18514298,
+        0.5127414,
+        -0.11430331,
+        -0.8305137
+      ],
+      "scale": 1.0
+    }
+  },
+  "editor_camera": {
+    "camera": {
+      "fov": 1.5707964,
+      "near_plane": 0.01,
+      "far_plane": 10000.0
+    }
+  },
+  "rotation_anchor": [
+    -4.1066136,
+    -2.7404742,
+    -14.025563
+  ],
+  "game_entities": [
+    {
+      "name": "My first entity",
+      "uuid": "5bdadd24-add3-4df7-b79e-dd246f367811",
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": 1.0
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "test::models::test::rvox"
+          }
+        }
+      ]
+    }
+  ]
+}

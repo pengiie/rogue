@@ -22,7 +22,7 @@ use super::GameEntity;
 pub struct Player {
     euler: Vector3<f32>,
     movement_speed: f32,
-    paused: bool,
+    pub paused: bool,
 }
 
 impl Player {
@@ -39,7 +39,7 @@ impl Player {
         mut input: ResMut<Input>,
         time: Res<Time>,
         mut settings: ResMut<Settings>,
-        window: Res<Window>,
+        mut window: ResMut<Window>,
         ui: Res<UI>,
     ) {
         let mut player_query =
@@ -48,9 +48,7 @@ impl Player {
 
         if input.is_key_pressed(Key::Escape) || input.is_key_pressed(Key::Tab) {
             player.paused = !player.paused;
-            window.set_cursor_grabbed(!player.paused);
-            window.set_cursor_visible(player.paused);
-            input.set_cursor_locked(!player.paused);
+            window.set_curser_lock(!player.paused);
         }
 
         let mut md = input.camera_axes();

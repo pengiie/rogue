@@ -1,3 +1,4 @@
+use crate::session::Session;
 use crate::{app::App, settings::Settings};
 
 use crate::{consts, engine};
@@ -22,6 +23,7 @@ use super::{
 pub fn init_pre_graphics(app: &mut App) {
     app.insert_resource(Assets::new());
     app.insert_resource(Events::new());
+    app.insert_resource(Session::new());
 
     let settings = Settings::from(&match Assets::load_asset_sync::<SettingsAsset>(
         AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
@@ -54,4 +56,6 @@ pub fn init_post_graphics(app: &mut App) {
     app.insert_resource(DebugRenderer::new());
     engine::graphics::initialize_graphics_resources(app);
     engine::voxel::initialize_voxel_world_resources(app);
+
+    app.run_system(Session::init);
 }

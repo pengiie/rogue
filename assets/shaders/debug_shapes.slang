@@ -4,6 +4,7 @@ import lib;
 
 struct Line {
   float3 start;
+  uint flags;
   float3 end;
   float thickness;
   float4 color;
@@ -38,6 +39,7 @@ void main(uint3 id: SV_DispatchThreadID) {
   var color = float4(0.0, 0.0, 0.0, 0.0);
   for (uint k = 0; k < 1000 && advanced < far_plane; k++) {
     var min_distance = far_plane;
+    var is_xray = false;
     var normal = float3(0.0);
     var c = float4(0.0);
     for (uint i = 0; i < u_shader.line_count; i++) {
@@ -58,7 +60,8 @@ void main(uint3 id: SV_DispatchThreadID) {
       // }
 
       d = sdf_line_segment(ray.origin, li.start, li.end, li.thickness);
-      if (d < min_distance) {
+      let is_line_xray = (li.flags & 1) > 0;
+      if (!is_line_xray && d < min_distance) {
         min_distance = d;
         normal = sdf_line_segment_normal(ray.origin, li.start, li.end);
         c = li.color;

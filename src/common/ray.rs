@@ -27,6 +27,37 @@ impl Ray {
         self.origin = self.origin + self.dir * t;
     }
 
+    fn sdf_line_segment(
+        pos: Vector3<f32>,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        radius: f32,
+    ) -> f32 {
+        let lv = end - start;
+        let rd = pos - start;
+        let p_t = (rd.dot(&lv) / lv.norm_squared()).clamp(0.0, 1.0);
+        let d = (rd - lv * p_t).magnitude();
+        return d - radius;
+    }
+
+    pub fn intersect_line_segment(
+        &self,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        radius: f32,
+        max_t: f32,
+    ) -> Option<f32> {
+        let mut t = 0.0;
+        while t < max_t {
+            let d = Self::sdf_line_segment(self.origin + self.dir * t, start, end, radius);
+            if d < 0.001 {
+                return Some(t + d);
+            }
+            t += d;
+        }
+        return None;
+    }
+
     pub fn intersect_point(&self, point: Vector3<f32>) -> Vector3<f32> {
         return self.inv_dir.component_mul(&(point - self.origin));
     }
@@ -81,10 +112,6 @@ impl RayDDA {
         let unit_t = ray
             .inv_dir
             .map(|x| if x.is_infinite() { 0.0 } else { x.abs() });
-        debug!(
-            "init with curr_t {:?}, unit_t {:?}, dda_pos {:?}",
-            curr_t, unit_t, dda_pos
-        );
 
         Self {
             curr_grid,

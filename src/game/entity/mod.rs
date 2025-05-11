@@ -1,5 +1,6 @@
 pub mod player;
 
+#[derive(Clone)]
 pub struct GameEntity {
     pub uuid: uuid::Uuid,
     pub name: String,

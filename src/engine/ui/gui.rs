@@ -24,7 +24,7 @@ impl Egui {
         ctx.set_zoom_factor(1.0);
         ctx.style_mut(|style| {
             let window_shadow = &mut style.visuals.window_shadow;
-            window_shadow.offset = egui::vec2(4.0, 4.0);
+            window_shadow.offset = [4, 4];
         });
 
         Self {
@@ -85,6 +85,9 @@ impl Egui {
                 }
                 _ => {}
             },
+            winit::event::WindowEvent::CursorMoved { .. } => {
+                return false;
+            }
             _ => {}
         }
 

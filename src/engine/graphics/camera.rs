@@ -33,7 +33,7 @@ impl MainCamera {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Camera {
     fov: f32,
     near_plane: f32,

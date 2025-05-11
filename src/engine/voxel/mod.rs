@@ -6,6 +6,7 @@ pub mod attachment;
 pub mod chunk_generator;
 pub mod cursor;
 pub mod esvo;
+pub mod factory;
 pub mod flat;
 pub mod thc;
 pub mod voxel;

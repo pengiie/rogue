@@ -4,9 +4,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::common::{
-    archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
-    dyn_vec::TypeInfo,
+use crate::{
+    common::{
+        archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
+        dyn_vec::TypeInfo,
+    },
+    engine::asset::asset::AssetPath,
 };
 
 use super::voxel::{
@@ -39,6 +42,7 @@ pub struct VoxelModelInfo {
     model_type: std::any::TypeId,
     gpu_type: Option<std::any::TypeId>,
     archetype_index: u64,
+    pub asset_path: Option<AssetPath>,
 }
 
 pub struct VoxelModelRegistry {
@@ -68,10 +72,22 @@ impl VoxelModelRegistry {
         }
     }
 
+    pub fn get_model_info(&self, id: VoxelModelId) -> &VoxelModelInfo {
+        &self.voxel_model_info[id.id as usize]
+    }
+
     pub fn next_id(&mut self) -> VoxelModelId {
         let id = self.id_counter;
         self.id_counter += 1;
         VoxelModelId { id }
+    }
+
+    pub fn set_voxel_model_asset_path(
+        &mut self,
+        voxel_model_id: VoxelModelId,
+        asset_path: Option<AssetPath>,
+    ) {
+        self.voxel_model_info[voxel_model_id.id as usize].asset_path = asset_path;
     }
 
     pub fn register_renderable_voxel_model<T>(
@@ -126,6 +142,7 @@ impl VoxelModelRegistry {
             model_type: model_type_info.type_id(),
             gpu_type: Some(gpu_type_info.type_id()),
             archetype_index,
+            asset_path: None,
         };
         self.voxel_model_info.push(info);
 

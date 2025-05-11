@@ -20,6 +20,7 @@ use crate::{
         world::game_world::GameWorld,
     },
     game::entity::player::Player,
+    session::Session,
 };
 
 pub fn game_loop(app: &App) {
@@ -36,10 +37,19 @@ pub fn game_loop(app: &App) {
     // ------- RENDERER SETUP
     app.run_system(Renderer::begin_frame);
 
+    // ------ Editor session related stuff
+    app.run_system(Session::update);
+
     // ------- ASSETS --------
 
     // Run any queued up asset tasks and update finished tasks.
     app.run_system(Assets::update_assets);
+
+    // ------- UI ---------
+
+    // Handle UI updates and Egui cpu-render.
+    app.run_system(UI::update);
+    app.run_system(UI::draw);
 
     // ------- GAME WORLD ---------
     app.run_system(GameWorld::update_io);
@@ -66,12 +76,6 @@ pub fn game_loop(app: &App) {
 
     // ------- VOXEL WORLD -------
     app.run_system(VoxelWorld::update_post_physics);
-
-    // ------- UI ---------
-
-    // Handle UI updates and Egui cpu-render.
-    app.run_system(UI::update);
-    app.run_system(UI::draw);
 
     // ------- GPU RENDERING ---------
 

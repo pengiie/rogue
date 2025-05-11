@@ -1870,7 +1870,7 @@ enum VulkanSetWriteIndex {
 impl VulkanResourceManager {
     fn new(ctx: &Arc<VulkanContextInner>) -> Self {
         let descriptor_pool = {
-            const DESC_COUNT: u32 = 1000;
+            const DESC_COUNT: u32 = 10000;
             let pool_sizes = [
                 ash::vk::DescriptorPoolSize::default()
                     .ty(ash::vk::DescriptorType::UNIFORM_BUFFER)

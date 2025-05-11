@@ -35,6 +35,11 @@ use super::{
     voxel_world::VoxelModelFlatEdit,
 };
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VoxelModelType {
+    Flat,
+}
+
 pub struct VoxelModelEdit {
     pub offset: Vector3<u32>,
     pub data: VoxelModelFlatEdit,
@@ -119,7 +124,7 @@ where
 
 #[derive(Debug)]
 pub struct VoxelModel<T: VoxelModelImpl> {
-    model: T,
+    pub model: T,
 }
 
 macro_rules! query_voxel_models {

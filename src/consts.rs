@@ -35,13 +35,12 @@ pub mod gfx {
 }
 
 pub mod io {
-    pub const EDITOR_SETTINGS_FILE: &str = "settings_editor::json";
+    pub const EDITOR_SETTINGS_FILE: &str = "editor::editor_settings::json";
     pub const SETTINGS_FILE: &str = "settings::json";
     pub const REGION_FILE_HEADER: &str = "vcr ";
 }
 
 pub mod actions {
-
     pub mod keybind {
         use crate::engine::input::keyboard::Key;
 
@@ -49,4 +48,23 @@ pub mod actions {
     }
 
     pub const EDITOR_TOGGLE: &str = "editor_toggle";
+}
+
+pub mod egui {
+    pub mod icons {
+        pub const FOLDER: &str = "icon_folder";
+        pub const FOLDER_ASSET: &str = "ui::icons::folder::png";
+
+        pub const LUA_FILE: &str = "icon_lua_file";
+        pub const LUA_FILE_ASSET: &str = "ui::icons::lua_file::png";
+
+        pub const TEXT_FILE: &str = "icon_text_file";
+        pub const TEXT_FILE_ASSET: &str = "ui::icons::text_file::png";
+
+        pub const VOXEL_MODEL_FILE: &str = "icon_voxel_model_file";
+        pub const VOXEL_MODEL_FILE_ASSET: &str = "ui::icons::voxel_model_file::png";
+
+        pub const UNKNOWN: &str = "icon_unknown";
+        pub const UNKNOWN_ASSET: &str = "ui::icons::folder::png";
+    }
 }

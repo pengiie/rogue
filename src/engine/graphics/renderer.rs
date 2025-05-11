@@ -412,13 +412,12 @@ impl Renderer {
         ui: Res<UI>,
     ) {
         assert!(renderer.acquired_swapchain);
-        let content_size = Vector2::new(
-            renderer.swapchain_size.x as f32,
-            renderer.swapchain_size.y as f32,
-        ) - Vector2::new(
-            ui.content_padding.z + ui.content_padding.w,
-            ui.content_padding.x + ui.content_padding.y,
-        );
+        let content_size = ui
+            .content_size(Vector2::new(
+                renderer.swapchain_size.x as f32,
+                renderer.swapchain_size.y as f32,
+            ))
+            .map(|x| x.max(1.0));
         renderer.frame_graph_executor.supply_input(
             Self::GRAPH.image_backbuffer_size,
             Box::new(content_size.map(|x| x as u32)),

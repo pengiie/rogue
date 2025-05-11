@@ -99,11 +99,11 @@ impl GameWorld {
 
         let mut q = ecs_world.query::<With<&mut Transform, &RenderableVoxelEntity>>();
         for (entity, (mut transform)) in q.iter() {
-            transform.rotation *= (&UnitQuaternion::from_axis_angle(
-                &Vector3::y_axis(),
-                f32::consts::PI * 2.0 * time.delta_time().as_secs_f32() * 0.25, // 4 seconds per
-                                                                                // rot
-            ));
+            //  transform.rotation *= (&UnitQuaternion::from_axis_angle(
+            //      &Vector3::y_axis(),
+            //      f32::consts::PI * 2.0 * time.delta_time().as_secs_f32() * 0.25, // 4 seconds per
+            //                                                                      // rot
+            //  ));
         }
 
         // Check which assets successfully saved.

@@ -72,6 +72,10 @@ impl Instant {
         }
     }
 
+    pub fn epoch() -> Self {
+        Instant(std::time::Duration::from_millis(0))
+    }
+
     pub fn elapsed(&self) -> Duration {
         Self::now() - *self
     }
@@ -95,7 +99,7 @@ impl Sub<Instant> for Instant {
     type Output = Duration;
 
     fn sub(self, rhs: Instant) -> Self::Output {
-        self.0 - rhs.0
+        self.0.saturating_sub(rhs.0)
     }
 }
 
@@ -123,6 +127,11 @@ impl Timer {
 
     pub fn is_complete(&self) -> bool {
         self.last_instant + self.time_dur <= Instant::now()
+    }
+
+    /// Fast fowards this timer so it is considered complete.
+    pub fn fast_forward(&mut self) {
+        self.last_instant = Instant::epoch();
     }
 
     pub fn reset(&mut self) {

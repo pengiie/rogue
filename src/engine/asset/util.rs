@@ -64,6 +64,7 @@ impl AssetByteWriter {
 
 pub struct AssetByteReader {
     file: File,
+    header: Option<String>,
     version: u32,
 }
 
@@ -81,7 +82,31 @@ impl AssetByteReader {
         file.read_exact(&mut buf)?;
         let version = u32::from_le_bytes(buf);
 
-        Ok(Self { file, version })
+        Ok(Self {
+            file,
+            version,
+            header: None,
+        })
+    }
+
+    pub fn new_unknown(mut file: std::fs::File) -> anyhow::Result<Self> {
+        let mut buf = [0u8; 4];
+        file.read_exact(&mut buf)?;
+        let header = String::from_utf8(Vec::from(buf)).unwrap();
+
+        // Read the version.
+        file.read_exact(&mut buf)?;
+        let version = u32::from_le_bytes(buf);
+
+        Ok(Self {
+            file,
+            version,
+            header: Some(header),
+        })
+    }
+
+    pub fn header(&self) -> Option<&str> {
+        self.header.as_ref().map(|x| x.as_str())
     }
 
     pub fn read<T: bytemuck::Pod>(&mut self) -> anyhow::Result<T> {

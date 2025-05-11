@@ -6,6 +6,7 @@ mod consts;
 mod engine;
 mod game;
 mod game_loop;
+mod session;
 mod settings;
 
 fn main() {

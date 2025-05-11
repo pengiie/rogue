@@ -46,6 +46,16 @@ impl Color<ColorSpaceSrgb> {
         Self::new(r, g, b)
     }
 
+    pub fn new_srgb_hex(hex: impl ToString) -> Self {
+        let hex_str = hex.to_string();
+        let hex_str = hex_str.trim_start_matches("#");
+        assert_eq!(hex_str.len(), 6);
+        let r = u32::from_str_radix(&hex_str[0..2], 16).unwrap() as f32;
+        let g = u32::from_str_radix(&hex_str[2..4], 16).unwrap() as f32;
+        let b = u32::from_str_radix(&hex_str[4..6], 16).unwrap() as f32;
+        Self::new(r / 255.0, g / 255.0, b / 255.0)
+    }
+
     pub fn black() -> Self {
         Self {
             xyz: Vector3::new(0.0, 0.0, 0.0),

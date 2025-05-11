@@ -1,4 +1,5 @@
 use log::{debug, info, warn};
+use nalgebra::Vector2;
 use rogue_macros::Resource;
 use winit::{
     self,
@@ -35,6 +36,7 @@ pub type WindowHandle = std::sync::Arc<WinitWindow>;
 pub struct Window {
     winit_window: WindowHandle,
     is_first_frame: bool,
+    cursor_locked: bool,
 }
 
 impl raw_window_handle::HasDisplayHandle for Window {
@@ -81,6 +83,7 @@ impl Window {
         Self {
             winit_window: WindowHandle::new(winit_window),
             is_first_frame: true,
+            cursor_locked: false,
         }
     }
 
@@ -92,6 +95,14 @@ impl Window {
         self.is_first_frame
     }
 
+    pub fn is_cursor_locked(&self) -> bool {
+        self.cursor_locked
+    }
+
+    pub fn inner_size_vec2(&self) -> Vector2<u32> {
+        Vector2::new(self.width(), self.height())
+    }
+
     pub fn set_cursor_grabbed(&self, grabbed: bool) {
         let grab_mode = if grabbed {
             winit::window::CursorGrabMode::Confined
@@ -101,6 +112,12 @@ impl Window {
         if let Err(_) = self.winit_window.set_cursor_grab(grab_mode) {
             warn!("This platform does not support cursor grabbing.");
         }
+    }
+
+    pub fn set_curser_lock(&mut self, locked: bool) {
+        self.set_cursor_visible(!locked);
+        self.set_cursor_grabbed(locked);
+        self.cursor_locked = locked;
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {

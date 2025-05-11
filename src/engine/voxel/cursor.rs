@@ -7,7 +7,7 @@ use crate::{
     common::color::Color,
     consts,
     engine::{
-        debug::{DebugLine, DebugRenderer},
+        debug::{DebugFlags, DebugLine, DebugRenderer},
         entity::{
             ecs_world::{ECSWorld, Entity},
             RenderableVoxelEntity,
@@ -74,7 +74,7 @@ impl VoxelCursor {
                 .unwrap();
             let (entity_transform, entity_renderable) = query.get().unwrap();
             let dimensions = voxel_world
-                .get_dyn_model(entity_renderable.voxel_model_id)
+                .get_dyn_model(entity_renderable.voxel_model_id_unchecked())
                 .length();
 
             let thickness = 0.1;
@@ -86,6 +86,7 @@ impl VoxelCursor {
                 thickness,
                 color: color.clone(),
                 alpha,
+                flags: DebugFlags::NONE,
             };
 
             let obb = entity_transform.as_voxel_model_obb(dimensions);

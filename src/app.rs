@@ -8,7 +8,9 @@ use log::{debug, info};
 use nalgebra::Vector2;
 use raw_window_handle::HasWindowHandle;
 use winit::{
-    application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
+    application::ApplicationHandler,
+    event::{ElementState, WindowEvent as WinitWindowEvent},
+    event_loop::EventLoop,
 };
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
         self,
         asset::asset::Assets,
         audio::Audio,
+        editor::editor::Editor,
         entity::ecs_world::ECSWorld,
         event::Events,
         graphics::{backend::GraphicsBackendEvent, device::DeviceResource, renderer::Renderer},
@@ -23,7 +26,7 @@ use crate::{
         physics::physics_world::PhysicsWorld,
         resource::{Res, ResMut, Resource, ResourceBank},
         system::System,
-        ui::gui::Egui,
+        ui::{gui::Egui, UI},
         voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
         window::{time::Time, window::Window},
     },
@@ -131,12 +134,10 @@ impl winit::application::ApplicationHandler for App {
         // If egui exists then input exists.
         if self.resource_bank().has_resource::<Egui>() {
             let window = self.resource_bank().get_resource::<Window>();
-            let input = self.resource_bank().get_resource::<Input>();
-            if !input.is_cursor_locked()
-                && self
-                    .resource_bank()
-                    .get_resource_mut::<Egui>()
-                    .handle_window_event(&window, &event)
+            if self
+                .resource_bank()
+                .get_resource_mut::<Egui>()
+                .handle_window_event(&window, &event)
             {
                 return;
             }
@@ -227,9 +228,28 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::DeviceEvent,
     ) {
         if self.resource_bank().has_resource::<Input>() {
-            self.resource_bank()
-                .get_resource_mut::<Input>()
-                .handle_winit_device_event(device_id, event);
+            let window = self.resource_bank().get_resource::<Window>();
+            let ui = self.resource_bank().get_resource::<UI>();
+            let editor = self.resource_bank().get_resource::<Editor>();
+            let mut input = self.resource_bank().get_resource_mut::<Input>();
+            let mouse_pos = input.mouse_position();
+            let is_within_content = ui.content_padding.z <= mouse_pos.x
+                && mouse_pos.x <= window.inner_size_vec2().x as f32 - ui.content_padding.w
+                && ui.content_padding.x <= mouse_pos.y
+                && mouse_pos.y <= window.inner_size_vec2().y as f32 - ui.content_padding.y;
+            if !is_within_content {
+                match &event {
+                    winit::event::DeviceEvent::Key(winit::event::RawKeyEvent {
+                        state: ElementState::Pressed,
+                        ..
+                    }) => {
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            input.handle_winit_device_event(device_id, event);
         }
     }
 }

@@ -7,7 +7,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{Read, Write},
     ops::Deref,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     str::FromStr,
     sync::{
@@ -31,6 +31,7 @@ pub struct Assets {
     // TODO: Create homogenous arrays based off of type info as the key so every asset isn't a
     // separate heap allocation.
     path_id_map: HashMap<AssetPath, AssetId>,
+    saved_assets_path: HashMap<AssetId, AssetPath>,
     assets: HashMap<AssetId, AssetData>,
     asset_statuses: HashMap<AssetId, AssetStatus>,
 
@@ -51,6 +52,7 @@ impl Assets {
     pub fn new() -> Self {
         Self {
             path_id_map: HashMap::new(),
+            saved_assets_path: HashMap::new(),
             assets: HashMap::new(),
             asset_statuses: HashMap::new(),
 
@@ -167,6 +169,10 @@ impl Assets {
                         Ok(res) => match res {
                             _ => {
                                 assets.asset_statuses.insert(*id, AssetStatus::Saved);
+                                log::debug!(
+                                    "Saved asset to {:?}.",
+                                    assets.saved_assets_path.get(id).unwrap()
+                                );
                             }
                             Err(err) => {
                                 log::error!("Error saving asset: {}", err.to_string());
@@ -317,6 +323,8 @@ impl Assets {
         });
         self.asset_statuses
             .insert(handle.id, AssetStatus::InProgress);
+        self.saved_assets_path
+            .insert(handle.id, handle.path.clone());
 
         handle
     }
@@ -421,6 +429,14 @@ impl Assets {
         let id = self.id_counter;
         self.id_counter += 1;
         return id;
+    }
+
+    pub fn get_asset_handle<T: 'static>(&self, asset_path: &AssetPath) -> Option<AssetHandle> {
+        self.path_id_map.get(asset_path).map(|id| AssetHandle {
+            asset_type: std::any::TypeId::of::<T>(),
+            path: asset_path.clone(),
+            id: *id,
+        })
     }
 }
 
@@ -626,28 +642,78 @@ impl std::hash::Hash for AssetHandle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, Hash,
+)]
 pub struct AssetPath {
+    // Only valid for binary and project assets.
+    // In the form of (binary|project)::(dirs::)*file_name::extension
+    pub asset_path: Option<String>,
     // Change maybe so we can support a giant asset file.
     path: PathBuf,
 }
-
-// In the form of module::module::asset
 
 impl AssetPath {
     fn validate_path(path: &str) {
         let path_regex: Regex = Regex::new(r"^\w+(::\w+)*$").unwrap();
         assert!(path_regex.is_match(&path));
     }
-    pub fn new_asset_dir(path: String) -> Self {
+
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            asset_path: None,
+            path,
+        }
+    }
+
+    /// Searches in the editor/runtime required assets that are project independent.
+    pub fn new_binary_dir(path: impl ToString) -> Self {
+        let path = format!("{}", path.to_string());
         Self::validate_path(&path);
         Self {
-            path: Self::into_file_path(&path, true),
+            asset_path: Some(path.clone()),
+            path: Self::into_file_path(&path, Path::new("./assets/")),
+        }
+    }
+
+    /// Searches in the projects assets directory for the editor and runtime.
+    pub fn new_project_dir(project_dir: PathBuf, path: String) -> Self {
+        let path = format!("{}", path.clone());
+        Self::validate_path(&path);
+        Self {
+            asset_path: Some(path.clone()),
+            path: Self::into_file_path(&path, &project_dir.join("assets")),
+        }
+    }
+
+    pub fn from_project_dir_path(project_dir: &Path, path: &Path) -> Self {
+        let sub_path = path
+            .strip_prefix(project_dir.join("assets"))
+            .expect("project_dir/assets must be a prefix of path.");
+
+        let mut s = String::new();
+        for p in sub_path.iter() {
+            let p = p.to_string_lossy().to_string();
+            if p.contains(".") {
+                let parts = p.split(".").collect::<Vec<_>>();
+                s.push_str(parts[0]);
+                s.push_str("::");
+                s.push_str(parts[1]);
+            } else {
+                s.push_str(&p);
+                s.push_str("::");
+            }
+        }
+        Self::validate_path(&s);
+        Self {
+            asset_path: Some(s),
+            path: path.to_owned(),
         }
     }
 
     pub fn new_user_dir(sub_path: impl ToString) -> Self {
-        let sub_path = Self::into_file_path(&sub_path.to_string(), false);
+        let sub_path = format!("{}", sub_path.to_string());
+        let sub_path = Self::into_file_path(&sub_path.to_string(), Path::new("./rogue_user_data"));
         let path = match std::env::consts::OS {
             "linux" => std::env::var("HOME")
                 .map(|home_dir| {
@@ -662,29 +728,26 @@ impl AssetPath {
         Self {
             // TODO: I don't trust myself with the home directory yet.
             //path: path.join(sub_path).to_str().unwrap().to_owned(),
+            asset_path: None,
             path: sub_path,
         }
     }
 
-    pub fn into_file_path(path: &str, asset_prefix: bool) -> PathBuf {
+    pub fn into_file_path(path: &str, prefix: &std::path::Path) -> PathBuf {
+        assert!(path.len() >= 3);
         let parts = path.split("::").enumerate().collect::<Vec<_>>();
         let extension_index = parts.len() - 1;
 
-        let mut path = if asset_prefix {
-            "./assets/".to_owned()
-        } else {
-            "./rogue_user_data/".to_owned()
-        };
-        for (i, part) in parts {
-            if i == extension_index {
-                path.push('.');
-            } else if i > 0 {
-                path.push('/');
+        let mut path = prefix.to_owned();
+        for (i, part) in &parts {
+            if *i == extension_index {
+                path.set_extension(part);
+            } else {
+                path = path.join(part);
             }
-            path.push_str(part);
         }
 
-        PathBuf::from_str(&path).expect("Path is invalid.")
+        path
     }
 
     pub fn into_fetch_url(&self) -> String {
@@ -764,6 +827,10 @@ impl AssetFile {
             path: path.clone(),
             file_handle: FileHandle::from_path(path),
         }
+    }
+
+    pub fn extension(&self) -> &str {
+        self.path.extension()
     }
 
     pub fn read_contents(&self) -> std::io::Result<String> {
