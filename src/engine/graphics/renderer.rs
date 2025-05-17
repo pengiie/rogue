@@ -70,6 +70,8 @@ pub struct GraphConstantsDebug3D {
 pub struct GraphConstantsNormalCalc {
     pub pipeline_compute_terrain: &'static str,
     pub pipeline_compute_terrain_info: FrameGraphComputeInfo<'static>,
+    pub pipeline_compute_standalone: &'static str,
+    pub pipeline_compute_standalone_info: FrameGraphComputeInfo<'static>,
     pub pass_normal_calc: &'static str,
 }
 
@@ -124,9 +126,14 @@ impl Renderer {
             buffer_model_voxel_data: "rt_buffer_model_voxel_data",
         },
         normal_calc: GraphConstantsNormalCalc {
-            pipeline_compute_terrain: "normal_calc_compute",
+            pipeline_compute_terrain: "normal_calc_terrain_compute",
             pipeline_compute_terrain_info: FrameGraphComputeInfo {
                 shader_path: "normal_calc_terrain",
+                entry_point_fn: "main",
+            },
+            pipeline_compute_standalone: "normal_calc_standalone_compute",
+            pipeline_compute_standalone_info: FrameGraphComputeInfo {
+                shader_path: "normal_calc_standalone",
                 entry_point_fn: "main",
             },
             pass_normal_calc: "normal_calc_pass",
@@ -248,6 +255,10 @@ impl Renderer {
             builder.create_compute_pipeline(
                 Self::GRAPH.normal_calc.pipeline_compute_terrain,
                 Self::GRAPH.normal_calc.pipeline_compute_terrain_info,
+            );
+            builder.create_compute_pipeline(
+                Self::GRAPH.normal_calc.pipeline_compute_standalone,
+                Self::GRAPH.normal_calc.pipeline_compute_standalone_info,
             );
             builder.create_input_pass(Self::GRAPH.normal_calc.pass_normal_calc, &[], &[]);
         }
@@ -486,7 +497,7 @@ impl Renderer {
                 );
                 writer.write_uniform(
                     "u_frame.voxel.entity_data.entity_count",
-                    voxel_world_gpu.entity_count(),
+                    voxel_world_gpu.rendered_voxel_model_entity_count(),
                 );
 
                 writer.write_binding(

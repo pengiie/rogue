@@ -2,7 +2,7 @@ use nalgebra::{ComplexField, Matrix3, Vector3};
 
 #[derive(Copy, PartialEq)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
-    xyz: Vector3<f32>,
+    pub xyz: Vector3<f32>,
     _marker: std::marker::PhantomData<S>,
 }
 
@@ -36,8 +36,24 @@ impl<S: ColorSpace> Color<S> {
         self.xyz.z
     }
 
+    pub fn r_u8(&self) -> u8 {
+        (self.r() * 255.0) as u8
+    }
+
+    pub fn g_u8(&self) -> u8 {
+        (self.g() * 255.0) as u8
+    }
+
+    pub fn b_u8(&self) -> u8 {
+        (self.b() * 255.0) as u8
+    }
+
     pub fn rgb_vec(&self) -> Vector3<f32> {
         self.xyz
+    }
+
+    pub fn set_rgb_u8(&mut self, r: u8, g: u8, b: u8) {
+        self.xyz = Vector3::new((r as f32) / 255.0, (g as f32) / 255.0, (b as f32) / 255.0);
     }
 }
 

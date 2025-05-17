@@ -9,17 +9,21 @@ use crate::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
     },
-    engine::asset::asset::AssetPath,
+    engine::asset::{asset::AssetPath, repr::world::voxel::VoxelModelAnyAsset},
 };
 
-use super::voxel::{
-    VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-    VoxelModelImplConcrete,
+use super::{
+    flat::{VoxelModelFlat, VoxelModelFlatGpu},
+    thc::{VoxelModelTHC, VoxelModelTHCGpu},
+    voxel::{
+        VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelImplConcrete, VoxelModelType,
+    },
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct VoxelModelId {
-    id: u64,
+    pub id: u64,
 }
 
 impl VoxelModelId {
@@ -38,8 +42,9 @@ impl VoxelModelId {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct VoxelModelInfo {
-    name: String,
-    model_type: std::any::TypeId,
+    pub name: String,
+    pub model_type_id: std::any::TypeId,
+    pub model_type: Option<VoxelModelType>,
     gpu_type: Option<std::any::TypeId>,
     archetype_index: u64,
     pub asset_path: Option<AssetPath>,
@@ -53,7 +58,7 @@ pub struct VoxelModelRegistry {
     standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
     // TODO: Create FreeList alloc generic impl and replace this with it so we can also unload
     // voxel models.
-    voxel_model_info: Vec<VoxelModelInfo>,
+    pub voxel_model_info: Vec<VoxelModelInfo>,
 
     // Maps model_type to the vtable for dyn VoxelModelImpl and
     // maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
@@ -88,6 +93,85 @@ impl VoxelModelRegistry {
         asset_path: Option<AssetPath>,
     ) {
         self.voxel_model_info[voxel_model_id.id as usize].asset_path = asset_path;
+    }
+
+    pub fn register_renderable_voxel_model_any(
+        &mut self,
+        name: impl ToString,
+        voxel_model_any: VoxelModelAnyAsset,
+    ) -> VoxelModelId {
+        let voxel_model_gpu: Box<dyn VoxelModelGpuImpl> = match voxel_model_any.model_type {
+            VoxelModelType::Flat => Box::new(VoxelModelFlatGpu::new()),
+            VoxelModelType::THC => Box::new(VoxelModelTHCGpu::new()),
+        };
+        let model_type_info = match voxel_model_any.model_type {
+            VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlat>(),
+            VoxelModelType::THC => TypeInfo::new::<VoxelModelTHC>(),
+        };
+        let gpu_type_info = match voxel_model_any.model_type {
+            VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlatGpu>(),
+            VoxelModelType::THC => TypeInfo::new::<VoxelModelTHCGpu>(),
+        };
+        let id = self.next_id();
+
+        // Extract fat pointers for this voxel model T's implementation of VoxelModelImpl and
+        // T::Gpu's VoxelModelGpuImpl.
+        let voxel_model_vtable_ptr = {
+            let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model_any.model.deref() as &dyn VoxelModelImpl;
+            let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
+            // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
+            unsafe { fat_ptr.as_ref() }.unwrap().1
+        };
+        let voxel_model_gpu_vtable_ptr = {
+            let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model_gpu.deref() as &dyn VoxelModelGpuImpl;
+            let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
+            // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
+            unsafe { fat_ptr.as_ref() }.unwrap().1
+        };
+
+        self.type_vtables
+            .insert(model_type_info.type_id(), voxel_model_vtable_ptr);
+        self.type_vtables
+            .insert(gpu_type_info.type_id(), voxel_model_gpu_vtable_ptr);
+
+        let (ref mut archetype, _) = self
+            .renderable_voxel_model_archtypes
+            .entry(model_type_info.type_id())
+            .or_insert_with(|| {
+                (
+                    Archetype::new(vec![model_type_info, gpu_type_info]),
+                    gpu_type_info.type_id(),
+                )
+            });
+
+        let archetype_index = match voxel_model_any.model_type {
+            VoxelModelType::Flat => archetype.insert(
+                id.id,
+                (
+                    *voxel_model_any.model.downcast::<VoxelModelFlat>().unwrap(),
+                    *voxel_model_gpu.downcast::<VoxelModelFlatGpu>().unwrap(),
+                ),
+            ),
+            VoxelModelType::THC => archetype.insert(
+                id.id,
+                (
+                    *voxel_model_any.model.downcast::<VoxelModelTHC>().unwrap(),
+                    *voxel_model_gpu.downcast::<VoxelModelTHCGpu>().unwrap(),
+                ),
+            ),
+        };
+
+        let info = VoxelModelInfo {
+            name: name.to_string(),
+            model_type: Some(voxel_model_any.model_type),
+            model_type_id: model_type_info.type_id(),
+            gpu_type: Some(gpu_type_info.type_id()),
+            archetype_index,
+            asset_path: None,
+        };
+        self.voxel_model_info.push(info);
+
+        id
     }
 
     pub fn register_renderable_voxel_model<T>(
@@ -139,7 +223,8 @@ impl VoxelModelRegistry {
 
         let info = VoxelModelInfo {
             name: name.to_string(),
-            model_type: model_type_info.type_id(),
+            model_type: T::model_type(),
+            model_type_id: model_type_info.type_id(),
             gpu_type: Some(gpu_type_info.type_id()),
             archetype_index,
             asset_path: None,
@@ -160,13 +245,13 @@ impl VoxelModelRegistry {
         } else {
             &self
                 .renderable_voxel_model_archtypes
-                .get(&model_info.model_type)
+                .get(&model_info.model_type_id)
                 .unwrap()
                 .0
         };
 
         let model_type_info = &archetype.type_infos()[0];
-        assert_eq!(model_type_info.type_id(), model_info.model_type);
+        assert_eq!(model_type_info.type_id(), model_info.model_type_id);
 
         // Safety: If model_info is still valid, then the archetype_index it contains must best
         // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
@@ -175,7 +260,7 @@ impl VoxelModelRegistry {
             unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *const u8 };
 
         let voxel_model_dyn_ref = {
-            let model_vtable = *self.type_vtables.get(&model_info.model_type).unwrap();
+            let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
             let fat_ptr = (model_ptr, model_vtable);
             let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImpl;
 
@@ -197,13 +282,13 @@ impl VoxelModelRegistry {
         } else {
             &self
                 .renderable_voxel_model_archtypes
-                .get(&model_info.model_type)
+                .get(&model_info.model_type_id)
                 .unwrap()
                 .0
         };
 
         let model_type_info = &archetype.type_infos()[0];
-        assert_eq!(model_type_info.type_id(), model_info.model_type);
+        assert_eq!(model_type_info.type_id(), model_info.model_type_id);
         assert_eq!(model_type_info.type_id(), std::any::TypeId::of::<T>());
 
         // Safety: If model_info is still valid, then the archetype_index it contains must best
@@ -227,13 +312,13 @@ impl VoxelModelRegistry {
         } else {
             &mut self
                 .renderable_voxel_model_archtypes
-                .get_mut(&model_info.model_type)
+                .get_mut(&model_info.model_type_id)
                 .unwrap()
                 .0
         };
 
         let model_type_info = &archetype.type_infos()[0];
-        assert_eq!(model_type_info.type_id(), model_info.model_type);
+        assert_eq!(model_type_info.type_id(), model_info.model_type_id);
 
         // Safety: If model_info is still valid, then the archetype_index it contains must best
         // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
@@ -242,7 +327,7 @@ impl VoxelModelRegistry {
             unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *mut u8 };
 
         let voxel_model_dyn_ref = {
-            let model_vtable = *self.type_vtables.get(&model_info.model_type).unwrap();
+            let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
             let fat_ptr = (model_ptr, model_vtable);
             let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelImpl;
 
@@ -267,13 +352,13 @@ impl VoxelModelRegistry {
         } else {
             &self
                 .renderable_voxel_model_archtypes
-                .get(&model_info.model_type)
+                .get(&model_info.model_type_id)
                 .unwrap()
                 .0
         };
 
         let model_type_info = &archetype.type_infos()[0];
-        assert_eq!(model_type_info.type_id(), model_info.model_type);
+        assert_eq!(model_type_info.type_id(), model_info.model_type_id);
         let model_gpu_type_info = &archetype.type_infos()[1];
         assert_eq!(model_gpu_type_info.type_id(), model_info.gpu_type.unwrap());
 
@@ -284,7 +369,7 @@ impl VoxelModelRegistry {
             unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *mut u8 };
 
         let voxel_model_dyn_ref = {
-            let model_vtable = *self.type_vtables.get(&model_info.model_type).unwrap();
+            let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
             let fat_ptr = (model_ptr, model_vtable);
             let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImpl;
 

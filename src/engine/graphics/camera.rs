@@ -35,12 +35,14 @@ impl MainCamera {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Camera {
-    fov: f32,
-    near_plane: f32,
-    far_plane: f32,
+    pub fov: f32,
+    pub near_plane: f32,
+    pub far_plane: f32,
 }
 
 impl Camera {
+    pub const FOV_90: f32 = std::f32::consts::FRAC_PI_2;
+
     pub fn new(fov: f32) -> Self {
         Self {
             fov,

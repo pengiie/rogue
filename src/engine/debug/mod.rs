@@ -1,9 +1,12 @@
 use nalgebra::{Vector2, Vector3};
 use rogue_macros::Resource;
 
-use crate::common::{
-    color::{Color, ColorSpaceSrgb},
-    obb::OBB,
+use crate::{
+    common::{
+        color::{Color, ColorSpaceSrgb},
+        obb::OBB,
+    },
+    consts,
 };
 
 use super::{
@@ -104,7 +107,7 @@ impl DebugRenderer {
         mut renderer: ResMut<Renderer>,
         input: Res<Input>,
     ) {
-        if input.is_key_pressed(keyboard::Key::C) {
+        if input.is_key_pressed(consts::actions::keybind::EDITOR_TOGGLE_DEBUG) {
             debug.show_debug = !debug.show_debug;
         }
         let line_count = debug.debug_lines.len();

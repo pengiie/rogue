@@ -6,6 +6,7 @@ use petgraph::matrix_graph::Zero;
 
 use crate::{
     common::{
+        bitset::Bitset,
         color::Color,
         morton::{self, morton_decode},
     },
@@ -24,7 +25,7 @@ use super::{
     flat::VoxelModelFlat,
     voxel::{
         VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelTrace,
+        VoxelModelImplConcrete, VoxelModelTrace, VoxelModelType,
     },
 };
 
@@ -34,17 +35,37 @@ use super::{
 pub struct VoxelModelTHC {
     pub side_length: u32,
     pub node_data: Vec<THCNode>,
-    pub attachment_lookup_data: HashMap<AttachmentId, Vec<THCAttachmentLookupNode>>,
-    pub attachment_raw_data: HashMap<AttachmentId, Vec<u32>>,
+    pub attachment_lookup_data: AttachmentMap<Vec<THCAttachmentLookupNode>>,
+    pub attachment_raw_data: AttachmentMap<Vec<u32>>,
     pub attachment_map: AttachmentInfoMap,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct THCNode {
     // Left most bit determines if this node is a leaf.
     pub child_ptr: u32,
     pub child_mask: u64,
+}
+
+impl std::fmt::Debug for THCNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut child_mask = String::with_capacity(64);
+        for i in 0usize..64 {
+            child_mask.insert(
+                i,
+                if (self.child_mask & (1 << i)) > 0 {
+                    '1'
+                } else {
+                    '0'
+                },
+            );
+        }
+        f.debug_struct("THCNode")
+            .field("child_ptr", &self.child_ptr)
+            .field("child_mask", &child_mask)
+            .finish()
+    }
 }
 
 impl THCNode {
@@ -53,6 +74,18 @@ impl THCNode {
             child_ptr: 0,
             child_mask: 0,
         }
+    }
+
+    pub fn is_leaf_node(&self) -> bool {
+        (self.child_ptr >> 31) > 0
+    }
+
+    pub fn child_ptr(&self) -> u32 {
+        self.child_ptr & 0x7FFF_FFFF
+    }
+
+    pub fn has_child(&self, child_index: u32) -> bool {
+        (self.child_mask & (1 << child_index)) > 0
     }
 }
 
@@ -63,8 +96,18 @@ pub struct THCAttachmentLookupNode {
     pub attachment_mask: u64,
 }
 
+impl THCAttachmentLookupNode {
+    pub fn data_ptr(&self) -> u32 {
+        self.data_ptr
+    }
+
+    pub fn has_child(&self, child_index: u32) -> bool {
+        (self.attachment_mask & (1 << child_index)) > 0
+    }
+}
+
 impl VoxelModelTHC {
-    pub fn new(length: u32) -> Self {
+    pub fn new_empty(length: u32) -> Self {
         assert_eq!(
             Self::next_power_of_4(length),
             length,
@@ -74,15 +117,10 @@ impl VoxelModelTHC {
         Self {
             side_length: length,
             node_data: vec![THCNode::new_empty()],
-            attachment_lookup_data: HashMap::new(),
-            attachment_raw_data: HashMap::new(),
+            attachment_lookup_data: AttachmentMap::new(),
+            attachment_raw_data: AttachmentMap::new(),
             attachment_map: AttachmentMap::new(),
         }
-    }
-
-    // Just so i can do ChunkModelType::new_empty for flats and thcs.
-    pub fn new_empty(length: Vector3<u32>) -> Self {
-        Self::new(length.x)
     }
 
     pub fn next_power_of_4(x: u32) -> u32 {
@@ -139,6 +177,10 @@ impl VoxelModelTHC {
 
 impl VoxelModelImplConcrete for VoxelModelTHC {
     type Gpu = VoxelModelTHCGpu;
+
+    fn model_type() -> Option<VoxelModelType> {
+        Some(VoxelModelType::THC)
+    }
 }
 
 impl VoxelModelImpl for VoxelModelTHC {
@@ -147,10 +189,13 @@ impl VoxelModelImpl for VoxelModelTHC {
         ray: &crate::common::ray::Ray,
         aabb: &crate::common::aabb::AABB,
     ) -> Option<VoxelModelTrace> {
-        todo!()
+        return None;
+        //todo!()
     }
 
-    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {}
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {
+        todo!();
+    }
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
         consts::voxel::MODEL_THC_SCHEMA
@@ -194,9 +239,11 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
         if self.attachment_lookup_allocations.is_empty()
             || self.attachment_raw_allocations.is_empty()
         {
+            log::info!("no attachments");
             return None;
         }
         if self.side_length == 0 {
+            log::info!("no length");
             return None;
         }
 
@@ -253,8 +300,8 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             did_allocate = true;
         }
 
-        for (attachment, data) in &model.attachment_lookup_data {
-            if !self.attachment_lookup_allocations.contains_key(attachment) {
+        for (attachment, data) in model.attachment_lookup_data.iter() {
+            if !self.attachment_lookup_allocations.contains_key(&attachment) {
                 let lookup_data_allocation_size = data.len() as u64 * 12;
                 self.attachment_lookup_allocations.insert(
                     attachment.clone(),
@@ -266,8 +313,8 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             }
         }
 
-        for (attachment, data) in &model.attachment_raw_data {
-            if !self.attachment_raw_allocations.contains_key(attachment) {
+        for (attachment, data) in model.attachment_raw_data.iter() {
+            if !self.attachment_raw_allocations.contains_key(&attachment) {
                 let raw_data_allocation_size = data.len() as u64 * 4;
                 self.attachment_raw_allocations.insert(
                     attachment.clone(),
@@ -276,6 +323,55 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
                         .expect("Failed to allocate ESVO attachment raw data."),
                 );
                 did_allocate = true;
+            }
+        }
+
+        // Add implicit normal attachment.
+        if !model.attachment_lookup_data.contains(Attachment::NORMAL_ID)
+            && model
+                .attachment_lookup_data
+                .contains(Attachment::PTMATERIAL_ID)
+        {
+            if model.attachment_map.contains(Attachment::NORMAL_ID) {
+                assert!(
+                    model.attachment_map.get_unchecked(Attachment::NORMAL_ID)
+                        == &Attachment::NORMAL
+                );
+            }
+
+            let ptmaterial_data_size = model
+                .attachment_raw_data
+                .get(Attachment::PTMATERIAL_ID)
+                .unwrap()
+                .len() as u64;
+            let req_data_allocation_size = (ptmaterial_data_size
+                / Attachment::PTMATERIAL.size() as u64)
+                * Attachment::NORMAL.size() as u64
+                * 4;
+            match self.attachment_raw_allocations.entry(Attachment::NORMAL_ID) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let old_allocation = e.get();
+                    if old_allocation.length_bytes() < req_data_allocation_size {
+                        let new_allocation = allocator
+                            .reallocate(e.get(), req_data_allocation_size)
+                            .expect("Failed to reallocate flat attachment raw data.");
+
+                        if old_allocation.start_index_stride_bytes()
+                            != new_allocation.start_index_stride_bytes()
+                        {
+                            did_allocate = true;
+                        }
+                        e.insert(new_allocation);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(
+                        allocator
+                            .allocate(req_data_allocation_size as u64)
+                            .expect("Failed to allocate flat attachment raw data."),
+                    );
+                    did_allocate = true;
+                }
             }
         }
 
@@ -304,8 +400,9 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
                 let mut node_data_packed = Vec::with_capacity(model.node_data.len() * 3);
                 for node in &model.node_data {
                     node_data_packed.push(node.child_ptr);
-                    node_data_packed.push((node.child_mask >> 32) as u32);
+                    // Little endian.
                     node_data_packed.push((node.child_mask & 0xFFFF_FFFF) as u32);
+                    node_data_packed.push((node.child_mask >> 32) as u32);
                 }
 
                 let node_data_bytes = bytemuck::cast_slice::<u32, u8>(&node_data_packed);
@@ -316,26 +413,27 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
                 );
             }
 
-            for (attachment, lookup_data) in &model.attachment_lookup_data {
+            for (attachment_id, lookup_data) in model.attachment_lookup_data.iter() {
                 let allocation = self
                     .attachment_lookup_allocations
-                    .get(attachment)
+                    .get(&attachment_id)
                     .expect("Lookup allocation should exist by now.");
 
                 let mut lookup_data_packed = Vec::with_capacity(lookup_data.len() * 3);
                 for lookup in lookup_data {
                     lookup_data_packed.push(lookup.data_ptr);
-                    lookup_data_packed.push((lookup.attachment_mask >> 32) as u32);
+                    // Little endian.
                     lookup_data_packed.push((lookup.attachment_mask & 0xFFFF_FFFF) as u32);
+                    lookup_data_packed.push((lookup.attachment_mask >> 32) as u32);
                 }
                 let lookup_data_bytes = bytemuck::cast_slice::<u32, u8>(&lookup_data_packed);
                 allocator.write_allocation_data(device, allocation, lookup_data_bytes);
             }
 
-            for (attachment, raw_data) in &model.attachment_raw_data {
+            for (attachment, raw_data) in model.attachment_raw_data.iter() {
                 let allocation = self
                     .attachment_raw_allocations
-                    .get(attachment)
+                    .get(&attachment)
                     .expect("Raw allocation should exist by now.");
                 //debug!("raw data {:?}", &raw_data[0..32]);
 
@@ -397,13 +495,13 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                 // Ensure we push nodes in reverse order and store the child pointer since we reverse the lis
                 let mut child_mask = 0u64;
                 let mut child_ptr = u32::MAX;
-                for (morton, node) in curr_level.drain(..).enumerate() {
+                for (morton, node) in curr_level.drain(..).enumerate().rev() {
                     let Some(node) = node else {
                         continue;
                     };
                     child_mask |= 1 << morton;
 
-                    // Don't process leaf layer.
+                    // Don't push leaf layer.
                     if h == height {
                         continue;
                     }
@@ -426,10 +524,11 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
         }
         let root_node = levels[0][0].clone().unwrap_or(THCNode::new_empty());
         if root_node.child_mask == 0 {
-            return VoxelModelTHC::new(length);
+            return VoxelModelTHC::new_empty(length);
         }
         node_list_rev.push(root_node);
 
+        // Flip the list around so the root node is first.
         let node_data_len = node_list_rev.len() as u32;
         assert!(node_data_len < 0x8000_0000);
         let mut node_data = node_list_rev
@@ -437,6 +536,9 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
             .map(|mut node| {
                 node.child_ptr = (node.child_ptr & 0x8000_0000)
                     | (node_data_len - 1 - (node.child_ptr & 0x7FFF_FFFF));
+                if node.child_ptr == 0x8000_0000 {
+                    node.child_mask = node.child_mask.reverse_bits();
+                }
                 node
             })
             .collect::<Vec<_>>();
@@ -445,8 +547,8 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
         // Allocated up here to prevent reallocation in the while loop below.
         let mut attachment_lookup: HashMap<AttachmentId, (Option<u32>, u64)> = HashMap::new();
 
-        let mut attachment_lookup_data = HashMap::new();
-        let mut attachment_raw_data = HashMap::new();
+        let mut attachment_lookup_data = AttachmentMap::new();
+        let mut attachment_raw_data = AttachmentMap::new();
         for (present_attachment, _) in flat.attachment_presence_data.iter() {
             attachment_lookup.insert(present_attachment, (None, 0));
             attachment_lookup_data.insert(
@@ -473,8 +575,8 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
             // Process internal node.
             let is_leaf = curr_node.child_ptr >> 31 == 1;
             if !is_leaf {
-                for child in (0..64usize).rev() {
-                    let child_bit = 1u64 << child;
+                for child in 0..64usize {
+                    let child_bit = 1u64 << (63 - child);
                     let is_present = (curr_node.child_mask & child_bit) > 0;
                     if !is_present {
                         continue;
@@ -482,7 +584,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
 
                     let child_offset = (curr_node.child_mask & (child_bit - 1)).count_ones();
                     let child_index = curr_node.child_ptr + child_offset;
-                    let child_morton_traversal = (curr_morton_traversal << 6) | child as u64;
+                    let child_morton_traversal = (curr_morton_traversal << 6) | (63 - child) as u64;
                     to_process.push((
                         child_index as usize,
                         &node_data[child_index as usize],
@@ -525,7 +627,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                         attachment_lookup.get_mut(&attachment_id).unwrap();
                     if attachment_raw_ptr.is_none() {
                         *attachment_raw_ptr =
-                            Some(attachment_raw_data.get(&attachment_id).unwrap().len() as u32);
+                            Some(attachment_raw_data.get(attachment_id).unwrap().len() as u32);
                     }
                     *attachment_mask |= child_bit;
 
@@ -538,7 +640,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                         [voxel_raw_attachment_data_start
                             ..(voxel_raw_attachment_data_start + attachment.size() as usize)];
                     attachment_raw_data
-                        .get_mut(&attachment_id)
+                        .get_mut(attachment_id)
                         .unwrap()
                         .extend_from_slice(voxel_raw_attachment_data);
                     //attachment_raw_data
@@ -565,15 +667,13 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                 //);
 
                 //debug!("Settings index {} for raw ptr {}", curr_node_index, raw_ptr);
-                attachment_lookup_data.get_mut(attachment_id).unwrap()[curr_node_index] =
+                attachment_lookup_data.get_mut(*attachment_id).unwrap()[curr_node_index] =
                     THCAttachmentLookupNode {
                         data_ptr: *raw_ptr,
                         attachment_mask: *attachment_mask,
                     };
             }
         }
-
-        // debug!("node data {:?}", &node_data.as_slice()[0..128]);
 
         VoxelModelTHC {
             side_length: length,

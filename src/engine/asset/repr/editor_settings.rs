@@ -43,6 +43,8 @@ pub struct EditorProjectAsset {
     pub editor_camera_transform: TransformAsset,
     pub editor_camera: CameraAsset,
     pub rotation_anchor: Vector3<f32>,
+    pub terrain_asset_path: Option<PathBuf>,
+    pub game_camera: Option</*uuid=*/ String>,
     pub game_entities: Vec<EditorGameEntityAsset>,
 }
 
@@ -55,6 +57,8 @@ impl EditorProjectAsset {
             editor_camera: CameraAsset {
                 camera: Camera::new(f32::consts::FRAC_PI_2),
             },
+            terrain_asset_path: None,
+            game_camera: None,
             rotation_anchor: Vector3::zeros(),
             game_entities: Vec::new(),
         }
@@ -64,12 +68,14 @@ impl EditorProjectAsset {
         &self,
         editor: &Editor,
         ecs_world: &ECSWorld,
-        registry: &VoxelModelRegistry,
+        voxel_world: &VoxelWorld,
+        terrain_asset_path: Option<PathBuf>,
+        game_camera: Option<Entity>,
     ) -> Self {
         let game_entities = ecs_world
             .query::<With<(), &GameEntity>>()
             .into_iter()
-            .map(|(id, _)| EditorGameEntityAsset::new(ecs_world, registry, id))
+            .map(|(id, _)| EditorGameEntityAsset::new(ecs_world, &voxel_world.registry, id))
             .collect::<Vec<_>>();
 
         let mut editor_camera_query = ecs_world
@@ -77,6 +83,13 @@ impl EditorProjectAsset {
             .unwrap();
         let (mut editor_transform, editor_camera) = editor_camera_query.get().unwrap();
 
+        let game_camera_uuid = game_camera.map(|e| {
+            ecs_world
+                .get::<&GameEntity>(e)
+                .expect("Game camera should be valid entity.")
+                .uuid
+                .to_string()
+        });
         Self {
             editor_camera_transform: TransformAsset {
                 transform: editor_transform.clone(),
@@ -85,7 +98,9 @@ impl EditorProjectAsset {
                 camera: editor_camera.clone(),
             },
             rotation_anchor: editor.editor_camera.rotation_anchor,
+            terrain_asset_path,
             game_entities,
+            game_camera: game_camera_uuid,
         }
     }
 }
@@ -160,9 +175,10 @@ impl EditorGameEntityAsset {
         mut ecs_world: &mut ECSWorld,
         assets: &mut Assets,
         loading_renderables: &mut HashMap<Entity, AssetHandle>,
-    ) {
+    ) -> Entity {
+        let uuid = uuid::Uuid::from_str(&self.uuid).unwrap();
         let id = ecs_world.spawn((GameEntity {
-            uuid: uuid::Uuid::from_str(&self.uuid).unwrap(),
+            uuid,
             name: self.name.clone(),
         },));
 
@@ -194,5 +210,7 @@ impl EditorGameEntityAsset {
                 }
             }
         }
+
+        return id;
     }
 }

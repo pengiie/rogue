@@ -1070,7 +1070,7 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
         }
     }
 
-    fn supply_pass_ref(&mut self, name: &str, mut pass: &mut dyn GfxPassOnceImpl) {
+    fn supply_pass_ref<'a>(&mut self, name: &str, mut pass: &mut (dyn GfxPassOnceImpl + 'a)) {
         let command_buffer = Self::acquire_command_buffer(&self.ctx, &mut self.command_pools)
             .expect("Failed to acquire command buffer.");
 

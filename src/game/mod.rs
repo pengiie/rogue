@@ -1,3 +1,5 @@
 pub mod entity;
 pub mod init;
-pub mod world;
+
+mod game;
+pub use game::*;

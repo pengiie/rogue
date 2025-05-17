@@ -5,7 +5,7 @@ use crate::{
     engine::{
         asset::{self, asset::Assets},
         debug::DebugRenderer,
-        editor::editor::Editor,
+        editor::editor::{Editor, EditorView},
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -17,7 +17,6 @@ use crate::{
             voxel_world::{VoxelWorld, VoxelWorldGpu},
         },
         window::time::{Instant, Time},
-        world::game_world::GameWorld,
     },
     game::entity::player::Player,
     session::Session,
@@ -51,21 +50,21 @@ pub fn game_loop(app: &App) {
     app.run_system(UI::update);
     app.run_system(UI::draw);
 
-    // ------- GAME WORLD ---------
-    app.run_system(GameWorld::update_io);
-    if app
-        .resource_bank()
-        .get_resource_mut::<GameWorld>()
-        .try_tick()
-    {
-        // TICK UPDATES
-    }
-
     // ------- PHYSICS/INPUT---------
 
     app.run_system(Editor::update_toggle);
     if app.get_resource::<Editor>().is_active {
-        app.run_system(Editor::update_editor);
+        app.run_system(Editor::update_editor_actions);
+        let curr_editor_view = app.get_resource::<Editor>().curr_editor_view;
+        match curr_editor_view {
+            EditorView::PanOrbit => {
+                app.run_system(Editor::update_editor_pan_orbit);
+            }
+            EditorView::Fps => {
+                app.run_system(Editor::update_editor_fps);
+            }
+        }
+        app.run_system(Editor::update_camera_animations);
     } else {
         // Update player logic.
         app.run_system(Player::update_from_input);

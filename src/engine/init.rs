@@ -8,7 +8,6 @@ use super::asset::repr::settings::SettingsAsset;
 use super::debug::DebugRenderer;
 use super::editor::editor::Editor;
 use super::graphics::camera::MainCamera;
-use super::world::game_world::GameWorld;
 use super::{
     asset::asset::Assets,
     audio::Audio,
@@ -44,8 +43,6 @@ pub fn init_pre_graphics(app: &mut App) {
     app.insert_resource(PhysicsWorld::new());
     app.insert_resource(Audio::new());
     app.insert_resource(MainCamera::new());
-    let game_world = GameWorld::new(&app.get_resource::<Settings>());
-    app.insert_resource(game_world);
 }
 
 /// The graphics `DeviceResource` has been inserted before this.

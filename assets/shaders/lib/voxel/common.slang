@@ -165,8 +165,8 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
       let esvo = ESVO(aabb, voxel_model_ptr);
       return esvo.trace(ray);
     case consts::VOXEL_MODEL_SCHEMA_THC:
-      let thc = THC(aabb, voxel_model_ptr);
-      return thc.trace(ray);
+      let thc = THC(voxel_model_ptr);
+      return thc.trace(ray, aabb);
     case consts::VOXEL_MODEL_SCHEMA_FLAT:
       let flat = Flat(voxel_model_ptr);
       return flat.trace(ray, aabb);
@@ -191,6 +191,10 @@ public struct Flat {
       info_data.Load<uint>((voxel_model_ptr + 3) << 2)
     );
     presence_data_ptr = info_data.Load<uint>((voxel_model_ptr + 4) << 2);
+  }
+
+  public uint3 get_side_length() {
+    return this.side_length;
   }
 
   public uint get_voxel_index(uint3 pos) {
@@ -292,6 +296,8 @@ public struct Flat {
   }
 
   private Optional<float3> load_normal(uint voxel_index) {
+    // Attachment presence is not checked we just assume the normal exists.
+    // TODO: Remove presence buffer.
     let normal_data_ptrs = load_attachment_ptrs(1);
     if (normal_data_ptrs == none) {
       return none;
@@ -516,19 +522,20 @@ public struct ESVO {
 public static bool testglobal = false;
 
 public struct THC {
-  AABB root_aabb;
   uint voxel_model_ptr;
   // Side length in voxels.
   uint side_length;
   uint quarter_side_length;
-  // Height of the tree starting from 0.
+  // Height of the tree starting from 0, therefore a 16 side_length 
+  // would have a height of 1. Conventionally it would have a 
+  // height of 2 but this height represents the jumps of nodes
+  // we must traverse before we reach the pre-leaf nodes.
   uint height;
   uint node_data_ptr;
 
-  public __init(AABB in_aabb, uint in_voxel_model_ptr) {
+  public __init(uint in_voxel_model_ptr) {
     let info_data = u_frame.voxel.model_info_data;
 
-    root_aabb = in_aabb;
     voxel_model_ptr = in_voxel_model_ptr;
     side_length = info_data.Load<uint>((voxel_model_ptr + 1) << 2);
     quarter_side_length = side_length >> 2;
@@ -537,46 +544,54 @@ public struct THC {
     node_data_ptr = info_data.Load<uint>((voxel_model_ptr + 2) << 2);
   }
 
-  private bool in_bounds(int3 global_grid) {
+  public bool in_bounds(int3 global_grid) {
     return global_grid.x >= 0 && global_grid.y >= 0 && 
            global_grid.z >= 0 && global_grid.x < this.side_length && 
            global_grid.y < this.side_length && global_grid.z < this.side_length;
   }
 
-  public RayModelTest trace(Ray in_ray) {
-    let root_hit_info = ray_aabb_test(in_ray, this.root_aabb);
+  public RayModelTest trace(Ray in_ray, AABB root_aabb) {
+    let root_hit_info = ray_aabb_test(in_ray, root_aabb);
     if (!root_hit_info.hit) {
       return RayModelTest.miss();
     }
     let ray = in_ray.advance_clone(root_hit_info.t_enter);
     
     // Local-space position with the origin being the AABB minimum.
-    let relative_model_pos = ray.origin - this.root_aabb.min();
+    let relative_model_pos = ray.origin - root_aabb.min();
     // Normalize the local-space to [0, 1), mapping from the AABB side length.
-    let norm_model_pos = relative_model_pos / this.root_aabb.side_length();
+    let norm_model_pos = clamp(relative_model_pos / root_aabb.side_length(),
+                               float3(0.0),
+                               float3(0.99999));
     // Turn the local-space position from [0, 1) to [0, this.side_length).
-    let norm_grid_pos = clamp(norm_model_pos * (float3) this.side_length, float3(0.0), (float3) (this.side_length - 1));
+    // TODO: Figure out the best way to clamp right before this.side_length 
+    // without floating point errors.
+    let norm_grid_pos = norm_model_pos * (float3) this.side_length;
     let norm_ray = Ray(norm_grid_pos, ray.dir, ray.inv_dir);
 
     var curr_node_idx = 0;
     uint curr_node_stack[8];
     var curr_height = 0;
-    // The local grid position in an octant with the range [0, 3].
     var curr_ray = norm_ray;
+    // The local grid position in an octant with the range [0, 3].
     var curr_local_grid = ((int3) floor(curr_ray.origin)) >> (this.height * 2);
     var curr_anchor_grid = int3(0);
 
     let unit_grid = (int3) sign(ray.dir);
+    var last_mask = root_hit_info.t_enter == root_hit_info.t_min;
 
     var i = 0;
     if (testglobal) {
       printf("INIT THE VOXEL!!!!!\n");
     }
-    while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 100) {
+    while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 200) {
       if (testglobal) {
         //printf("next iter\n");
       }
       i += 1;
+      if (i == 2) {
+              //return RayModelTest.hit((float3) curr_anchor_grid / float3(64.0), 0.0);
+      }
       let should_pop = curr_local_grid.x < 0 || curr_local_grid.y < 0 ||
                        curr_local_grid.z < 0 || curr_local_grid.x > 3 ||
                        curr_local_grid.y > 3 || curr_local_grid.z > 3;
@@ -590,16 +605,8 @@ public struct THC {
         curr_node_idx = curr_node_stack[curr_height];
         curr_local_grid = curr_anchor_grid >> ((this.height - curr_height) * 2); 
         curr_local_grid &= 3;
-        let old_anchor = curr_anchor_grid;
-        curr_anchor_grid = (curr_anchor_grid >> ((this.height - curr_height + 1) * 2)) << ((this.height - curr_height + 1) * 2);
-        if (testglobal) {
-          //printf("Popping height %u, prev anchor %d %d %d, new anchor %d %d %d, new local size %d %d %d\n", curr_height + 1, old_anchor.x, old_anchor.y, old_anchor.z,
-          //curr_anchor_grid.x, curr_anchor_grid.y, curr_anchor_grid.z,
-          //curr_local_grid.x, curr_local_grid.y, curr_local_grid.z);
-        }
-        // so we don't re-enter the same node we pop out of.
-        //return RayModelTest.hit(float3(0.0, 0.0, 1.0), 0.0);
-    //return RayModelTest.hit((float) curr_height / float3(3.0), 0.0);
+        curr_anchor_grid = (curr_anchor_grid >> ((this.height - curr_height + 1) * 2)) 
+                             << ((this.height - curr_height + 1) * 2);
       } else {
         uint children[2] = {this.load_node(curr_node_idx + 1), this.load_node(curr_node_idx + 2)};
         let morton = morton_encode((uint3) curr_local_grid);
@@ -607,10 +614,6 @@ public struct THC {
         let child_bit = 1 << (morton % 32);
         let children_half = children[morton_half];
         let is_child_present = (children_half & child_bit) > 0;
-        if (testglobal) {
-          // printf("Curr node idx is %u\n", curr_node_idx);
-          // printf("Curr local pos is %d %d %d\n", curr_local_grid.x, curr_local_grid.y, curr_local_grid.z);
-        }
         if (is_child_present) {
           let child_ptr_raw = this.load_node(curr_node_idx);
 
@@ -619,9 +622,28 @@ public struct THC {
 
           let is_leaf_node = (child_ptr_raw >> 31) > 0;
           if (is_leaf_node) {
-            if (let pt_material = this.load_ptmaterial(curr_node_idx, morton_half, child_bit, child_offset)) {
+            let voxel_addr = THCVoxelAddr(curr_node_idx, morton_half, child_bit);
+            if (let pt_material = this.load_ptmaterial(voxel_addr)) {
               //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
-              return RayModelTest.hit(pt_material, 0.0);
+              var color = pt_material;
+              if (let normal = this.load_normal(voxel_addr)) {
+                let l = sqrt(dot(normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
+                color *= max(l, 0.2);
+                
+              }
+              let next_point = curr_anchor_grid + curr_local_grid + max(unit_grid, 0);
+              let next_t = ray_point_test(curr_ray, next_point);
+              let min_t = min3(next_t.x, next_t.y, next_t.z);
+              //if (last_mask.x) {
+              //  color *= 0.8;
+              //} else if (last_mask.y) {
+              //  color *= 0.6;
+              //} else if (last_mask.z) {
+              //  color *= 0.4;
+              //}
+              let voxel_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;
+              let d = distance(in_ray.origin, root_aabb.min() + curr_ray.origin * voxel_scaling);
+              return RayModelTest.hit(color, d);
             }
             return RayModelTest.hit(float3(0.5), 0.0);
           }
@@ -642,29 +664,62 @@ public struct THC {
         }
       }
 
-      //var curr_grid_anchor = c >> ((this.height - curr_height) * 2);
-      //curr_grid_anchor = (curr_grid_anchor >> 2) << 2;
-      //curr_grid_anchor = curr_grid_anchor << ((this.height - curr_height) * 2);
       let curr_node_size = this.quarter_side_length >> (curr_height * 2);
       let next_point = curr_anchor_grid + curr_local_grid * curr_node_size + max(unit_grid, 0) * curr_node_size;
       let curr_t = ray_point_test(curr_ray, next_point);
       let next_t = min3(curr_t.x, curr_t.y, curr_t.z);
       let mask = curr_t == next_t;
+      last_mask = mask;
       curr_local_grid += int3(mask) * unit_grid; 
-      if (testglobal) {
-        printf("OLD global: %f %f %f\n", curr_ray.origin.x, curr_ray.origin.y, curr_ray.origin.z);
-      }
-      curr_ray.advance(next_t + 0.001);
-      if (testglobal) {
-        printf("NEW global: %f %f %f\n", curr_ray.origin.x, curr_ray.origin.y, curr_ray.origin.z);
+      curr_ray.advance(next_t + 0.00001);
+      if (i == 1) {
+        //if () {
+
+        //      return RayModelTest.hit(float3(0.5, 1.0, 0.2), 0.0);
+        //}
+              //return RayModelTest.hit((float3) mask, 0.0);
       }
     }
 
-if (curr_height == 0) {
-    return RayModelTest.hit(float3(0.0, 1.0, 0.0), 0.0);
-}
-    return RayModelTest.hit(float3((float) curr_height / 2.0), 0.0);
-    //return RayModelTest.miss();
+    return RayModelTest.miss();
+  }
+
+  public Optional<THCVoxelAddr> get_voxel_addr(uint3 global_voxel_pos) {
+    var curr_node_idx = 0;
+    var morton_half = 0;
+    var child_bit = 0;
+    var curr_height = 0;
+    var curr_local_grid = global_voxel_pos >> ((this.height) * 2);
+    while (curr_height <= this.height) {
+      uint children[2] = {this.load_node(curr_node_idx + 1), this.load_node(curr_node_idx + 2)};
+      let morton = morton_encode((uint3) curr_local_grid);
+      morton_half = morton / 32;
+      child_bit = 1 << (morton % 32);
+      let children_half = children[morton_half];
+      let is_child_present = (children_half & child_bit) > 0;
+      if (!is_child_present) {
+        return none;
+      }
+
+      let child_ptr_raw = this.load_node(curr_node_idx);
+      let is_leaf_node = (child_ptr_raw >> 31) > 0;
+      if (is_leaf_node) {
+        break;
+      }
+
+      var child_offset = countbits(children_half & (child_bit - 1));
+      child_offset += morton_half == 0 ? 0 : countbits(children[0]);
+      curr_node_idx = ((child_ptr_raw & 0x7FFFFFFF) + child_offset) * 3;
+      curr_height += 1;
+      curr_local_grid = global_voxel_pos >> ((this.height - curr_height) * 2);
+      curr_local_grid &= 3;
+    }
+
+    return THCVoxelAddr(curr_node_idx, morton_half, child_bit);
+  }
+
+  public uint get_side_length() {
+    return this.side_length;
   }
 
   private uint load_node(uint node_index) {
@@ -673,50 +728,139 @@ if (curr_height == 0) {
     );
   }
 
-  private Optional<uint> load_attachment_ptr(uint attachment_index, uint node_index, uint morton_half, 
-                                             uint child_bit, uint child_offset) {
+  private Optional<Tuple<uint, uint>> load_attachment_ptrs(uint attachment_index) {
     let info_data = u_frame.voxel.model_info_data;
-    let attachment_lookup_ptr = info_data.Load<uint>((voxel_model_ptr + 3 + attachment_index) << 2);
-    if (attachment_lookup_ptr == 0xFFFFFFFF) {
+    let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 3 + attachment_index) << 2);
+    if (attachment_presence_ptr == 0xFFFFFFFF) {
       return none;
     }
 
-    let attachment_raw_ptr = info_data.Load<uint>((voxel_model_ptr + 3 + consts::VOXEL_ATTACHMENT_COUNT + attachment_index) << 2);
+    let attachment_raw_ptr = info_data.Load<uint>(
+      (voxel_model_ptr + 3 + consts::VOXEL_ATTACHMENT_COUNT + attachment_index) << 2
+    );
     if (attachment_raw_ptr == 0xFFFFFFFF) {
       return none;
     }
 
-    let attachment_mask_half = u_frame.voxel.model_voxel_data.Load<uint>((attachment_lookup_ptr + node_index + 1 + morton_half) << 2);
-    let is_attachment_present = (attachment_mask_half & child_bit) > 0;
+    return makeTuple(attachment_presence_ptr, attachment_raw_ptr);
+  }
+
+  private Optional<uint> load_voxel_attachment(uint attachment_index, THCVoxelAddr voxel_addr) {
+    let attachment_ptr_pair = load_attachment_ptrs(attachment_index);
+    if (attachment_ptr_pair == none) {
+      return none;
+    }
+    let attachment_presence_ptr = attachment_ptr_pair.value._0;
+    let attachment_raw_ptr = attachment_ptr_pair.value._1;
+
+    uint attachment_mask[2] = {
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 1),
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 2)
+    };
+    let is_attachment_present = (attachment_mask[voxel_addr.morton_half] & voxel_addr.child_bit) > 0;
     if (!is_attachment_present) {
       return none;
     }
 
-    let node_attachment_data_ptr = u_frame.voxel.model_voxel_data.Load<uint>((attachment_lookup_ptr + node_index) << 2);
-    if (testglobal) {
-      // printf("node index is %u\n", node_index);
-      // printf("pointer is %u\n", node_attachment_data_ptr);
-    }
+    // Offset into the raw attachment data where the current 
+    // nodes children attachment data starts.
+    let node_attachment_data_ptr = 
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index);
+    var child_offset = countbits(attachment_mask[voxel_addr.morton_half] & (voxel_addr.child_bit - 1));
+    child_offset += voxel_addr.morton_half == 0 ? 0 : countbits(attachment_mask[0]);
     return attachment_raw_ptr + node_attachment_data_ptr + child_offset;
   }
 
-  private Optional<float3> load_ptmaterial(uint node_index, uint morton_half, uint child_bit, uint child_offset) {
-    let ptmaterial_data_ptr_opt = this.load_attachment_ptr(0, node_index, morton_half, child_bit, child_offset);
+  private uint load_voxel_attachment_offset_unchecked(uint presence_attachment_index, 
+                                                      uint data_attachment_index, 
+                                                      THCVoxelAddr voxel_addr) {
+    let info_data = u_frame.voxel.model_info_data;
+    let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 3 + presence_attachment_index) << 2);
+    let attachment_raw_ptr = info_data.Load<uint>(
+      (voxel_model_ptr + 3 + consts::VOXEL_ATTACHMENT_COUNT + data_attachment_index) << 2
+    );
+
+    uint attachment_mask[2] = {
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 1),
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 2)
+    };
+
+    // Offset into the raw attachment data where the current 
+    // nodes children attachment data starts.
+    let node_attachment_data_ptr = 
+      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index);
+    var child_offset = countbits(attachment_mask[voxel_addr.morton_half] & (voxel_addr.child_bit - 1));
+    child_offset += voxel_addr.morton_half == 0 ? 0 : countbits(attachment_mask[0]);
+    return attachment_raw_ptr + node_attachment_data_ptr + child_offset;
+  }
+
+  private uint load_attachment_lookup_node(uint attachment_lookup_ptr, uint node_index) {
+    return u_frame.voxel.model_voxel_data.Load<uint>(
+      (attachment_lookup_ptr + node_index) << 2
+    );
+  }
+
+  private Optional<float3> load_ptmaterial(THCVoxelAddr voxel_addr) {
+    let ptmaterial_data_ptr_opt = this.load_voxel_attachment(0, voxel_addr);
     if (ptmaterial_data_ptr_opt == none) {
       return none;
     }
     let ptmaterial_data_ptr = ptmaterial_data_ptr_opt.value;
     let compressed_ptmaterial = u_frame.voxel.model_voxel_data.Load<uint>(ptmaterial_data_ptr << 2);
-    if (testglobal) {
-      //printf("mat is %u\n", compressed_ptmaterial);
-    }
-
-    return color::srgb_to_lsrgb(float3(
-      (float) ((compressed_ptmaterial >> 16) & 0xFF) / 255.0,
-      (float) ((compressed_ptmaterial >> 8) & 0xFF) / 255.0,
-      (float) (compressed_ptmaterial & 0xFF) / 255.0,
-    ));
+    return ptmaterial_decode(compressed_ptmaterial);
   }
+
+  private Optional<float3> load_normal(THCVoxelAddr voxel_addr) {
+    let normal_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 1, voxel_addr);
+    let compressed_normal = u_frame.voxel.model_voxel_data.Load<uint>(normal_data_ptr << 2);
+    return normal_decode(compressed_normal);
+  }
+
+  public void set_normal(THCVoxelAddr voxel_addr, float3 normal) {
+    let normal_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 1, voxel_addr);
+    let compressed_normal = normal_encode(normal);
+    u_frame.voxel.rw_model_voxel_data.Store<uint>((normal_data_ptr) << 2, compressed_normal);
+  }
+
+  public void set_ptmaterial(THCVoxelAddr voxel_addr, float3 color) {
+    let ptmaterial_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 0, voxel_addr);
+    let compressed_ptmaterial = ptmaterial_encode(color);
+    u_frame.voxel.rw_model_voxel_data.Store<uint>((ptmaterial_data_ptr) << 2, compressed_ptmaterial);
+  }
+}
+
+public struct THCVoxelAddr {
+  public uint node_index;
+  public uint morton_half;
+  public uint child_bit;
+}
+
+public float3 ptmaterial_decode(uint comp) {
+    return color::srgb_to_lsrgb(float3(
+      (float) ((comp >> 16) & 0xFF) / 255.0,
+      (float) ((comp >> 8) & 0xFF) / 255.0,
+      (float) (comp & 0xFF) / 255.0,
+    ));
+}
+
+public uint ptmaterial_encode(float3 color) {
+    return (((uint) floor(color.x * 255.0)) << 16) |
+           (((uint) floor(color.y * 255.0)) << 8) |
+           (uint) floor(color.z * 255.0);
+}
+
+public uint normal_encode(float3 normal) {
+    return (((uint) floor((normal.x * 0.5 + 0.5) * 255.0)) << 16) |
+           (((uint) floor((normal.y * 0.5 + 0.5) * 255.0)) << 8) |
+           (uint) floor((normal.z * 0.5 + 0.5) * 255.0);
+}
+
+public float3 normal_decode(uint comp) {
+    return float3(
+      ((float) ((comp >> 16) & 0xFF) / 255.0) * 2.0 - 1.0,
+      ((float) ((comp >> 8) & 0xFF) / 255.0) * 2.0 - 1.0,
+      ((float) (comp & 0xFF) / 255.0) * 2.0 - 1.0,
+    );
 }
 
 } // namespace voxel

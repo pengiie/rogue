@@ -23,6 +23,7 @@ use crate::{
 
 use super::{
     attachment::{Attachment, AttachmentInfoMap, AttachmentMap, PTMaterial},
+    voxel_registry::VoxelModelId,
     voxel_world::{VoxelTraceInfo, VoxelWorld},
 };
 
@@ -304,6 +305,16 @@ pub struct VoxelEditInfo {
     pub world_voxel_position: Vector3<i32>,
     // Length in voxels of the edit.
     pub world_voxel_length: Vector3<u32>,
+    // Known attachment map so we can skip checking that for each voxel.
+    pub attachment_map: AttachmentInfoMap,
+}
+
+pub struct VoxelEditEntityInfo {
+    pub model_id: VoxelModelId,
+    // Minimum bottom-down-left origin.
+    pub local_voxel_pos: Vector3<i32>,
+    // Length in voxels of the edit.
+    pub voxel_length: Vector3<u32>,
     // Known attachment map so we can skip checking that for each voxel.
     pub attachment_map: AttachmentInfoMap,
 }

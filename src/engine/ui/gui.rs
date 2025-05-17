@@ -106,7 +106,11 @@ impl Egui {
         &mut self.ctx
     }
 
-    pub fn resolve_ui(&mut self, window: &Window, mut func: impl FnMut(&egui::Context)) {
+    pub fn resolve_ui(
+        &mut self,
+        window: &mut Window,
+        mut func: impl FnMut(&egui::Context, &mut Window),
+    ) {
         egui_winit::update_viewport_info(
             &mut self.viewport_info,
             &self.ctx,
@@ -129,7 +133,7 @@ impl Egui {
             .get_mut()
             .egui_ctx()
             .run(raw_input, |ui| {
-                func(ui);
+                func(ui, window);
             });
 
         self.primitives = self

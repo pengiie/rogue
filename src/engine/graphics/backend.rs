@@ -187,20 +187,20 @@ pub trait GraphicsBackendFrameGraphExecutor {
 
     fn supply_image_ref(&mut self, name: &str, image: &ResourceId<Image>);
     fn supply_buffer_ref(&mut self, name: &str, buffer: &ResourceId<Buffer>);
-    fn supply_pass_ref(&mut self, name: &str, pass: &mut dyn GfxPassOnceImpl);
+    fn supply_pass_ref(&mut self, name: &str, pass: &mut dyn GfxPassOnceImpl<'_>);
 
     fn write_uniforms(&mut self, write_fn: &mut dyn FnMut(&mut ShaderWriter, &FrameGraphContext));
 
     fn supply_input(&mut self, name: &str, input_data: Box<dyn std::any::Any>);
 }
 
-pub trait GfxPassOnceImpl {
+pub trait GfxPassOnceImpl<'a> {
     fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>);
 }
 
-impl<F> GfxPassOnceImpl for F
+impl<'a, F> GfxPassOnceImpl<'a> for F
 where
-    F: FnMut(&mut dyn GraphicsBackendRecorder, &FrameGraphContext),
+    F: FnMut(&mut dyn GraphicsBackendRecorder, &FrameGraphContext) + 'a,
 {
     fn run(&mut self, recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext) {
         self(recorder, ctx);
@@ -840,7 +840,7 @@ pub trait BindingDataType {
     fn clone(&self) -> Box<dyn BindingDataType>;
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub enum Binding {
     StorageImage { image: ResourceId<Image> },
     SampledImage { image: ResourceId<Image> },

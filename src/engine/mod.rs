@@ -13,4 +13,3 @@ pub mod system;
 pub mod ui;
 pub mod voxel;
 pub mod window;
-pub mod world;

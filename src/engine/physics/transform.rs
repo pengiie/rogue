@@ -58,10 +58,11 @@ impl Transform {
     }
 
     pub fn get_ray(&self) -> Ray {
-        Ray::new(
-            self.position,
-            self.rotation.transform_vector(&Vector3::new(0.0, 0.0, 1.0)),
-        )
+        Ray::new(self.position, self.forward())
+    }
+
+    pub fn forward(&self) -> Vector3<f32> {
+        self.rotation.transform_vector(&Vector3::new(0.0, 0.0, 1.0))
     }
 
     pub fn as_voxel_model_obb(&self, model_dimensions: Vector3<u32>) -> OBB {
@@ -87,5 +88,24 @@ impl Transform {
 
     pub fn position(&self) -> Vector3<f32> {
         self.position
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct LocalTransform {
+    pub transform: Transform,
+}
+
+impl std::ops::Deref for LocalTransform {
+    type Target = Transform;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transform
+    }
+}
+
+impl std::ops::DerefMut for LocalTransform {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.transform
     }
 }

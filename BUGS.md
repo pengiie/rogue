@@ -16,3 +16,7 @@ so if it is referenced later through the descriptor layout group, we get an inva
 Right now we lock any staging buffer that is used on the gpu even though the only memory we need
 to lock of it is just up to the write pointer. We can make it so we can still submit writes with that
 buffer, but to ping pong between different sections within the buffer to optimize the space used.
+
+## I use instants within the frame.
+I do that instead of using the start timestamp of the frame, maybe this is bad idk but noting
+it here in case it causes issues.

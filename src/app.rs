@@ -134,12 +134,14 @@ impl winit::application::ApplicationHandler for App {
         // If egui exists then input exists.
         if self.resource_bank().has_resource::<Egui>() {
             let window = self.resource_bank().get_resource::<Window>();
-            if self
-                .resource_bank()
-                .get_resource_mut::<Egui>()
-                .handle_window_event(&window, &event)
-            {
-                return;
+            if !window.is_cursor_locked() {
+                let egui_consumed = self
+                    .resource_bank()
+                    .get_resource_mut::<Egui>()
+                    .handle_window_event(&window, &event);
+                if egui_consumed {
+                    return;
+                }
             }
         }
         if self.resource_bank().has_resource::<Input>() {
@@ -215,6 +217,9 @@ impl winit::application::ApplicationHandler for App {
                 }
             }
             WinitWindowEvent::CloseRequested => {
+                self.resource_bank()
+                    .get_resource_mut::<Assets>()
+                    .wait_until_all_saved();
                 event_loop.exit();
             }
             _ => {}

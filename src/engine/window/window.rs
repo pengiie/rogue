@@ -104,13 +104,21 @@ impl Window {
     }
 
     pub fn set_cursor_grabbed(&self, grabbed: bool) {
-        let grab_mode = if grabbed {
-            winit::window::CursorGrabMode::Confined
+        if grabbed {
+            if let Err(_) = self
+                .winit_window
+                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+            {
+                if let Err(_) = self
+                    .winit_window
+                    .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+                {
+                    warn!("This platform does not support cursor grabbing.");
+                }
+            }
         } else {
-            winit::window::CursorGrabMode::None
-        };
-        if let Err(_) = self.winit_window.set_cursor_grab(grab_mode) {
-            warn!("This platform does not support cursor grabbing.");
+            self.winit_window
+                .set_cursor_grab(winit::window::CursorGrabMode::None);
         }
     }
 

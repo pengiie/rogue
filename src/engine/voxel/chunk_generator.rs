@@ -70,6 +70,8 @@ impl ChunkGenerator {
                             color.into(),
                         ))],
                     )
+                } else {
+                    voxel.set_removed();
                 }
             },
         );

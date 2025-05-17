@@ -1,7 +1,11 @@
+use std::f32;
+
 pub mod voxel {
     use crate::engine::voxel::voxel::VoxelModelSchema;
 
-    pub const TERRAIN_REGION_CHUNK_LENGTH: u32 = 2;
+    pub const TERRAIN_REGION_METER_LENGTH: f32 =
+        TERRAIN_REGION_CHUNK_LENGTH as f32 * TERRAIN_CHUNK_METER_LENGTH;
+    pub const TERRAIN_REGION_CHUNK_LENGTH: u32 = 16;
     pub const TERRAIN_REGION_TREE_HEIGHT: u32 = TERRAIN_REGION_CHUNK_LENGTH.trailing_zeros();
 
     // This MUST be a multiple of 4 to be best compatible with all voxel models
@@ -44,10 +48,12 @@ pub mod actions {
     pub mod keybind {
         use crate::engine::input::keyboard::Key;
 
-        pub const EDITOR_TOGGLE: Key = Key::E;
+        pub const EDITOR_TOGGLE: Key = Key::F2;
+        pub const EDITOR_TOGGLE_DEBUG: Key = Key::C;
     }
 
     pub const EDITOR_TOGGLE: &str = "editor_toggle";
+    pub const EDITOR_TOGGLE_DEBUG: &str = "editor_toggle_debug";
 }
 
 pub mod egui {
@@ -65,7 +71,7 @@ pub mod egui {
         pub const VOXEL_MODEL_FILE_ASSET: &str = "ui::icons::voxel_model_file::png";
 
         pub const UNKNOWN: &str = "icon_unknown";
-        pub const UNKNOWN_ASSET: &str = "ui::icons::folder::png";
+        pub const UNKNOWN_ASSET: &str = "ui::icons::unknown::png";
     }
 }
 
@@ -76,4 +82,5 @@ pub mod editor {
 
         pub const DRAGGING_SENSITIVITY: f32 = 0.05;
     }
+    pub const DOUBLE_CLICK_TIME_SECS: f32 = 0.5;
 }

@@ -1,4 +1,9 @@
-use std::{fs::Metadata, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    fs::Metadata,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use egui::Color32;
 use egui_dock::DockState;
@@ -11,65 +16,33 @@ use crate::{
     engine::{
         asset::{
             asset::{AssetPath, Assets},
-            repr::{editor_settings::EditorProjectAsset, image::ImageAsset},
+            repr::{
+                editor_settings::EditorProjectAsset, image::ImageAsset,
+                world::voxel::VoxelModelAnyAsset,
+            },
         },
         entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
+        graphics::camera::Camera,
         physics::transform::Transform,
         ui::{
             gui::Egui, EditorAssetBrowserState, EditorNewProjectDialog, EditorNewVoxelModelDialog,
-            EditorUIState, UI,
+            EditorTab, EditorUIState, UI,
         },
         voxel::{
             factory::VoxelModelFactory,
             flat::VoxelModelFlat,
-            voxel::{VoxelModel, VoxelModelType},
-            voxel_registry::VoxelModelId,
+            thc::VoxelModelTHC,
+            voxel::{VoxelModel, VoxelModelImpl, VoxelModelImplConcrete, VoxelModelType},
+            voxel_registry::{VoxelModelId, VoxelModelInfo},
             voxel_world::{self, VoxelWorld},
         },
+        window::window::Window,
     },
     game::entity::GameEntity,
     session::Session,
 };
 
-use super::editor::Editor;
-
-#[derive(Clone)]
-pub enum EditorTab {
-    WorldInspector,
-    EntityInspector,
-    Terrain,
-    Assets,
-}
-
-impl EditorTab {
-    pub fn name(&self) -> &str {
-        match self {
-            EditorTab::WorldInspector => "Inspector",
-            EditorTab::EntityInspector => "Entity",
-            EditorTab::Terrain => "Terrain",
-            EditorTab::Assets => "Assets",
-        }
-    }
-}
-
-struct EditorTabViewer<'a> {
-    ecs_world: &'a mut ECSWorld,
-    editor: &'a mut Editor,
-}
-
-impl egui_dock::TabViewer for EditorTabViewer<'_> {
-    type Tab = EditorTab;
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui_dock::egui::WidgetText {
-        egui_dock::egui::WidgetText::from(tab.name())
-    }
-
-    fn ui(&mut self, ui: &mut egui_dock::egui::Ui, tab: &mut Self::Tab) {
-        ui.add(egui::Label::new(egui::RichText::new(tab.name()).size(20.0)))
-            .rect
-            .size();
-    }
-}
+use super::editor::{Editor, EditorEditingTool, EditorView};
 
 pub fn init_editor_ui_textures(ctx: &egui::Context, ui_state: &mut EditorUIState) {
     let icon_color = ctx
@@ -230,10 +203,11 @@ pub fn egui_editor_ui(
     ctx: &egui::Context,
     ecs_world: &mut ECSWorld,
     voxel_world: &mut VoxelWorld,
-    editor: &mut Editor,
+    mut editor: &mut Editor,
     mut ui_state: &mut EditorUIState,
     session: &mut Session,
     assets: &mut Assets,
+    window: &mut Window,
 ) -> Vector4<f32> {
     if !ui_state.initialized_icons {
         init_editor_ui_textures(ctx, ui_state);
@@ -247,8 +221,12 @@ pub fn egui_editor_ui(
     dock_style.main_surface_border_stroke.width = 0.0;
     dock_style.main_surface_border_stroke.color = egui::Color32::TRANSPARENT;
 
-    let mut dock_viewer = EditorTabViewer { ecs_world, editor };
     content_padding.x = egui::TopBottomPanel::top("top_editor_pane")
+        .frame(
+            egui::Frame::new()
+                .fill(ctx.style().visuals.window_fill)
+                .inner_margin(6.0),
+        )
         .show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -265,6 +243,16 @@ pub fn egui_editor_ui(
                         }
                         ui.close_menu();
                     }
+                    if ui
+                        .add_enabled(
+                            session.project_save_dir.is_some(),
+                            egui::Button::new("Save"),
+                        )
+                        .clicked()
+                    {
+                        session.save_project(assets, session, editor, ecs_world, voxel_world);
+                        ui.close_menu();
+                    }
                     if ui.button("Open").clicked() {}
                 });
                 ui.menu_button("View", |ui| {
@@ -279,7 +267,32 @@ pub fn egui_editor_ui(
             });
             if session.project_save_dir.is_none() {
                 ui.label("Please perform File -> New to start a project.");
+                return;
             }
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        editor.curr_editor_view != EditorView::PanOrbit,
+                        egui::Button::new("Pan/Orbit/Zoom"),
+                    )
+                    .clicked()
+                {
+                    editor.switch_to_pan_orbit(ecs_world, window);
+                }
+
+                if ui
+                    .add_enabled(
+                        editor.curr_editor_view != EditorView::Fps,
+                        egui::Button::new("First person"),
+                    )
+                    .clicked()
+                {
+                    editor.switch_to_fps(window);
+                }
+            });
         })
         .response
         .rect
@@ -312,12 +325,20 @@ pub fn egui_editor_ui(
                     egui::RichText::new("Inspector").size(20.0),
                 ));
                 ui.menu_button("Add", |ui| {
+                    if ui.button("Empty").clicked() {
+                        ecs_world.spawn((
+                            GameEntity::new("new_entity"),
+                            Transform::with_translation(Translation3::from(
+                                editor.editor_camera.rotation_anchor,
+                            )),
+                        ));
+                    }
                     if ui.button("Cube").clicked() {
                         let model_id = voxel_world.registry.register_renderable_voxel_model(
                             "entity",
                             VoxelModelFactory::create_cuboid(
                                 Vector3::new(32, 32, 32),
-                                Color::new_srgb(1.0, 0.0, 0.0),
+                                editor.world_editing.color.clone(),
                             ),
                         );
                         ecs_world.spawn((
@@ -374,14 +395,18 @@ pub fn egui_editor_ui(
 
     content_padding.w = egui::SidePanel::right("right_editor_pane")
         .resizable(true)
-        .frame(
-            egui::Frame::new()
-                .fill(ctx.style().visuals.window_fill)
-                .inner_margin(8.0),
-        )
+        .frame(egui::Frame::new().fill(ctx.style().visuals.panel_fill))
         .default_width(300.0)
         .show(ctx, |ui| {
-            right_editor_pane(ui, ecs_world, &editor, voxel_world, &mut ui_state, &session);
+            right_editor_pane(
+                ui,
+                ecs_world,
+                &mut editor,
+                voxel_world,
+                &mut ui_state,
+                session,
+                assets,
+            );
         })
         .response
         .rect
@@ -556,6 +581,7 @@ pub fn new_voxel_model_dialog(
                     {
                         renderable.set_id(model_id);
                     }
+                    voxel_world.to_update_normals.insert(model_id);
                     force_close = true;
                 }
             });
@@ -672,18 +698,77 @@ fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUI
         });
 }
 
-fn right_editor_pane(
+fn entity_properties_pane(
     ui: &mut egui::Ui,
     ecs_world: &mut ECSWorld,
     editor: &Editor,
     voxel_world: &mut VoxelWorld,
     ui_state: &mut EditorUIState,
-    session: &Session,
+    session: &mut Session,
+    assets: &mut Assets,
 ) {
+    'existing_model_dialog_rx: {
+        match ui_state.existing_model_dialog.rx_file_name.try_recv() {
+            Ok(model_path) => {
+                let Ok(path) = PathBuf::from_str(&model_path) else {
+                    break 'existing_model_dialog_rx;
+                };
+                if !path.is_absolute() {
+                    break 'existing_model_dialog_rx;
+                }
+                if !path.starts_with(session.project_assets_dir().unwrap()) {
+                    log::error!(
+                        "Picked existing model path {:?} does start with the assets dir.",
+                        path
+                    );
+                    break 'existing_model_dialog_rx;
+                }
+
+                let Ok(metadata) = std::fs::metadata(&path) else {
+                    log::error!("Failed to get existing model file metadata.");
+                    break 'existing_model_dialog_rx;
+                };
+                if !metadata.is_file() {
+                    log::error!("Existing model path must be a file.");
+                    break 'existing_model_dialog_rx;
+                }
+
+                let model_path = PathBuf::from_str(&model_path).unwrap();
+                let asset_path = AssetPath::from_project_dir_path(
+                    session.project_save_dir.as_ref().unwrap(),
+                    &model_path,
+                );
+                let model = Assets::load_asset_sync::<VoxelModelAnyAsset>(asset_path.clone())
+                    .expect("Failed to load model");
+                let model_id = voxel_world.registry.register_renderable_voxel_model_any(
+                    format!(
+                        "asset_{:?}",
+                        model_path.strip_prefix(session.project_assets_dir().unwrap())
+                    ),
+                    model,
+                );
+                voxel_world
+                    .registry
+                    .set_voxel_model_asset_path(model_id, Some(asset_path));
+                if let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(
+                    ui_state.existing_model_dialog.associated_entity,
+                ) {
+                    renderable.set_id(model_id);
+                }
+                voxel_world.to_update_normals.insert(model_id);
+            }
+            Err(_) => {}
+        }
+    }
+
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Entity properties").size(20.0));
         if let Some(selected_entity) = &editor.selected_entity {
             ui.menu_button("Add component", |ui| {
+                if ui.button("Camera").clicked() {
+                    ecs_world.insert_one(*selected_entity, Camera::new(Camera::FOV_90));
+                    ui.close_menu();
+                }
                 if ui.button("Renderable").clicked() {
                     ecs_world.insert_one(*selected_entity, RenderableVoxelEntity::new_null());
                     ui.close_menu();
@@ -705,11 +790,20 @@ fn right_editor_pane(
             fn component_widget<R>(
                 ui: &mut egui::Ui,
                 header: &str,
+                on_remove: Option<&mut bool>,
                 add_contents: impl FnOnce(&mut egui::Ui) -> R,
             ) {
                 let last_spacing = ui.style().spacing.item_spacing.y;
-                ui.style_mut().spacing.item_spacing.y = 0.0;
-                ui.label(egui::RichText::new(header).size(16.0));
+                ui.style_mut().spacing.item_spacing.y = 2.0;
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(header).size(16.0));
+                    if let Some(on_remove) = on_remove {
+                        if ui.button("Remove").clicked() {
+                            *on_remove = true;
+                        }
+                    }
+                });
                 ui.style_mut().spacing.item_spacing.y = last_spacing;
                 egui::Frame::new()
                     .stroke(egui::Stroke::new(
@@ -725,16 +819,17 @@ fn right_editor_pane(
             };
 
             ui.style_mut().spacing.item_spacing.y = 8.0;
-            component_widget(ui, "General", |ui| {
+            component_widget(ui, "General", None, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Name: ");
                     ui.text_edit_singleline(&mut game_entity.name);
                 });
                 ui.label(format!("UUID: {}", game_entity.uuid));
             });
+            drop(game_entity);
 
             if let Ok(mut transform) = ecs_world.get::<&mut Transform>(*selected_entity) {
-                component_widget(ui, "Transform", |ui| {
+                component_widget(ui, "Transform", None, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Position:");
                         ui.label("X");
@@ -762,10 +857,11 @@ fn right_editor_pane(
                 });
             }
 
+            let mut remove_renderable = false;
             if let Ok(mut renderable_voxel_model) =
                 ecs_world.get::<&mut RenderableVoxelEntity>(*selected_entity)
             {
-                component_widget(ui, "Renderable", |ui| {
+                component_widget(ui, "Renderable", Some(&mut remove_renderable), |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Voxel model:");
                         let text = if let Some(model_id) = renderable_voxel_model.voxel_model_id() {
@@ -781,7 +877,7 @@ fn right_editor_pane(
                                             .to_string_lossy()
                                     )
                                 })
-                                .unwrap_or(String::new())
+                                .unwrap_or("In memory (unsaved)".to_string())
                         } else {
                             "None".to_owned()
                         };
@@ -801,15 +897,554 @@ fn right_editor_pane(
                                 ui.close_menu();
                             }
                             if ui.button("Choose existing").clicked() {
+                                let send = ui_state.existing_model_dialog.tx_file_name.clone();
+                                ui_state.existing_model_dialog.associated_entity = *selected_entity;
+                                std::thread::spawn(|| {
+                                    pollster::block_on(async move {
+                                        let file = rfd::AsyncFileDialog::new()
+                                            .add_filter("RVox", &["rvox"])
+                                            .pick_file()
+                                            .await;
+                                        let Some(file) = file else {
+                                            return;
+                                        };
+                                        send.send(file.path().to_string_lossy().to_string());
+                                    });
+                                });
+                                ui.close_menu();
+                            }
+                            let model_info = renderable_voxel_model
+                                .voxel_model_id()
+                                .map_or(None, |id| Some(voxel_world.registry.get_model_info(id)));
+                            if ui
+                                .add_enabled(
+                                    model_info
+                                        .filter(|info| info.asset_path.is_some())
+                                        .is_some(),
+                                    egui::Button::new("Save"),
+                                )
+                                .clicked()
+                            {
+                                let model_id = renderable_voxel_model.voxel_model_id().unwrap();
+                                let model_info = model_info.unwrap();
+                                let asset_path = model_info.asset_path.clone().unwrap();
+                                match &model_info.model_type {
+                                    Some(VoxelModelType::Flat) => {
+                                        let flat = voxel_world
+                                            .get_model::<VoxelModelFlat>(model_id)
+                                            .clone();
+                                        assets.save_asset(asset_path, flat);
+                                    }
+                                    Some(VoxelModelType::THC) => {
+                                        let thc = voxel_world
+                                            .get_model::<VoxelModelTHC>(model_id)
+                                            .clone();
+                                        assets.save_asset(asset_path, thc);
+                                    }
+                                    None => {
+                                        log::error!("Don't know how to save this asset format");
+                                    }
+                                }
                                 ui.close_menu();
                             }
                         });
                     });
+                    if let Some(model_id) = renderable_voxel_model.voxel_model_id() {
+                        let info = voxel_world.registry.get_model_info(model_id).clone();
+                        let text = match &info.model_type {
+                            Some(ty) => ty.as_ref(),
+                            None => "Unknown",
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label("Model type:");
+                            if let Some(model_type) = info.model_type {
+                                ui.menu_button(text, |ui| {
+                                    fn convert_model<
+                                        T: VoxelModelImplConcrete,
+                                        C: VoxelModelImplConcrete + for<'a> From<&'a T>,
+                                    >(
+                                        voxel_world: &mut VoxelWorld,
+                                        renderable_voxel_model: &mut RenderableVoxelEntity,
+                                        info: &VoxelModelInfo,
+                                        original_id: VoxelModelId,
+                                    ) {
+                                        let converted_model = C::from(
+                                            voxel_world.registry.get_model::<T>(original_id),
+                                        );
+                                        let converted_model_id =
+                                            voxel_world.registry.register_renderable_voxel_model(
+                                                &info.name,
+                                                VoxelModel::new(converted_model),
+                                            );
+                                        voxel_world.registry.set_voxel_model_asset_path(
+                                            converted_model_id,
+                                            info.asset_path.clone(),
+                                        );
+                                        renderable_voxel_model.set_id(converted_model_id);
+                                        voxel_world.to_update_normals.insert(converted_model_id);
+                                    }
+
+                                    ui.label("Convert to");
+                                    if ui
+                                        .add_enabled(
+                                            model_type != VoxelModelType::Flat,
+                                            egui::Button::new("Flat"),
+                                        )
+                                        .clicked()
+                                    {
+                                        match model_type {
+                                            VoxelModelType::THC => {
+                                                convert_model::<VoxelModelTHC, VoxelModelFlat>(
+                                                    voxel_world,
+                                                    &mut renderable_voxel_model,
+                                                    &info,
+                                                    model_id,
+                                                )
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            model_type != VoxelModelType::THC,
+                                            egui::Button::new("THC"),
+                                        )
+                                        .clicked()
+                                    {
+                                        match model_type {
+                                            VoxelModelType::Flat => {
+                                                convert_model::<VoxelModelFlat, VoxelModelTHC>(
+                                                    voxel_world,
+                                                    &mut renderable_voxel_model,
+                                                    &info,
+                                                    model_id,
+                                                )
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
+                            } else {
+                                ui.label(text);
+                            }
+                        });
+                    }
                 });
             }
-        } else {
+            if remove_renderable {
+                ecs_world.remove_one::<RenderableVoxelEntity>(*selected_entity);
+            }
+
+            let mut remove_camera = false;
+            if let Ok(mut camera) = ecs_world.get::<&mut Camera>(*selected_entity) {
+                component_widget(ui, "Camera", Some(&mut remove_camera), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("FOV");
+                        let mut deg = camera.fov.to_degrees();
+                        ui.add(egui::Slider::new(&mut deg, 1.0..=180.0));
+                        camera.fov = deg.to_radians();
+                    });
+                });
+            }
+            if remove_camera {
+                ecs_world.remove_one::<Camera>(*selected_entity);
+                if Some(*selected_entity) == session.game_camera {
+                    session.game_camera = None;
+                }
+            }
             ui.label("No entity selected.");
         }
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, content);
+}
+
+fn world_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    mut assets: &mut Assets,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+) {
+    'terrain_dialog_rx: {
+        match ui_state.terrain_dialog.rx_file_name.try_recv() {
+            Ok(new_terrain_dir) => {
+                let Ok(path) = PathBuf::from_str(&new_terrain_dir) else {
+                    break 'terrain_dialog_rx;
+                };
+                if !path.is_absolute() {
+                    break 'terrain_dialog_rx;
+                }
+                if !path.starts_with(session.project_assets_dir().unwrap()) {
+                    log::error!("Terrain path {:?} does start with the assets dir.", path);
+                    break 'terrain_dialog_rx;
+                }
+
+                let Ok(metadata) = std::fs::metadata(&path) else {
+                    log::error!("Failed to get terrian path metadata.");
+                    break 'terrain_dialog_rx;
+                };
+                if !metadata.is_dir() {
+                    log::error!("Terrain path must be a directory.");
+                    break 'terrain_dialog_rx;
+                }
+                let Ok(read) = std::fs::read_dir(&path) else {
+                    log::error!("Failed to read terrian path.");
+                    break 'terrain_dialog_rx;
+                };
+                let is_dir_empty = read.count() == 0;
+
+                session.terrain_dir = Some(path);
+                voxel_world.chunks.enqueue_save_all();
+                voxel_world
+                    .chunks
+                    .save_terrain(assets, &voxel_world.registry, &session);
+                if !is_dir_empty {
+                    voxel_world.chunks.clear();
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    let content = |ui: &mut egui::Ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("World").size(20.0));
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Terrain directory:");
+            let text = if let Some(terrain_dir) = &session.terrain_dir {
+                format!(
+                    "/{}",
+                    terrain_dir
+                        .strip_prefix(&session.project_assets_dir().unwrap())
+                        .unwrap()
+                        .to_string_lossy()
+                )
+            } else {
+                "None".to_owned()
+            };
+            if ui.button(text).clicked() {
+                let send = ui_state.terrain_dialog.tx_file_name.clone();
+                std::thread::spawn(|| {
+                    pollster::block_on(async move {
+                        let folder = rfd::AsyncFileDialog::new().pick_folder().await;
+                        let Some(folder) = folder else {
+                            return;
+                        };
+                        send.send(folder.path().to_string_lossy().to_string());
+                    });
+                });
+            }
+        });
+        if ui
+            .add_enabled(!voxel_world.chunks.is_saving(), egui::Button::new("Save"))
+            .clicked()
+        {
+            voxel_world
+                .chunks
+                .save_terrain(assets, &voxel_world.registry, session);
+        }
+
+        'editor_camera_props: {
+            let Some(editor_camera_entity) = editor.editor_camera_entity else {
+                break 'editor_camera_props;
+            };
+            let Ok(editor_transform) = ecs_world.get::<&Transform>(editor_camera_entity) else {
+                break 'editor_camera_props;
+            };
+            ui.label(format!(
+                "Editor camera position: {:.3} {:.3} {:.3}",
+                editor_transform.position.x,
+                editor_transform.position.y,
+                editor_transform.position.z
+            ));
+            let current_region = editor_transform
+                .position
+                .map(|x| (x / consts::voxel::TERRAIN_REGION_METER_LENGTH).floor() as i32);
+            ui.label(format!(
+                "Region: {} {} {}",
+                current_region.x, current_region.y, current_region.z
+            ));
+
+            let current_chunk = editor_transform
+                .position
+                .map(|x| (x / consts::voxel::TERRAIN_CHUNK_METER_LENGTH).floor() as i32);
+            ui.label(format!(
+                "Chunk: {} {} {}",
+                current_chunk.x, current_chunk.y, current_chunk.z
+            ));
+
+            let current_chunk = editor
+                .editor_camera
+                .rotation_anchor
+                .map(|x| (x / consts::voxel::TERRAIN_CHUNK_METER_LENGTH).floor() as i32);
+            ui.add_space(8.0);
+            ui.label(format!(
+                "Current chunk {} {} {}",
+                current_chunk.x, current_chunk.y, current_chunk.z
+            ));
+            ui.horizontal(|ui| {
+                ui.label("Generation radius:");
+                ui.add(
+                    egui::Slider::new(&mut editor.terrain_generation.generation_radius, 0..=4)
+                        .step_by(1.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                let is_currently_generating = voxel_world.async_edit_count() > 0;
+                if ui
+                    .add_enabled(
+                        !is_currently_generating,
+                        egui::Button::new("Generate chunks"),
+                    )
+                    .clicked()
+                {
+                    let center = current_chunk;
+                    let rad = editor.terrain_generation.generation_radius as i32;
+                    let min = center - Vector3::new(rad, rad, rad);
+                    let side_length = (rad * 2 - 1).max(0);
+                    let max = min + Vector3::new(side_length, side_length, side_length);
+                    for x in min.x..=max.x {
+                        for y in min.y..=max.y {
+                            for z in min.z..=max.z {
+                                editor
+                                    .terrain_generation
+                                    .chunk_generator
+                                    .generate_chunk(voxel_world, Vector3::new(x, y, z));
+                            }
+                        }
+                    }
+                }
+                if is_currently_generating {
+                    ui.label(format!(
+                        "Generating, {} chunk{} remaining",
+                        voxel_world.async_edit_count(),
+                        if voxel_world.async_edit_count() > 1 {
+                            "s"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+            });
+        }
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, content);
+}
+
+fn editing_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+    assets: &mut Assets,
+) {
+    let content = |ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("Voxel Editing").size(20.0));
+
+        ui.horizontal(|ui| {
+            ui.label("Entity editing enabled:");
+            ui.add(egui::Checkbox::without_text(
+                &mut editor.world_editing.entity_enabled,
+            ));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Terrain editing enabled:");
+            ui.checkbox(&mut editor.world_editing.terrain_enabled, "");
+        });
+
+        let editor_color = &mut editor.world_editing.color;
+        let mut egui_color = egui::Color32::from_rgb(
+            editor_color.r_u8(),
+            editor_color.g_u8(),
+            editor_color.b_u8(),
+        );
+
+        egui::color_picker::color_picker_color32(
+            ui,
+            &mut egui_color,
+            egui::color_picker::Alpha::Opaque,
+        );
+        editor_color.set_rgb_u8(egui_color.r(), egui_color.g(), egui_color.b());
+
+        ui.add_enabled_ui(
+            editor.world_editing.terrain_enabled || editor.world_editing.entity_enabled,
+            |ui| {
+                ui.label("Tools");
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            editor.world_editing.tool != EditorEditingTool::Pencil,
+                            egui::Button::new("Pencil"),
+                        )
+                        .clicked()
+                    {
+                        editor.world_editing.tool = EditorEditingTool::Pencil;
+                    }
+                    if ui
+                        .add_enabled(
+                            editor.world_editing.tool != EditorEditingTool::Eraser,
+                            egui::Button::new("Eraser"),
+                        )
+                        .clicked()
+                    {
+                        editor.world_editing.tool = EditorEditingTool::Eraser;
+                    }
+                });
+                ui.add_space(8.0);
+
+                let size = &mut editor.world_editing.size;
+                match &mut editor.world_editing.tool {
+                    EditorEditingTool::Pencil => {
+                        ui.label(egui::RichText::new("Pencil").size(18.0));
+                        ui.horizontal(|ui| {
+                            ui.label("Size:");
+                            ui.add(egui::Slider::new(size, 0..=100).step_by(1.0));
+                        });
+                    }
+                    EditorEditingTool::Brush => {}
+                    EditorEditingTool::Eraser => {
+                        ui.label(egui::RichText::new("Eraser").size(18.0));
+                        ui.horizontal(|ui| {
+                            ui.label("Size:");
+                            ui.add(egui::Slider::new(size, 0..=100).step_by(1.0));
+                        });
+                    }
+                }
+            },
+        );
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, content);
+}
+
+fn right_editor_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+    assets: &mut Assets,
+) {
+    ui.horizontal(|ui| {
+        ui.style_mut().spacing.item_spacing.x = 1.0;
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::EntityProperties,
+                egui::Button::new("Entity"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::EntityProperties;
+        }
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::WorldProperties,
+                egui::Button::new("World"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::WorldProperties;
+        }
+
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::Editing,
+                egui::Button::new("Editing"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::Editing;
+        }
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::Game,
+                egui::Button::new("Game"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::Game;
+        }
+    });
+
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| match ui_state.right_pane_state {
+            EditorTab::EntityProperties => {
+                entity_properties_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    ui_state,
+                    session,
+                    assets,
+                );
+            }
+            EditorTab::WorldProperties => {
+                world_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    assets,
+                    ui_state,
+                    session,
+                );
+            }
+            EditorTab::Editing => {
+                editing_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    ui_state,
+                    session,
+                    assets,
+                );
+            }
+            EditorTab::Game => {
+                game_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    ui_state,
+                    session,
+                    assets,
+                );
+            }
+        });
+}
+
+pub fn game_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+    assets: &mut Assets,
+) {
+    let content = |ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("Game Settings").size(20.0));
     };
 
     egui::ScrollArea::vertical()

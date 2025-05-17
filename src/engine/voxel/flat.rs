@@ -24,9 +24,10 @@ use crate::{
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     esvo::{VoxelModelESVO, VoxelModelESVONode},
+    thc::VoxelModelTHC,
     voxel::{
         VoxelData, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace,
+        VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
 };
 
@@ -628,6 +629,10 @@ impl From<&VoxelModelFlat> for VoxelModelESVO {
 
 impl VoxelModelImplConcrete for VoxelModelFlat {
     type Gpu = VoxelModelFlatGpu;
+
+    fn model_type() -> Option<VoxelModelType> {
+        Some(VoxelModelType::Flat)
+    }
 }
 
 impl VoxelModelImpl for VoxelModelFlat {
@@ -1024,5 +1029,65 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             self.initialized_data = true;
             return;
         }
+    }
+}
+
+impl From<&VoxelModelTHC> for VoxelModelFlat {
+    fn from(thc: &VoxelModelTHC) -> Self {
+        let mut flat = VoxelModelFlat::new_empty(Vector3::new(
+            thc.side_length,
+            thc.side_length,
+            thc.side_length,
+        ));
+        for (_, attachment) in thc.attachment_map.iter() {
+            flat.initialize_attachment_buffers(attachment);
+        }
+
+        let mut to_process = vec![(/*curr_node*/ 0usize, /*traversal*/ 0u64)];
+        while let Some((node_idx, traversal)) = to_process.pop() {
+            let node_data = &thc.node_data[node_idx];
+            if node_data.is_leaf_node() {
+                for child in 0u64..64 {
+                    if !node_data.has_child(child as u32) {
+                        continue;
+                    }
+
+                    let voxel_morton = (traversal << 6) | child;
+                    let local_pos = morton_decode(voxel_morton);
+                    let mut voxel = flat.get_voxel_mut(local_pos);
+                    for (attachment_id, attachment) in thc.attachment_map.iter() {
+                        let lookup_data = thc.attachment_lookup_data.get(attachment_id).unwrap();
+                        let lookup_node = &lookup_data[node_idx];
+                        if !lookup_node.has_child(child as u32) {
+                            continue;
+                        }
+
+                        let raw_data = thc.attachment_raw_data.get(attachment_id).unwrap();
+                        let child_offset =
+                            (lookup_node.attachment_mask & ((1 << child) - 1)).count_ones();
+                        let src_offset =
+                            ((lookup_node.data_ptr + child_offset) * attachment.size()) as usize;
+                        voxel.set_attachment_id(
+                            attachment_id,
+                            &raw_data[src_offset..(src_offset + attachment.size() as usize)],
+                        );
+                    }
+                }
+            } else {
+                for child in 0u64..64 {
+                    if !node_data.has_child(child as u32) {
+                        continue;
+                    }
+
+                    let child_offset = (node_data.child_mask & ((1 << child) - 1)).count_ones();
+                    to_process.push((
+                        (node_data.child_ptr() + child_offset) as usize,
+                        (traversal << 6) | child,
+                    ));
+                }
+            }
+        }
+
+        return flat;
     }
 }

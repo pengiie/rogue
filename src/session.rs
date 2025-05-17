@@ -26,6 +26,7 @@ use crate::{
         resource::{Res, ResMut},
         voxel::{
             flat::VoxelModelFlat,
+            thc::VoxelModelTHC,
             voxel::{VoxelModel, VoxelModelType},
             voxel_world::VoxelWorld,
         },
@@ -40,6 +41,8 @@ pub struct Session {
 
     pub autosave_timer: Timer,
     pub project_save_dir: Option<PathBuf>,
+    pub terrain_dir: Option<PathBuf>,
+    pub game_camera: Option<Entity>,
 
     pub loading_renderables: HashMap<Entity, AssetHandle>,
 }
@@ -77,7 +80,9 @@ impl Session {
             project,
 
             project_save_dir,
+            terrain_dir: None,
             autosave_timer: Timer::new(Duration::from_secs(5)),
+            game_camera: None,
 
             loading_renderables: HashMap::new(),
         }
@@ -94,12 +99,15 @@ impl Session {
     ) {
         let session: &mut Session = &mut session;
         for entity in &session.project.game_entities {
-            entity.spawn(
+            let entity_id = entity.spawn(
                 session.project_save_dir.clone().unwrap(),
                 &mut ecs_world,
                 &mut assets,
                 &mut session.loading_renderables,
             );
+            if Some(&entity.uuid) == session.project.game_camera.as_ref() {
+                session.game_camera = Some(entity_id);
+            }
         }
     }
 
@@ -134,23 +142,22 @@ impl Session {
             let model = *assets
                 .take_asset::<VoxelModelAnyAsset>(asset_handle)
                 .unwrap();
-            let model_id = match model.model_type {
-                VoxelModelType::Flat => {
-                    let boxed_flat = model.model.downcast::<VoxelModelFlat>().unwrap();
-                    voxel_world
-                        .registry
-                        .register_renderable_voxel_model::<VoxelModelFlat>(
-                            format!(
-                                "asset_{:?}",
-                                asset_handle.asset_path().asset_path.as_ref().unwrap()
-                            ),
-                            VoxelModel::new(*boxed_flat),
-                        )
-                }
-            };
+            let model_id = voxel_world.registry.register_renderable_voxel_model_any(
+                format!(
+                    "asset_{:?}",
+                    asset_handle.asset_path().asset_path.as_ref().unwrap()
+                ),
+                model,
+            );
             voxel_world
                 .registry
                 .set_voxel_model_asset_path(model_id, Some(asset_handle.asset_path().clone()));
+            log::info!(
+                "Settings asset path voxel for {:?} {:?}",
+                asset_handle.asset_path(),
+                model_id
+            );
+            voxel_world.to_update_normals.insert(model_id);
             renderable.set_id(model_id);
         }
         for e in completed {
@@ -171,6 +178,33 @@ impl Session {
             //            .new_existing(&editor, &ecs_world, &voxel_world.registry),
             //    );
             //}
+        }
+    }
+
+    pub fn save_project(
+        &self,
+        assets: &mut Assets,
+        session: &Session,
+        editor: &Editor,
+        ecs_world: &ECSWorld,
+        voxel_world: &VoxelWorld,
+    ) {
+        assets.save_asset(
+            AssetPath::new_user_dir(consts::io::EDITOR_SETTINGS_FILE),
+            session.editor_settings.clone(),
+        );
+
+        if let Some(save_dir) = &session.project_save_dir {
+            assets.save_asset(
+                AssetPath::new(save_dir.join("project.json")),
+                session.project.new_existing(
+                    editor,
+                    ecs_world,
+                    voxel_world,
+                    self.terrain_dir.clone(),
+                    self.game_camera.clone(),
+                ),
+            );
         }
     }
 }

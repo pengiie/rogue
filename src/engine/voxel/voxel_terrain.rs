@@ -1,7 +1,8 @@
 use core::panic;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    ops::Range,
+    ops::{Deref, Range},
+    path::PathBuf,
     sync::mpsc::{Receiver, Sender},
     time::Duration,
 };
@@ -37,6 +38,7 @@ use crate::{
         },
         window::time::Timer,
     },
+    session::Session,
     settings::Settings,
 };
 
@@ -48,7 +50,7 @@ use super::{
     voxel_world::{VoxelWorld, VoxelWorldModelGpuInfo},
 };
 
-pub type ChunkModelType = VoxelModelFlat;
+pub type ChunkModelType = VoxelModelTHC;
 
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
@@ -305,9 +307,69 @@ impl VoxelChunks {
         !self.waiting_save_handles.is_empty()
     }
 
-    pub fn save_terrain(&mut self, assets: &mut Assets, registry: &VoxelModelRegistry) {
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.edited_chunks.is_empty() || !self.edited_regions.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.regions.clear();
+        self.chunk_load_iter.reset();
+    }
+
+    pub fn enqueue_save_all(&mut self) {
+        for (region_pos, region) in &self.regions {
+            match &region {
+                VoxelChunkRegion::Loading => {}
+                VoxelChunkRegion::Data(voxel_chunk_region_data) => {
+                    self.edited_regions.insert(*region_pos);
+
+                    let mut to_process =
+                        vec![(/*traversal*/ 0u64, &voxel_chunk_region_data.root_node)];
+                    while let Some((traversal, next)) = to_process.pop() {
+                        match next.deref() {
+                            VoxelChunkRegionNode::Internal(children) => {
+                                for (i, child) in children.iter().enumerate() {
+                                    let Some(child) = child else { continue };
+                                    to_process.push(((traversal << 3) | i as u64, child));
+                                }
+                            }
+                            VoxelChunkRegionNode::Preleaf(leaves) => {
+                                for (i, leaf) in leaves.iter().enumerate() {
+                                    match leaf {
+                                        VoxelRegionLeafNode::Empty => {}
+                                        VoxelRegionLeafNode::Existing { uuid, model } => {
+                                            let morton = (traversal << 3) | i as u64;
+                                            let local_chunk_pos =
+                                                morton::morton_decode(morton).cast::<i32>();
+                                            let world_chunk_pos = *region_pos
+                                                * consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as i32
+                                                + local_chunk_pos;
+                                            self.edited_chunks.insert(world_chunk_pos);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn save_terrain(
+        &mut self,
+        assets: &mut Assets,
+        registry: &VoxelModelRegistry,
+        session: &Session,
+    ) {
         assert!(!self.is_saving());
 
+        let Some(project_dir) = &session.project_save_dir else {
+            return;
+        };
+        let Some(terrain_dir) = &session.terrain_dir else {
+            return;
+        };
         for region_pos in self.edited_regions.drain() {
             let region = self
                 .regions
@@ -316,8 +378,10 @@ impl VoxelChunks {
             let VoxelChunkRegion::Data(region) = region else {
                 panic!("Region should be loaded if saving.");
             };
-            let save_handle =
-                assets.save_asset(Self::region_asset_path(region_pos), region.clone());
+            let save_handle = assets.save_asset(
+                Self::region_asset_path(project_dir.clone(), terrain_dir.clone(), region_pos),
+                region.clone(),
+            );
             self.waiting_save_handles.insert(save_handle);
         }
 
@@ -331,8 +395,10 @@ impl VoxelChunks {
                     let model_id =
                         model.expect("Model should exist on the chunk if we are saving it");
                     let chunk_model = registry.get_model::<ChunkModelType>(model_id);
-                    let save_handle =
-                        assets.save_asset(Self::chunk_asset_path(uuid), chunk_model.clone());
+                    let save_handle = assets.save_asset(
+                        Self::chunk_asset_path(project_dir.clone(), terrain_dir.clone(), uuid),
+                        chunk_model.clone(),
+                    );
                     self.waiting_save_handles.insert(save_handle);
                 }
             }
@@ -343,8 +409,19 @@ impl VoxelChunks {
         renderable_chunks: &mut RenderableChunks,
         chunk_pos: &Vector3<i32>,
     ) {
-        if renderable_chunks.in_bounds(chunk_pos) && renderable_chunks.chunk_exists(*chunk_pos) {
-            renderable_chunks.to_update_chunk_normals.insert(*chunk_pos);
+        let min = chunk_pos.add_scalar(-1);
+        let max = chunk_pos.add_scalar(1);
+        for x in min.x..=max.x {
+            for y in min.y..=max.y {
+                for z in min.z..=max.z {
+                    let chunk_pos = Vector3::new(x, y, z);
+                    if renderable_chunks.in_bounds(&chunk_pos)
+                        && renderable_chunks.chunk_exists(chunk_pos)
+                    {
+                        renderable_chunks.to_update_chunk_normals.insert(chunk_pos);
+                    }
+                }
+            }
         }
     }
 
@@ -387,23 +464,34 @@ impl VoxelChunks {
         return Some(region.get_or_create_chunk_mut(&world_chunk_pos));
     }
 
-    pub fn ensure_chunk_loaded(&mut self, chunk_pos: Vector3<i32>, assets: &mut Assets) {
+    pub fn ensure_chunk_loaded(
+        &mut self,
+        chunk_pos: Vector3<i32>,
+        assets: &mut Assets,
+        session: &Session,
+    ) {
         let Some(chunk_node) = self.get_chunk_node(chunk_pos) else {
             let chunk_region = Self::chunk_to_region_pos(&chunk_pos);
-            if !self.waiting_io_regions.contains_key(&chunk_region) {
-                let region_asset_handle =
-                    assets.load_asset::<VoxelChunkRegionData>(AssetPath::new_user_dir(&format!(
-                        "terrain::region_{}_{}_{}::rog",
-                        chunk_region.x, chunk_region.y, chunk_region.z
-                    )));
-                self.regions.insert(chunk_region, VoxelChunkRegion::Loading);
-                self.waiting_io_regions
-                    .insert(chunk_region, region_asset_handle);
+            if let Some(terrain_dir) = &session.terrain_dir {
+                if !self.waiting_io_regions.contains_key(&chunk_region) {
+                    let region_asset_handle =
+                        assets.load_asset::<VoxelChunkRegionData>(VoxelChunks::region_asset_path(
+                            session.project_save_dir.clone().unwrap(),
+                            terrain_dir.clone(),
+                            chunk_region,
+                        ));
+                    self.regions.insert(chunk_region, VoxelChunkRegion::Loading);
+                    self.waiting_io_regions
+                        .insert(chunk_region, region_asset_handle);
+                }
+                self.waiting_io_region_chunks
+                    .entry(chunk_region)
+                    .or_default()
+                    .insert(chunk_pos);
+            } else {
+                self.regions
+                    .insert(chunk_region, VoxelChunkRegion::empty(chunk_region));
             }
-            self.waiting_io_region_chunks
-                .entry(chunk_region)
-                .or_default()
-                .insert(chunk_pos);
             return;
         };
 
@@ -413,28 +501,56 @@ impl VoxelChunks {
                 let Some(model_id) = model else {
                     // Load the chunk model.
                     let chunk_asset_handle =
-                        assets.load_asset::<ChunkModelType>(Self::chunk_asset_path(uuid));
+                        assets.load_asset::<ChunkModelType>(Self::chunk_asset_path(
+                            session.project_save_dir.clone().unwrap(),
+                            session.terrain_dir.clone().unwrap(),
+                            uuid,
+                        ));
                     self.waiting_io_chunks.push((chunk_pos, chunk_asset_handle));
                     return;
                 };
-                self.renderable_chunks.try_load_chunk(&chunk_pos, *model_id);
-                Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
+                if self.renderable_chunks.try_load_chunk(&chunk_pos, *model_id) {
+                    Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
+                }
             }
         }
     }
 
-    fn region_asset_path(region_pos: Vector3<i32>) -> AssetPath {
-        AssetPath::new_user_dir(&format!(
-            "terrain::region_{}_{}_{}::rog",
-            region_pos.x, region_pos.y, region_pos.z
-        ))
+    pub fn region_asset_path(
+        project_dir: PathBuf,
+        terrain_dir: PathBuf,
+        region_pos: Vector3<i32>,
+    ) -> AssetPath {
+        let terrain_dir_path = AssetPath::from_project_dir_path(&project_dir, &terrain_dir);
+        AssetPath::new_project_dir(
+            project_dir,
+            format!(
+                "{}::region_{}_{}_{}::rog",
+                terrain_dir_path.asset_path.unwrap(),
+                region_pos.x,
+                region_pos.y,
+                region_pos.z
+            ),
+        )
     }
 
-    fn chunk_asset_path(uuid: &uuid::Uuid) -> AssetPath {
-        AssetPath::new_user_dir(&format!("terrain::chunk_{}::rog", uuid.to_string()))
+    pub fn chunk_asset_path(
+        project_dir: PathBuf,
+        terrain_dir: PathBuf,
+        uuid: &uuid::Uuid,
+    ) -> AssetPath {
+        let terrain_dir_path = AssetPath::from_project_dir_path(&project_dir, &terrain_dir);
+        AssetPath::new_project_dir(
+            project_dir,
+            format!(
+                "{}::chunk_{}::rvox",
+                terrain_dir_path.asset_path.unwrap(),
+                uuid.to_string()
+            ),
+        )
     }
 
-    pub fn process_waiting_io_regions(&mut self, assets: &mut Assets) {
+    pub fn process_waiting_io_regions(&mut self, assets: &mut Assets, session: &Session) {
         let mut to_remove_waiting_regions = Vec::new();
         for (region_pos, asset_handle) in self.waiting_io_regions.iter() {
             let status = assets.get_asset_status(asset_handle);
@@ -470,8 +586,9 @@ impl VoxelChunks {
                     let chunk_node = region.get_chunk(&chunk_pos);
                     if let VoxelRegionLeafNode::Existing { uuid, model } = chunk_node {
                         assert!(model.is_none(), "We shouldn't be loading this chunk if it already has an existing model.");
-                        let chunk_asset_handle =
-                            assets.load_asset::<ChunkModelType>(Self::chunk_asset_path(uuid));
+                        let chunk_asset_handle = assets.load_asset::<VoxelModelTHC>(
+                            Self::chunk_asset_path(session.project_save_dir.clone().unwrap(), session.terrain_dir.clone().expect("If the region was loaded then a directory for the terrain must exist."), uuid),
+                        );
                         self.waiting_io_chunks.push((chunk_pos, chunk_asset_handle));
                     }
                 }
@@ -565,6 +682,16 @@ impl VoxelChunks {
                 self.renderable_chunks
                     .try_load_chunk(chunk_position, model_id);
                 Self::try_update_chunk_normal(&mut self.renderable_chunks, chunk_position);
+            } else {
+                let chunk_region = Self::chunk_to_region_pos(&chunk_position);
+                let chunk_node = self
+                    .regions
+                    .get_mut(&chunk_region)
+                    .expect("Region should be loaded by now.")
+                    .data_mut()
+                    .get_existing_chunk_mut(chunk_position)
+                    .expect("Should should exist and not be empty.");
+                *chunk_node = VoxelRegionLeafNode::Empty;
             }
             to_remove_waiting_chunks.push(i);
         }
@@ -588,7 +715,12 @@ impl VoxelChunks {
         chunk_pos.map(|x| x.div_euclid(consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as i32))
     }
 
-    pub fn update_chunk_queue(&mut self, assets: &mut Assets, registry: &mut VoxelModelRegistry) {
+    pub fn update_chunk_queue(
+        &mut self,
+        assets: &mut Assets,
+        registry: &mut VoxelModelRegistry,
+        session: &Session,
+    ) {
         let mut to_remove_handles = Vec::new();
         for handle in self.waiting_save_handles.iter() {
             if assets.get_asset_status(handle).is_saved() {
@@ -606,11 +738,11 @@ impl VoxelChunks {
         // Try enqueue any not visited chunks if the current queue isn't full.
         if self.queue_timer.try_complete() {
             if let Some(next_chunk) = self.chunk_load_iter.next_chunk() {
-                self.ensure_chunk_loaded(next_chunk, assets);
+                self.ensure_chunk_loaded(next_chunk, assets, session);
             }
         }
 
-        self.process_waiting_io_regions(assets);
+        self.process_waiting_io_regions(assets, session);
         self.process_waiting_io_chunks(assets, registry);
     }
 
@@ -651,6 +783,11 @@ impl ChunkLoadIter {
             curr_index: 0,
             current_chunk_anchor: chunk_anchor,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.curr_radius = 0;
+        self.curr_index = 0;
     }
 
     pub fn update_max_radius(&mut self, new_max_radius: u32) {
@@ -757,9 +894,13 @@ impl RenderableChunks {
             || local_chunk_pos.z >= self.side_length as i32)
     }
 
-    pub fn try_load_chunk(&mut self, world_chunk_pos: &Vector3<i32>, model_id: VoxelModelId) {
+    pub fn try_load_chunk(
+        &mut self,
+        world_chunk_pos: &Vector3<i32>,
+        model_id: VoxelModelId,
+    ) -> bool {
         if !self.in_bounds(world_chunk_pos) {
-            return;
+            return false;
         }
 
         let local_chunk_pos = (world_chunk_pos - self.chunk_anchor).map(|x| x as u32);
@@ -769,8 +910,10 @@ impl RenderableChunks {
 
         if self.chunk_model_pointers[index as usize] != model_id {
             self.is_dirty = true;
+            self.chunk_model_pointers[index as usize] = model_id;
+            return true;
         }
-        self.chunk_model_pointers[index as usize] = model_id;
+        return false;
     }
 
     pub fn update_player_position(&mut self, player_chunk_position: Vector3<i32>) {
@@ -915,9 +1058,9 @@ impl RenderableChunksGpu {
                     continue;
                 }
 
-                let model_info = voxel_model_info_map
-                    .get(id)
-                    .expect("Renderable chunk should be registered by now.");
+                let Some(model_info) = voxel_model_info_map.get(id) else {
+                    continue;
+                };
                 buf[i] = model_info.info_allocation.start_index_stride_dword() as u32;
             }
 

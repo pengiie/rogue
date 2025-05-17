@@ -35,9 +35,25 @@ use super::{
     voxel_world::VoxelModelFlatEdit,
 };
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum VoxelModelType {
     Flat,
+    THC,
+}
+
+impl AsRef<str> for VoxelModelType {
+    fn as_ref(&self) -> &str {
+        match self {
+            VoxelModelType::Flat => "Flat",
+            VoxelModelType::THC => "THC",
+        }
+    }
+}
+
+impl ToString for VoxelModelType {
+    fn to_string(&self) -> String {
+        self.as_ref().to_string()
+    }
 }
 
 pub struct VoxelModelEdit {
@@ -73,13 +89,18 @@ pub trait VoxelModelImpl: Send + Sync + Any {
     }
 }
 downcast!(dyn VoxelModelImpl);
+downcast!(dyn VoxelModelGpuImpl);
 
 pub trait VoxelModelImplConcrete: VoxelModelImpl + Clone {
     /// The corresponding gpu management of this voxel model.
     type Gpu: VoxelModelGpuImplConcrete;
+
+    fn model_type() -> Option<VoxelModelType> {
+        None
+    }
 }
 
-pub trait VoxelModelGpuImpl: Send + Sync {
+pub trait VoxelModelGpuImpl: Send + Sync + Any {
     // Returns the pointers required to traverse this data structure.
     // Can encode other model specific data here as well.
     fn aggregate_model_info(&self) -> Option<Vec<u32>>;

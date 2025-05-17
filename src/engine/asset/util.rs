@@ -24,6 +24,10 @@ impl AssetByteWriter {
         self.bytes.extend_from_slice(bytemuck::bytes_of(data));
     }
 
+    pub fn write_u32(&mut self, data: u32) {
+        self.bytes.extend_from_slice(&data.to_le_bytes());
+    }
+
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }
@@ -107,6 +111,10 @@ impl AssetByteReader {
 
     pub fn header(&self) -> Option<&str> {
         self.header.as_ref().map(|x| x.as_str())
+    }
+
+    pub fn read_u32(&mut self) -> anyhow::Result<u32> {
+        return self.read::<u32>();
     }
 
     pub fn read<T: bytemuck::Pod>(&mut self) -> anyhow::Result<T> {

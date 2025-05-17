@@ -112,9 +112,12 @@ impl Assets {
             self.assets_dir_modified = Some(last_modified);
         }
     }
-
     pub fn update_assets(mut assets: ResMut<Assets>) {
-        let assets = &mut assets as &mut Assets;
+        assets.update_assets_impl();
+    }
+
+    fn update_assets_impl(&mut self) {
+        let assets = self;
         assets.assets_dir_touched = false;
 
         if assets.assets_dir_check_timer.try_complete() {
@@ -438,6 +441,12 @@ impl Assets {
             id: *id,
         })
     }
+
+    pub fn wait_until_all_saved(&mut self) {
+        while !self.currently_saving_assets.is_empty() {
+            self.update_assets_impl();
+        }
+    }
 }
 
 pub enum AssetStatus {
@@ -655,8 +664,12 @@ pub struct AssetPath {
 
 impl AssetPath {
     fn validate_path(path: &str) {
-        let path_regex: Regex = Regex::new(r"^\w+(::\w+)*$").unwrap();
-        assert!(path_regex.is_match(&path));
+        let path_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]+(::[a-zA-Z0-9_-]+)*$").unwrap();
+        assert!(
+            path_regex.is_match(&path),
+            "Path {} failed to pass path validation.",
+            path
+        );
     }
 
     pub fn new(path: PathBuf) -> Self {
@@ -689,10 +702,15 @@ impl AssetPath {
     pub fn from_project_dir_path(project_dir: &Path, path: &Path) -> Self {
         let sub_path = path
             .strip_prefix(project_dir.join("assets"))
-            .expect("project_dir/assets must be a prefix of path.");
+            .expect(&format!(
+                "\"{}\" must be a prefix of path \"{}\".",
+                project_dir.to_string_lossy(),
+                path.to_string_lossy()
+            ));
 
         let mut s = String::new();
-        for p in sub_path.iter() {
+        let last_i = sub_path.components().count() - 1;
+        for (i, p) in sub_path.iter().enumerate() {
             let p = p.to_string_lossy().to_string();
             if p.contains(".") {
                 let parts = p.split(".").collect::<Vec<_>>();
@@ -701,6 +719,8 @@ impl AssetPath {
                 s.push_str(parts[1]);
             } else {
                 s.push_str(&p);
+            }
+            if i < last_i {
                 s.push_str("::");
             }
         }

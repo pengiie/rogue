@@ -188,6 +188,10 @@ impl<T> AttachmentMap<T> {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.map.iter().filter(|a| a.is_some()).count() == 0
+    }
+
     pub fn insert(&mut self, attachment_id: AttachmentId, val: T) {
         //if let Some(old) = &self.map[attachment_id as usize] {
         //}
@@ -232,5 +236,13 @@ impl<T> AttachmentMap<T> {
 
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.map.iter().filter_map(|a| a.as_ref())
+    }
+}
+
+impl<T> std::ops::Index<u8> for AttachmentMap<T> {
+    type Output = T;
+
+    fn index(&self, index: u8) -> &Self::Output {
+        self.map[index as usize].as_ref().unwrap()
     }
 }

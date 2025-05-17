@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::keyboard::Key;
 
 pub struct Keybinds {
-    pressed_key_mappings: HashMap<Key, String>,
+    pub pressed_key_mappings: HashMap</*action=*/ String, Key>,
 }
 
 impl Keybinds {
@@ -13,7 +13,8 @@ impl Keybinds {
         }
     }
 
-    pub fn set_key_pressed(&mut self, key: Key, action: impl ToString) {
-        self.pressed_key_mappings.insert(key, action.to_string());
+    pub fn register_key(&mut self, action_name: impl ToString, key: Key) {
+        self.pressed_key_mappings
+            .insert(action_name.to_string(), key);
     }
 }

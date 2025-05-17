@@ -18,7 +18,7 @@ use crate::{
         voxel::{
             attachment::{Attachment, AttachmentId, AttachmentMap},
             flat::VoxelModelFlat,
-            thc::VoxelModelTHC,
+            thc::{THCAttachmentLookupNode, THCNode, VoxelModelTHC},
             voxel::{VoxelModelImpl, VoxelModelType},
         },
     },
@@ -41,6 +41,10 @@ impl AssetLoader for VoxelModelAnyAsset {
                 model: Box::new(load_flat_model(reader)?),
                 model_type: VoxelModelType::Flat,
             }),
+            Some("THC ") => Ok(VoxelModelAnyAsset {
+                model: Box::new(load_thc_model(reader)?),
+                model_type: VoxelModelType::THC,
+            }),
             _ => Err(anyhow::anyhow!("Unknown header").into()),
         }
     }
@@ -56,158 +60,125 @@ impl AssetLoader for VoxelModelTHC {
     where
         Self: Sized + std::any::Any,
     {
-        let mut file = data.read_file()?;
-        let mut header = 0x0;
-        let Ok(n) = file.read(bytemuck::bytes_of_mut(&mut header)) else {
-            return Err(AssetLoadError::Other(anyhow!("Failed to read file bytes.")));
-        };
-        if (n != 4 || header != 0x56544843/*VTHC*/) {
-            return Err(AssetLoadError::Other(anyhow!("Expected file header VTHC.")));
-        }
-
-        Ok(VoxelModelTHC::new(16))
+        let mut reader = AssetByteReader::new(data.read_file()?, "THC ")?;
+        return load_thc_model(reader);
     }
 }
 
+fn load_thc_model(
+    mut reader: AssetByteReader,
+) -> std::result::Result<VoxelModelTHC, AssetLoadError> {
+    assert!(reader.version() == 1);
+
+    let side_length = reader.read_u32()?;
+
+    // Attachment block.
+    let attachment_count = reader.read_u32()?;
+    let mut thc = VoxelModelTHC::new_empty(side_length);
+    let mut attachment_presence_map: HashMap<
+        /*presence_pointer*/ u32,
+        /*attachment_id*/ u8,
+    > = HashMap::new();
+    let mut attachment_data_map: HashMap</*presence_pointer*/ u32, /*attachment_id*/ u8> =
+        HashMap::new();
+    for i in 0..attachment_count {
+        let id = reader.read::<u8>()?;
+        let presence_pointer = reader.read::<u32>()?;
+        let data_pointer = reader.read::<u32>()?;
+        thc.attachment_map
+            .register_attachment(Attachment::from_id(id));
+        attachment_presence_map.insert(presence_pointer, id);
+        attachment_data_map.insert(data_pointer, id);
+    }
+
+    let node_count = reader.read_u32()?;
+    let mut node_data = Vec::with_capacity(node_count as usize);
+    for i in 0..node_count {
+        let child_ptr = reader.read_u32()?;
+        let child_mask_lower = reader.read_u32()?;
+        let child_mask_upper = reader.read_u32()?;
+        let child_mask = ((child_mask_upper as u64) << 32) | child_mask_lower as u64;
+        node_data.push(THCNode {
+            child_ptr,
+            child_mask,
+        })
+    }
+    thc.node_data = node_data;
+
+    while let Some(attachment_id) = attachment_presence_map.get(&(reader.cursor_pos()? as u32)) {
+        let node_count = reader.read_u32()?;
+        let mut attachment_lookup_nodes = Vec::with_capacity(node_count as usize);
+        for i in 0..node_count {
+            let data_ptr = reader.read_u32()?;
+            let attachment_mask_lower = reader.read_u32()?;
+            let attachment_mask_upper = reader.read_u32()?;
+            let attachment_mask =
+                ((attachment_mask_upper as u64) << 32) | attachment_mask_lower as u64;
+            attachment_lookup_nodes.push(THCAttachmentLookupNode {
+                data_ptr,
+                attachment_mask,
+            })
+        }
+        thc.attachment_lookup_data
+            .insert(*attachment_id, attachment_lookup_nodes);
+    }
+    while let Some(attachment_id) = attachment_data_map.get(&(reader.cursor_pos()? as u32)) {
+        let data_count = reader.read_u32()?;
+        let mut attachment_data = vec![0u32; data_count as usize];
+        reader.read_to_slice(&mut attachment_data);
+        thc.attachment_raw_data
+            .insert(*attachment_id, attachment_data);
+    }
+
+    Ok(thc)
+}
+
 impl AssetSaver for VoxelModelTHC {
-    fn save(model: &Self, out_file: &AssetFile) -> anyhow::Result<()>
+    fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
     where
         Self: Sized,
     {
-        // 4 byte header, 4 byte version, 4 byte for side_length.
-        const HEADER_BYTE_SIZE: u32 = 4 + 4 + 4;
-        let mut req_bytes = HEADER_BYTE_SIZE as usize;
+        let mut writer = AssetByteWriter::new(out_file.write_file(), "THC ", 1);
+        writer.write_u32(data.side_length);
 
-        // 4 byte for attachment_map_size.
-        req_bytes += 4;
-        for (attachment_id, attachment) in model.attachment_map.iter() {
-            // TODO: attachment name so we can confirm on write with versioning.
-            // 1 byte attachment id, 4 byte attachment data pointer.
-            req_bytes += 5;
+        // Write attachment info block.
+        writer.write_u32(data.attachment_map.iter().count() as u32);
+        let mut attachment_positions = AttachmentMap::new();
+        for (attachment_id, _) in data.attachment_map.iter() {
+            writer.write(&attachment_id);
+            let presence_pointer = writer.write_later::<u32>();
+            let raw_pointer = writer.write_later::<u32>();
+            attachment_positions.insert(attachment_id, (presence_pointer, raw_pointer));
         }
 
-        // 4 byte for node_data size.
-        req_bytes += 4;
-        req_bytes += model.node_data.len() * /*size of node*/12;
-
-        for (_attachment_id, lookup_data) in model.attachment_lookup_data.iter() {
-            // 4 byte for lookup_data size.
-            req_bytes += 4;
-            req_bytes += lookup_data.len() * /*size of lookup node*/12;
+        // Write node data.
+        writer.write_u32(data.node_data.len() as u32);
+        for node in &data.node_data {
+            writer.write_u32(node.child_ptr);
+            writer.write_u32(node.child_mask as u32);
+            writer.write_u32((node.child_mask >> 32) as u32);
         }
 
-        for (attachment_id, raw_data) in model.attachment_raw_data.iter() {
-            // 4 byte for raw_data size.
-            req_bytes += 4;
-            req_bytes += raw_data.len() * 4;
-        }
-
-        let mut file = out_file.write_file();
-        file.set_len(req_bytes as u64);
-
-        assert_eq!(
-            file.write_at(
-                bytemuck::bytes_of(&[0x56544843u32, FILE_VERSION, model.side_length]),
-                0,
-            )?,
-            HEADER_BYTE_SIZE as usize
-        );
-
-        let written_attachments_size = model.attachment_map.iter().count() as u32;
-        let written_attachments_byte_size = 4 + written_attachments_size * 9;
-        assert_eq!(
-            file.write_at(
-                bytemuck::bytes_of(&[written_attachments_size]),
-                HEADER_BYTE_SIZE as u64
-            )?,
-            4
-        );
-
-        assert_eq!(
-            file.write_at(
-                bytemuck::bytes_of(&[model.node_data.len() as u32]),
-                HEADER_BYTE_SIZE as u64 + written_attachments_byte_size as u64
-            )?,
-            4
-        );
-        let mut bytes = vec![0u32; model.node_data.len() * 3];
-        for (i, node) in model.node_data.iter().enumerate() {
-            let offset = i * 3;
-            bytes[offset] = node.child_ptr;
-            bytes[offset + 1] = (node.child_mask >> 32) as u32;
-            bytes[offset + 2] = node.child_mask as u32;
-        }
-        assert_eq!(
-            file.write_at(
-                bytemuck::cast_slice::<u32, u8>(bytes.as_slice()),
-                HEADER_BYTE_SIZE as u64 + written_attachments_byte_size as u64 + 4
-            )?,
-            bytes.len() * 4
-        );
-
-        let mut written_so_far_bytes = HEADER_BYTE_SIZE as u64
-            + written_attachments_byte_size as u64
-            + 4
-            + model.node_data.len() as u64 * 12;
-        let mut written_attachments: HashMap<AttachmentId, (u32, u32)> = HashMap::new();
-        for (attachment_id, lookup_data) in model.attachment_lookup_data.iter() {
-            written_attachments.insert(*attachment_id, (written_so_far_bytes as u32, 0));
-            assert_eq!(
-                file.write_at(
-                    bytemuck::bytes_of(&(lookup_data.len() as u32)),
-                    written_so_far_bytes
-                )?,
-                4
-            );
-            written_so_far_bytes += 4;
-
-            let mut bytes = vec![0u32; lookup_data.len() * 3];
-            for (i, lookup_node) in lookup_data.iter().enumerate() {
-                let offset = i * 3;
-                bytes[offset] = lookup_node.data_ptr;
-                bytes[offset + 1] = (lookup_node.attachment_mask >> 32) as u32;
-                bytes[offset + 2] = lookup_node.attachment_mask as u32;
+        // Write lookup attachment nodes.
+        for (attachment_id, data) in data.attachment_lookup_data.iter() {
+            let presence_pointer = writer.cursor_pos() as u32;
+            writer.write_at(attachment_positions[attachment_id].0, &presence_pointer);
+            writer.write_u32(data.len() as u32);
+            for node in data {
+                writer.write_u32(node.data_ptr);
+                writer.write_u32(node.attachment_mask as u32);
+                writer.write_u32((node.attachment_mask >> 32) as u32);
             }
-            assert_eq!(
-                file.write_at(
-                    bytemuck::cast_slice::<u32, u8>(bytes.as_slice()),
-                    written_so_far_bytes
-                )?,
-                bytes.len() * 4
-            );
-            written_so_far_bytes += bytes.len() as u64 * 4;
         }
 
-        for (attachment_id, raw_data) in model.attachment_raw_data.iter() {
-            written_attachments.get_mut(attachment_id).unwrap().1 = written_so_far_bytes as u32;
-            assert_eq!(
-                file.write_at(
-                    bytemuck::bytes_of(&(raw_data.len() as u32)),
-                    written_so_far_bytes
-                )?,
-                4
-            );
-            written_so_far_bytes += 4;
-
-            assert_eq!(
-                file.write_at(
-                    bytemuck::cast_slice::<u32, u8>(&raw_data),
-                    written_so_far_bytes
-                )?,
-                raw_data.len() * 4
-            );
-            written_so_far_bytes += raw_data.len() as u64 * 4;
+        // Write raw attachment data.
+        for (attachment_id, data) in data.attachment_raw_data.iter() {
+            let raw_pointer = writer.cursor_pos() as u32;
+            writer.write_at(attachment_positions[attachment_id].1, &raw_pointer);
+            writer.write_u32(data.len() as u32);
+            writer.write_slice(&data);
         }
-
-        for (i, (attachment_id, (attachment_lookup_ptr, attachment_data_ptr))) in
-            written_attachments.iter().enumerate()
-        {
-            let mut bytes = [0u8; 9];
-            bytes[0] = *attachment_id;
-            bytes[1..5].copy_from_slice(bytemuck::bytes_of(attachment_lookup_ptr));
-            bytes[5..9].copy_from_slice(bytemuck::bytes_of(attachment_data_ptr));
-            file.write_at(&bytes, HEADER_BYTE_SIZE as u64 + 5 * i as u64);
-        }
+        writer.finish_writes()?;
 
         Ok(())
     }
@@ -220,23 +191,26 @@ impl AssetSaver for VoxelModelFlat {
     {
         let mut writer = AssetByteWriter::new(out_file.write_file(), "FLAT", 1);
         writer.write(data.side_length());
+
+        // Write attachment info block.
         writer.write(&(data.attachment_map.iter().count() as u32));
-        let mut attachment_positions = HashMap::new();
+        let mut attachment_positions = AttachmentMap::new();
         for (attachment_id, _) in data.attachment_map.iter() {
             writer.write(&attachment_id);
             let presence_pointer = writer.write_later::<u32>();
             let raw_pointer = writer.write_later::<u32>();
             attachment_positions.insert(attachment_id, (presence_pointer, raw_pointer));
         }
+
         writer.write_slice(data.presence_data.data());
         for (attachment_id, data) in data.attachment_presence_data.iter() {
             let presence_pointer = writer.cursor_pos() as u32;
-            writer.write_at(attachment_positions[&attachment_id].0, &presence_pointer);
+            writer.write_at(attachment_positions[attachment_id].0, &presence_pointer);
             writer.write_slice(data.data());
         }
         for (attachment_id, data) in data.attachment_data.iter() {
             let raw_pointer = writer.cursor_pos() as u32;
-            writer.write_at(attachment_positions[&attachment_id].1, &raw_pointer);
+            writer.write_at(attachment_positions[attachment_id].1, &raw_pointer);
             writer.write_slice(data.as_slice());
         }
         writer.finish_writes()?;

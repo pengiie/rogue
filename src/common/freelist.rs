@@ -112,7 +112,7 @@ impl<T> FreeList<T> {
         let mut prev_left = self.free_head;
         let mut left = self.free_head;
         while left < handle.index {
-            prev_left = self.free_head;
+            prev_left = left;
             left = unsafe { self.data[left].next_free };
         }
 

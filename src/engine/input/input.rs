@@ -1,6 +1,7 @@
 use nalgebra::Vector2;
 use rogue_macros::Resource;
 
+use crate::consts;
 use crate::engine::resource::Res;
 use crate::engine::resource::ResMut;
 use crate::engine::window::window::Window;
@@ -9,6 +10,7 @@ use winit::event::DeviceEvent as WinitDeviceEvent;
 use winit::event::DeviceId as WinitDeviceId;
 
 use super::gamepad::Gamepad;
+use super::mapper::Keybinds;
 use super::{
     keyboard::{self, Keyboard},
     mouse::{self, Mouse},
@@ -19,14 +21,21 @@ pub struct Input {
     keyboard: Keyboard,
     mouse: Mouse,
     gamepad: Gamepad,
+    keybinds: Keybinds,
 }
 
 impl Input {
     pub fn new() -> Self {
+        let mut keybinds = Keybinds::new();
+        keybinds.register_key(
+            consts::actions::EDITOR_TOGGLE,
+            consts::actions::keybind::EDITOR_TOGGLE_DEBUG,
+        );
         Self {
             keyboard: Keyboard::new(),
             mouse: Mouse::new(),
             gamepad: Gamepad::new(),
+            keybinds,
         }
     }
 
@@ -63,6 +72,15 @@ impl Input {
         }
 
         return axes;
+    }
+
+    pub fn did_action(&self, action: &str) -> bool {
+        let key = *self
+            .keybinds
+            .pressed_key_mappings
+            .get(action)
+            .expect("Action does not exist.");
+        return self.is_key_pressed(key);
     }
 
     pub fn is_controller_camera(&self) -> bool {

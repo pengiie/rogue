@@ -58,7 +58,7 @@ void main(uint3 id: SV_DispatchThreadID) {
           }
           color = float4(l * li.color.rgb, li.color.a);
           flags = li.flags;
-          min_distance = advanced;
+          min_distance = advanced - i * 0.001;
         }
         break;
       }

@@ -2,15 +2,15 @@
   "editor_camera_transform": {
     "transform": {
       "position": [
-        11.308599,
-        5.349342,
-        -21.751457
+        -1.7076135,
+        3.1335704,
+        9.482891
       ],
       "rotation": [
-        -0.18514298,
-        0.5127414,
-        -0.11430331,
-        -0.8305137
+        0.11610839,
+        0.86492723,
+        -0.23447359,
+        0.42830113
       ],
       "scale": 1.0
     }
@@ -23,10 +23,12 @@
     }
   },
   "rotation_anchor": [
-    -4.1066136,
-    -2.7404742,
-    -14.025563
+    2.2417135,
+    0.2278048,
+    6.4730105
   ],
+  "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/test/terrain",
+  "game_camera": null,
   "game_entities": [
     {
       "name": "My first entity",
@@ -51,6 +53,60 @@
         {
           "RenderableVoxelEntity": {
             "model_asset_path": "test::models::test::rvox"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the_second_one",
+      "uuid": "db50f417-aa1b-4df3-a906-0825777a3613",
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              0.0,
+              1.0,
+              -6.900001
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": 1.0
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "test::models::test2::rvox"
+          }
+        }
+      ]
+    },
+    {
+      "name": "model_test",
+      "uuid": "68624ff5-7e65-4d17-a2d8-63e0d3d14137",
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              1.8289685,
+              0.06568834,
+              6.2569356
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": 1.0
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "test::models::64_64::rvox"
           }
         }
       ]

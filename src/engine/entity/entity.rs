@@ -3,6 +3,8 @@ use crate::engine::{
     voxel::voxel_registry::VoxelModelId,
 };
 
+use super::ecs_world::Entity;
+
 pub struct RenderableVoxelEntity {
     /// Nullable.
     voxel_model_id: VoxelModelId,
@@ -37,5 +39,9 @@ impl RenderableVoxelEntity {
 }
 
 pub struct ScriptableEntity {
-    pub scripts: AssetHandle,
+    pub script: AssetHandle,
+}
+
+pub struct HasParent {
+    parent: Entity,
 }

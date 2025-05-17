@@ -1,4 +1,4 @@
-use std::ptr::NonNull;
+use std::{any::TypeId, ptr::NonNull};
 
 pub struct DynVec {
     type_info: TypeInfo,

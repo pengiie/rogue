@@ -61,6 +61,7 @@ pub enum ShaderCompilationTarget {
     Wgsl,
 }
 
+/// Set binding info generated from slang reflection.
 #[derive(Clone, Debug)]
 pub struct ShaderSetBinding {
     /// The name of the ParameterBlock global variable.

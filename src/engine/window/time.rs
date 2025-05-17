@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     ops::{Add, Sub},
     time::Duration,
 };
@@ -99,6 +100,20 @@ impl Sub<Instant> for Instant {
     type Output = Duration;
 
     fn sub(self, rhs: Instant) -> Self::Output {
+        self.0.saturating_sub(rhs.0)
+    }
+}
+impl Sub<&'_ Instant> for &'_ Instant {
+    type Output = Duration;
+
+    fn sub(self, rhs: &'_ Instant) -> Self::Output {
+        self.0.saturating_sub(rhs.0)
+    }
+}
+impl Sub<&'_ mut Instant> for &'_ mut Instant {
+    type Output = Duration;
+
+    fn sub(self, rhs: &'_ mut Instant) -> Self::Output {
         self.0.saturating_sub(rhs.0)
     }
 }

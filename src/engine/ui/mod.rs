@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     asset::asset::Assets,
-    editor::{self, editor::Editor, ui::EditorTab},
+    editor::{self, editor::Editor},
     entity::{
         ecs_world::{ECSWorld, Entity},
         RenderableVoxelEntity,
@@ -43,7 +43,6 @@ use super::{
         time::{Instant, Time, Timer},
         window::Window,
     },
-    world::game_world::GameWorld,
 };
 
 pub mod gui;
@@ -67,9 +66,33 @@ pub struct UI {
 pub struct EditorUIState {
     pub new_project_dialog: Option<EditorNewProjectDialog>,
     pub new_model_dialog: Option<EditorNewVoxelModelDialog>,
+    pub existing_model_dialog: EditorExistingModelDialog,
+    pub terrain_dialog: EditorTerrainDialog,
+
     pub asset_browser: EditorAssetBrowserState,
     pub texture_map: HashMap<String, egui::TextureHandle>,
     pub initialized_icons: bool,
+
+    pub right_pane_state: EditorTab,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum EditorTab {
+    EntityProperties,
+    WorldProperties,
+    Editing,
+    Game,
+}
+
+pub struct EditorTerrainDialog {
+    pub tx_file_name: Sender<String>,
+    pub rx_file_name: Receiver<String>,
+}
+
+pub struct EditorExistingModelDialog {
+    pub tx_file_name: Sender<String>,
+    pub rx_file_name: Receiver<String>,
+    pub associated_entity: Entity,
 }
 
 pub struct EditorNewProjectDialog {
@@ -113,6 +136,11 @@ impl EditorAssetBrowserState {
                 continue;
             };
 
+            log::info!(
+                "is dir {}, for path {:?}",
+                item.path().is_dir(),
+                item.path()
+            );
             self.contents.push(EditorAssetBrowserAsset {
                 file_sub_path: item
                     .path()
@@ -143,9 +171,21 @@ pub struct EditorAssetBrowserAsset {
 
 impl EditorUIState {
     pub fn new() -> Self {
+        let terrain_dialog_channel = std::sync::mpsc::channel();
+        let existing_model_dialog_channel = std::sync::mpsc::channel();
         Self {
             new_project_dialog: None,
             new_model_dialog: None,
+            terrain_dialog: EditorTerrainDialog {
+                tx_file_name: terrain_dialog_channel.0,
+                rx_file_name: terrain_dialog_channel.1,
+            },
+            existing_model_dialog: EditorExistingModelDialog {
+                tx_file_name: existing_model_dialog_channel.0,
+                rx_file_name: existing_model_dialog_channel.1,
+                associated_entity: Entity::DANGLING,
+            },
+
             asset_browser: EditorAssetBrowserState {
                 sub_path: PathBuf::new(),
                 needs_reload: true,
@@ -153,6 +193,7 @@ impl EditorUIState {
             },
             texture_map: HashMap::new(),
             initialized_icons: false,
+            right_pane_state: EditorTab::EntityProperties,
         }
     }
 
@@ -245,10 +286,9 @@ impl UI {
     }
 
     pub fn draw(
-        window: Res<Window>,
+        mut window: ResMut<Window>,
         mut egui: ResMut<Egui>,
         mut ui: ResMut<UI>,
-        mut game_world: ResMut<GameWorld>,
         mut voxel_world: ResMut<VoxelWorld>,
         voxel_world_gpu: Res<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
@@ -264,7 +304,7 @@ impl UI {
         let chunk_generator = &mut ui.chunk_generator;
 
         let pixels_per_point = egui.pixels_per_point();
-        egui.resolve_ui(&window, |ctx| {
+        egui.resolve_ui(&mut window, |ctx, window| {
             let mut total_allocation_str;
             let al = voxel_world_gpu
                 .voxel_allocator()
@@ -289,6 +329,7 @@ impl UI {
                     editor_ui_state,
                     &mut session,
                     &mut assets,
+                    window,
                 );
             } else {
                 egui::Window::new("Debug")
@@ -301,110 +342,6 @@ impl UI {
                         ui.label(format!("FPS: {}", debug_state.fps));
                         ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
                         ui.label(format!("Voxel data allocation: {}", total_allocation_str));
-
-                        if ui
-                            .add(egui::Button::new("Save Settings").rounding(4.0))
-                            .clicked()
-                        {
-                            log::info!("Saving current settings.");
-                            assets.save_asset(
-                                AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
-                                SettingsAsset::from(&settings as &Settings),
-                            );
-                        }
-
-                        ui.separator();
-
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("World:").size(16.0));
-                            if game_world.is_io_busy() {
-                                ui.disable();
-                            }
-
-                            let can_save = !voxel_world.chunks.is_saving();
-                            if ui
-                                .add_enabled(can_save, egui::Button::new("Save").rounding(4.0))
-                                .clicked()
-                            {
-                                voxel_world
-                                    .chunks
-                                    .save_terrain(&mut assets, &voxel_world.registry);
-                            }
-
-                            if ui.add(egui::Button::new("Load").rounding(4.0)).clicked() {
-                                game_world.load();
-                            }
-                        });
-
-                        if let Some(player_chunk_position) =
-                            voxel_world.chunks.player_chunk_position
-                        {
-                            ui.label(egui::RichText::new("Current Chunk:").size(14.0));
-                            ui.label(format!(
-                                "Position: x: {}, y: {}, z: {}",
-                                player_chunk_position.x,
-                                player_chunk_position.y,
-                                player_chunk_position.z
-                            ));
-
-                            ui.label(egui::RichText::new("Current terrain anchor:").size(14.0));
-                            ui.label(format!(
-                                "Position: x: {}, y: {}, z: {}",
-                                voxel_world.chunks.renderable_chunks.chunk_anchor.x,
-                                voxel_world.chunks.renderable_chunks.chunk_anchor.y,
-                                voxel_world.chunks.renderable_chunks.chunk_anchor.z,
-                            ));
-
-                            ui.horizontal(|ui| {
-                                ui.label("Radius:");
-                                ui.add(egui::Slider::new(&mut debug_state.generate_radius, 0..=8));
-                            });
-                            if ui
-                                .add(egui::Button::new("Regenerate chunks").rounding(4.0))
-                                .clicked()
-                            {
-                                chunk_generator.generate_chunk(voxel_world, player_chunk_position);
-                            }
-
-                            if ui
-                                .add(egui::Button::new("Spawn entity").rounding(4.0))
-                                .clicked()
-                            {
-                                let mut player_query = ecs_world.player_query::<&Transform>();
-                                let player_pos = player_query.player().1.position();
-                                let player_dir = player_query
-                                    .player()
-                                    .1
-                                    .rotation()
-                                    .transform_vector(&Vector3::z());
-                                let mut flat_model =
-                                    VoxelModelFlat::new_empty(Vector3::new(32, 32, 32));
-                                for (local_pos, mut voxel) in flat_model.xyz_iter_mut() {
-                                    voxel.set_attachment(
-                                        Attachment::PTMATERIAL,
-                                        Some(
-                                            PTMaterial::diffuse(Color::from(
-                                                local_pos.map(|x| x as f32 / 31.0),
-                                            ))
-                                            .encode(),
-                                        ),
-                                    );
-                                }
-                                let model_id =
-                                    voxel_world.registry.register_renderable_voxel_model(
-                                        "entity",
-                                        VoxelModel::new(flat_model),
-                                    );
-                                drop(player_query);
-                                ecs_world.spawn((
-                                    GameEntity::new("new_entity"),
-                                    Transform::with_translation(Translation3::from(
-                                        player_pos + player_dir * 2.0,
-                                    )),
-                                    RenderableVoxelEntity::new(model_id),
-                                ));
-                            }
-                        }
                     });
             }
         });

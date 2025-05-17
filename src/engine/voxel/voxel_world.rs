@@ -42,14 +42,16 @@ use crate::{
         },
         window::time::Stopwatch,
     },
+    session::Session,
     settings::Settings,
 };
 
 use super::{
     attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
-    cursor::VoxelEditInfo,
+    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
     esvo::{VoxelModelESVO, VoxelModelESVOGpu},
     flat::VoxelModelFlat,
+    thc::VoxelModelTHC,
     voxel::{
         VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema,
@@ -161,6 +163,8 @@ pub struct VoxelWorld {
     pub registry: VoxelModelRegistry,
     pub chunks: VoxelChunks,
 
+    pub to_update_normals: HashSet<VoxelModelId>,
+
     pub edit_queue: VecDeque<QueuedVoxelEdit>,
     pub async_edit_queue: VecDeque<AsyncVoxelEdit>,
     pub chunk_edit_handler_pool: rayon::ThreadPool,
@@ -177,6 +181,8 @@ impl VoxelWorld {
             registry: VoxelModelRegistry::new(),
             chunks: VoxelChunks::new(settings),
 
+            to_update_normals: HashSet::new(),
+
             chunk_edit_handler_pool: rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
                 .build()
@@ -187,6 +193,11 @@ impl VoxelWorld {
             edit_queue: VecDeque::new(),
             async_edit_queue: VecDeque::new(),
         }
+    }
+
+    /// Number of async edits currently in progress.
+    pub fn async_edit_count(&self) -> u32 {
+        self.async_edit_queue.len() as u32 + self.chunk_edit_handler_count
     }
 
     pub fn process_chunk_edits(&mut self, assets: &mut Assets) {
@@ -256,11 +267,6 @@ impl VoxelWorld {
 
     pub fn clear_state(mut voxel_world: ResMut<VoxelWorld>) {
         voxel_world.chunks.renderable_chunks.is_dirty = false;
-        voxel_world
-            .chunks
-            .renderable_chunks
-            .to_update_chunk_normals
-            .clear();
     }
 
     pub fn update_render_center(&mut self, center_pos: Vector3<f32>) {
@@ -273,6 +279,7 @@ impl VoxelWorld {
         mut ecs_world: ResMut<ECSWorld>,
         mut voxel_world: ResMut<VoxelWorld>,
         mut assets: ResMut<Assets>,
+        session: Res<Session>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let chunks: &mut VoxelChunks = &mut voxel_world.chunks;
@@ -282,7 +289,7 @@ impl VoxelWorld {
         //     let player_pos = player_transform.position;
         // }
 
-        chunks.update_chunk_queue(&mut assets, &mut voxel_world.registry);
+        chunks.update_chunk_queue(&mut assets, &mut voxel_world.registry, &session);
         voxel_world.process_chunk_edits(&mut assets);
     }
 
@@ -419,32 +426,18 @@ impl VoxelWorld {
                 let mut node = chunks
                     .get_or_create_chunk_node_mut(world_chunk_pos)
                     .expect("Region should be loaded by now");
-                // let spans_chunk = chunk_edit
-                //     .data
-                //     .side_length()
-                //     .iter()
-                //     .all(|x| *x == consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
-                // if spans_chunk {
-                //     // Make edit override the chunk.
-                //     let new_model_id = registry.register_renderable_voxel_model(
-                //         format!(
-                //             "chunk_{}_{}_{}",
-                //             world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
-                //         ),
-                //         VoxelModel::new(ChunkModelType::from(chunk_edit.data.flat)),
-                //     );
-
-                //     *node = VoxelRegionLeafNode::new_with_model(new_model_id);
-                //     chunks
-                //         .renderable_chunks
-                //         .try_load_chunk(&world_chunk_pos, new_model_id);
-                // } else {
-                let mut new_chunk_model = ChunkModelType::new_empty(Vector3::new(
+                let spans_chunk = chunk_edit
+                    .data
+                    .side_length()
+                    .iter()
+                    .all(|x| *x == consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
+                let mut new_flat = VoxelModelFlat::new_empty(Vector3::new(
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
                 ));
-                new_chunk_model.set_voxel_range(&chunk_edit);
+                new_flat.set_voxel_range(&chunk_edit);
+                let new_chunk_model = VoxelModelTHC::from(new_flat);
 
                 let new_model_id = registry.register_renderable_voxel_model(
                     format!(
@@ -458,7 +451,6 @@ impl VoxelWorld {
                 chunks
                     .renderable_chunks
                     .try_load_chunk(&world_chunk_pos, new_model_id);
-                // }
                 chunks.mark_chunk_edited(world_chunk_pos);
                 chunks.mark_region_edited(VoxelChunks::chunk_to_region_pos(&world_chunk_pos));
             }
@@ -476,6 +468,60 @@ impl VoxelWorld {
                 chunks.mark_chunk_edited(world_chunk_pos);
             }
         }
+    }
+
+    pub fn apply_voxel_edit_entity(
+        &mut self,
+        edit: VoxelEditEntityInfo,
+        f: impl Fn(
+            VoxelEdit,
+            /*world_voxel_pos*/ Vector3<i32>,
+            /*local_voxel_pos=*/ Vector3<u32>,
+        ),
+    ) {
+        let chunk_model = self.registry.get_dyn_model_mut(edit.model_id);
+        let side_length = chunk_model.length();
+
+        let min_offset =
+            (edit.local_voxel_pos).zip_map(&side_length, |x, len| x.clamp(0, len as i32) as u32);
+        let max_offset = (edit.local_voxel_pos + edit.voxel_length.cast::<i32>())
+            .zip_map(&side_length, |x, len| x.clamp(0, len as i32) as u32);
+
+        let edit_offset = edit
+            .local_voxel_pos
+            .zip_map(&min_offset, |x, y| (x.max(0) as u32 - y));
+        let edit_length = (max_offset - min_offset).map(|x| x as u32);
+
+        if edit_length.x == 0
+            || edit_length.y == 0
+            || edit_length.z == 0
+            || min_offset.x >= side_length.x
+            || min_offset.y >= side_length.y
+            || min_offset.z >= side_length.z
+        {
+            return;
+        }
+
+        let mut voxel_data =
+            VoxelModelFlatEdit::new_empty(edit_length, edit.attachment_map.clone());
+        for voxel_z in min_offset.z..max_offset.z {
+            for voxel_y in min_offset.y..max_offset.y {
+                for voxel_x in min_offset.x..max_offset.x {
+                    let world_voxel_pos = Vector3::new(voxel_x, voxel_y, voxel_z);
+                    let local_voxel_pos = world_voxel_pos - min_offset;
+                    f(
+                        VoxelEdit::new(&mut voxel_data, local_voxel_pos),
+                        world_voxel_pos.cast::<i32>(),
+                        local_voxel_pos,
+                    );
+                }
+            }
+        }
+        chunk_model.set_voxel_range(&VoxelModelEdit {
+            offset: min_offset,
+            data: voxel_data,
+        });
+        self.to_update_normals.insert(edit.model_id);
     }
 
     pub fn apply_voxel_edit(
@@ -654,7 +700,6 @@ pub struct VoxelWorldGpu {
     /// The acceleration buffer for rendered entity voxel model bounds interaction, hold the
     /// pointed to voxel model index and the position and rotation matrix data of this entity.
     entity_acceleration_buffer: Option<ResourceId<Buffer>>,
-    entity_count: u32,
 
     /// The buffer for every unique voxel models info such as its data pointers and length.
     voxel_model_info_allocator: Option<GpuBufferAllocator>,
@@ -667,6 +712,7 @@ pub struct VoxelWorldGpu {
     voxel_data_allocator: Option<GpuBufferAllocator>,
 
     to_register_models: Vec<VoxelModelId>,
+    initialized_normals: HashSet<VoxelModelId>,
 }
 
 pub struct VoxelWorldModelGpuInfo {
@@ -709,7 +755,6 @@ impl VoxelWorldGpu {
             renderable_chunks: RenderableChunksGpu::new(),
 
             entity_acceleration_buffer: None,
-            entity_count: 0,
 
             voxel_model_info_allocator: None,
             voxel_model_info_map: HashMap::new(),
@@ -718,6 +763,7 @@ impl VoxelWorldGpu {
 
             voxel_data_allocator: None,
             to_register_models: Vec::new(),
+            initialized_normals: HashSet::new(),
             //        frame_state: VoxelWorldGpuFrameState::new(),
         }
     }
@@ -745,12 +791,9 @@ impl VoxelWorldGpu {
 
         // Create or resize entity acceleration buffer.
         const DEFAULT_INITIAL_COUNT: usize = 10;
-        let entity_count = Self::query_voxel_entities(&ecs_world)
-            .iter()
-            .count()
-            .max(DEFAULT_INITIAL_COUNT);
-        voxel_world_gpu.entity_count = entity_count as u32;
-        let req_entity_data_size = (entity_count * Self::entity_acceleration_struct_size()) as u64;
+        let entity_count = Self::query_voxel_entities(&ecs_world).iter().count();
+        let req_entity_data_size = (entity_count.max(DEFAULT_INITIAL_COUNT)
+            * Self::entity_acceleration_struct_size()) as u64;
         if let Some(entity_acceleration_buffer) = &mut voxel_world_gpu.entity_acceleration_buffer {
             let buffer_info = device.get_buffer_info(entity_acceleration_buffer);
             if buffer_info.size < req_entity_data_size {
@@ -804,6 +847,7 @@ impl VoxelWorldGpu {
             let allocator = voxel_world_gpu.voxel_data_allocator.as_mut().unwrap();
             if model_gpu.update_gpu_objects(allocator, model) {
                 voxel_world_gpu.to_register_models.push(voxel_model_id);
+                log::debug!("Registering model {:?}", voxel_model_id);
             }
         }
     }
@@ -821,7 +865,7 @@ impl VoxelWorldGpu {
 
         // Update gpu model buffer data, do this first so the allocation data is ready to reference
         // when registering updated_voxel_model_allocations.
-        for (entity, (mut voxel_model, mut voxel_model_gpu)) in
+        for (model_id, (mut voxel_model, mut voxel_model_gpu)) in
             voxel_world.registry.renderable_models_dyn_iter_mut()
         {
             voxel_model_gpu.deref_mut().write_gpu_updates(
@@ -861,10 +905,12 @@ impl VoxelWorldGpu {
         // Write entity acceleration data.
         let mut voxel_entity_data = Vec::new();
         let mut voxel_entities_query = Self::query_voxel_entities(&ecs_world);
+        voxel_world_gpu.rendered_voxel_model_entity_count = 0;
         for (entity, (transform, voxel_entity)) in voxel_entities_query.iter() {
             let Some(voxel_model_id) = voxel_entity.voxel_model_id() else {
                 continue;
             };
+            voxel_world_gpu.rendered_voxel_model_entity_count += 1;
 
             let Some(model_gpu_info) = voxel_world_gpu.voxel_model_info_map.get(&voxel_model_id)
             else {
@@ -935,6 +981,7 @@ impl VoxelWorldGpu {
             .registry
             .get_dyn_renderable_model(voxel_model_id);
         let Some(mut model_gpu_info_ptrs) = voxel_model_gpu.aggregate_model_info() else {
+            log::info!("Pointers are not ready.");
             return;
         };
         assert!(!model_gpu_info_ptrs.is_empty());
@@ -1004,10 +1051,6 @@ impl VoxelWorldGpu {
         )
     }
 
-    pub fn entity_count(&self) -> u32 {
-        self.entity_count
-    }
-
     pub fn world_terrain_acceleration_buffer(&self) -> &ResourceId<Buffer> {
         self.renderable_chunks
             .terrain_acceleration_buffer
@@ -1033,8 +1076,11 @@ impl VoxelWorldGpu {
     pub fn write_normal_calc_pass(
         mut renderer: ResMut<Renderer>,
         mut voxel_world: ResMut<VoxelWorld>,
-        voxel_world_gpu: ResMut<VoxelWorldGpu>,
+        mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
     ) {
+        let voxel_world: &mut VoxelWorld = &mut voxel_world;
+        let voxel_world_gpu: &mut VoxelWorldGpu = &mut voxel_world_gpu;
+
         renderer.frame_graph_executor.supply_pass_ref(
             Renderer::GRAPH.normal_calc.pass_normal_calc,
             &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext| {
@@ -1042,20 +1088,78 @@ impl VoxelWorldGpu {
                     ctx.get_compute_pipeline(Renderer::GRAPH.normal_calc.pipeline_compute_terrain);
                 let mut compute_pass = recorder.begin_compute_pass(terrain_pipeline);
 
-                for chunk_pos in voxel_world
+                for (i, chunk_pos) in voxel_world
                     .chunks
                     .renderable_chunks
                     .to_update_chunk_normals
                     .drain()
+                    .enumerate()
+                    .collect::<Vec<_>>()
                 {
-                    log::info!("Updating the normals for chunk {:?}", chunk_pos);
+                    if voxel_world.chunks.get_chunk_node(chunk_pos).is_none() {
+                        continue;
+                    }
+
+                    // Only update the normals for one chunk per frame.
+                    if i > 0 {
+                        voxel_world
+                            .chunks
+                            .renderable_chunks
+                            .to_update_chunk_normals
+                            .insert(chunk_pos);
+                        continue;
+                    }
+                    log::debug!("Updating the normals for chunk {:?}", chunk_pos);
                     compute_pass.bind_uniforms(&mut |writer| {
                         writer.use_set_cache("u_frame", Renderer::SET_CACHE_SLOT_FRAME);
                         writer.write_uniform("u_shader.world_chunk_pos", chunk_pos);
                     });
-                    let vl = consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH;
-                    let wg = compute_pass.workgroup_size();
-                    compute_pass.dispatch(vl / wg.x, vl / wg.y, vl / wg.z);
+                    let vl = consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as f32;
+                    let wg = compute_pass.workgroup_size().cast::<f32>();
+                    compute_pass.dispatch(
+                        (vl / wg.x).ceil() as u32,
+                        (vl / wg.y).ceil() as u32,
+                        (vl / wg.z).ceil() as u32,
+                    );
+                }
+                drop(compute_pass);
+
+                let standalone_pipeline = ctx
+                    .get_compute_pipeline(Renderer::GRAPH.normal_calc.pipeline_compute_standalone);
+                let mut compute_pass = recorder.begin_compute_pass(standalone_pipeline);
+
+                let to_update_ids = voxel_world
+                    .to_update_normals
+                    .drain()
+                    .map(|id| {
+                        (
+                            id,
+                            voxel_world_gpu
+                                .voxel_model_info_map
+                                .get(&id)
+                                .unwrap()
+                                .info_allocation
+                                .start_index_stride_dword(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                for (model_id, model_info_ptr) in to_update_ids {
+                    log::debug!(
+                        "Updating the normals for model_id {:?} with ptr {:?}",
+                        model_id,
+                        model_info_ptr
+                    );
+                    compute_pass.bind_uniforms(&mut |writer| {
+                        writer.use_set_cache("u_frame", Renderer::SET_CACHE_SLOT_FRAME);
+                        writer.write_uniform("u_shader.voxel_model_ptr", model_info_ptr as u32);
+                    });
+                    let vl = voxel_world.get_dyn_model(model_id).length().cast::<f32>();
+                    let wg = compute_pass.workgroup_size().cast::<f32>();
+                    compute_pass.dispatch(
+                        (vl.x / wg.x).ceil() as u32,
+                        (vl.y / wg.y).ceil() as u32,
+                        (vl.z / wg.z).ceil() as u32,
+                    );
                 }
             },
         );
