@@ -12,10 +12,14 @@ ParameterBlock<ShaderUniforms> u_shader;
 [numthreads(8, 8, 8)]
 void main(uint3 id: SV_DispatchThreadID) {
   let schema = u_frame.voxel.model_info_data.Load<uint>(u_shader.voxel_model_ptr << 2);
-  if (schema == consts::VOXEL_MODEL_SCHEMA_FLAT) {
-    normal_calc_flat(id);
-  } else if (schema == consts::VOXEL_MODEL_SCHEMA_THC) {
-    normal_calc_thc(id);
+  switch (schema) {
+    case consts::VOXEL_MODEL_SCHEMA_THC:
+    case consts::VOXEL_MODEL_SCHEMA_THC_COMPRESSED:
+      normal_calc_thc(id);
+      break;
+    case consts::VOXEL_MODEL_SCHEMA_FLAT:
+      normal_calc_flat(id);
+      break;
   }
 }
 

@@ -84,11 +84,14 @@ impl AssetSaver for VoxelChunkRegionData {
         writer.write::<Vector3<i32>>(&data.region_pos);
         let mut bytes: Vec<u32> = Vec::new();
 
+        // Add the nodes to the to the tree array with depth-first traversal.
         let mut curr_node = &data.root_node;
         let mut stack = vec![(curr_node, 0, None)];
         let curr_height = 0;
         while (!stack.is_empty()) {
+            let curr_node_index = stack.len() - 1;
             let (next_node, curr_iter, node_pos) = stack.last_mut().unwrap();
+            // Allocate memory for this node and track the location.
             if node_pos.is_none() {
                 let req_size = match (*next_node).deref() {
                     VoxelChunkRegionNode::Internal(_) => 8,
@@ -97,14 +100,11 @@ impl AssetSaver for VoxelChunkRegionData {
                 *node_pos = Some(bytes.len() as u32);
                 bytes.extend_from_slice(&vec![0u32; req_size])
             }
+            log::info!("node_pos {:?}, curr_iter {}", node_pos, curr_iter);
 
-            if *curr_iter > 0 {
-                let last_iter = *curr_iter - 1;
-
-                if *curr_iter >= 8 {
-                    stack.pop();
-                    continue;
-                }
+            if *curr_iter >= 8 {
+                stack.pop();
+                continue;
             }
 
             'b_point: {
@@ -112,7 +112,7 @@ impl AssetSaver for VoxelChunkRegionData {
                     VoxelChunkRegionNode::Internal(children_nodes) => {
                         let curr_child = &children_nodes[*curr_iter];
                         if let Some(curr_child) = curr_child {
-                            bytes[node_pos.unwrap() as usize] = bytes.len() as u32;
+                            bytes[node_pos.unwrap() as usize + *curr_iter] = bytes.len() as u32;
                             stack.push((curr_child, 0, None));
                         }
                         break 'b_point;
@@ -132,7 +132,7 @@ impl AssetSaver for VoxelChunkRegionData {
                 }
             }
 
-            let (next_node, curr_iter, node_pos) = stack.last_mut().unwrap();
+            let (next_node, curr_iter, node_pos) = &mut stack[curr_node_index];
             *curr_iter += 1;
         }
         writer.write::<u32>(&(bytes.len() as u32));

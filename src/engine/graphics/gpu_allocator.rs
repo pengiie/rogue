@@ -55,7 +55,14 @@ impl GpuBufferAllocator {
             self.allocations.size
         );
         let allocation_size = bytes.next_power_of_two();
-        todo!("Perform reallocation");
+        // TODO: See if we can just expand the current allocation.
+        self.free(old_allocation);
+        self.allocate(bytes)
+    }
+
+    pub fn free(&mut self, allocation: &Allocation) {
+        self.total_allocated_size -= allocation.length_bytes();
+        self.allocations.free(allocation);
     }
 
     pub fn write_allocation_data(
@@ -151,6 +158,27 @@ impl AllocatorTree {
         }
     }
 
+    pub fn free(&mut self, allocation: &Allocation) {
+        if allocation.length_bytes() == self.size {
+            assert!(self.is_allocated);
+            self.is_allocated = false;
+            return;
+        }
+
+        let dir = allocation.traversal & (1 << self.size.trailing_zeros());
+        if dir == 0 {
+            self.left
+                .as_mut()
+                .expect("Left child should exist if allocated.")
+                .free(allocation);
+        } else {
+            self.right
+                .as_mut()
+                .expect("Right child should exist if allocated.")
+                .free(allocation);
+        }
+    }
+
     pub fn allocate(&mut self, needed_size: u64, required_alignment: u32) -> Option<Allocation> {
         assert!(needed_size.is_power_of_two());
         // This node is already allocated don't search any further.
@@ -158,8 +186,9 @@ impl AllocatorTree {
             return None;
         }
 
-        // This node is free and it fits our needed size so allocate it.
-        if needed_size == self.size {
+        // This node is free and it fits our needed size or matches
+        // our required minimum alignment then allocate it.
+        if needed_size == self.size || required_alignment as u64 == self.size {
             // Ensure it doesnt have any children, if it does then that mean something is allocated
             // within it's range.
             if self.left.is_some()

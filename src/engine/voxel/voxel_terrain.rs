@@ -44,13 +44,11 @@ use crate::{
 
 use super::{
     chunk_generator::ChunkGenerator,
-    thc::VoxelModelTHC,
+    thc::{VoxelModelTHC, VoxelModelTHCCompressed},
     voxel_registry::{VoxelModelId, VoxelModelInfo, VoxelModelRegistry},
     voxel_transform::VoxelModelTransform,
     voxel_world::{VoxelWorld, VoxelWorldModelGpuInfo},
 };
-
-pub type ChunkModelType = VoxelModelTHC;
 
 pub enum VoxelTerrainEvent {
     UpdateRenderDistance { chunk_render_distance: u32 },
@@ -93,7 +91,7 @@ impl VoxelChunkRegionData {
     pub fn get_chunk_traversal(&self, world_chunk_pos: &Vector3<i32>) -> u64 {
         let local_chunk_pos = (world_chunk_pos - self.region_chunk_anchor).map(|x| x as u32);
 
-        return morton::morton_traversal(
+        return morton::morton_traversal_octree(
             morton::morton_encode(local_chunk_pos),
             consts::voxel::TERRAIN_REGION_TREE_HEIGHT,
         );
@@ -279,7 +277,7 @@ pub struct VoxelChunks {
     // pool that waits on io.
     pub waiting_io_regions: HashMap<Vector3<i32>, AssetHandle>,
     pub waiting_io_region_chunks: HashMap<Vector3<i32>, HashSet<Vector3<i32>>>,
-    pub waiting_io_chunks: Vec<(Vector3<i32>, AssetHandle)>,
+    pub waiting_io_chunks: HashMap<Vector3<i32>, AssetHandle>,
 }
 
 impl VoxelChunks {
@@ -299,7 +297,7 @@ impl VoxelChunks {
             queue_timer: Timer::new(Duration::from_millis(5)),
             waiting_io_regions: HashMap::new(),
             waiting_io_region_chunks: HashMap::new(),
-            waiting_io_chunks: Vec::new(),
+            waiting_io_chunks: HashMap::new(),
         }
     }
 
@@ -394,10 +392,10 @@ impl VoxelChunks {
                 VoxelRegionLeafNode::Existing { uuid, model } => {
                     let model_id =
                         model.expect("Model should exist on the chunk if we are saving it");
-                    let chunk_model = registry.get_model::<ChunkModelType>(model_id);
+                    let chunk_model = registry.get_model::<VoxelModelTHC>(model_id);
                     let save_handle = assets.save_asset(
                         Self::chunk_asset_path(project_dir.clone(), terrain_dir.clone(), uuid),
-                        chunk_model.clone(),
+                        VoxelModelTHCCompressed::from(chunk_model),
                     );
                     self.waiting_save_handles.insert(save_handle);
                 }
@@ -499,14 +497,18 @@ impl VoxelChunks {
             VoxelRegionLeafNode::Empty => {}
             VoxelRegionLeafNode::Existing { uuid, model } => {
                 let Some(model_id) = model else {
+                    if self.waiting_io_chunks.contains_key(&chunk_pos) {
+                        return;
+                    }
+
                     // Load the chunk model.
                     let chunk_asset_handle =
-                        assets.load_asset::<ChunkModelType>(Self::chunk_asset_path(
+                        assets.load_asset::<VoxelModelTHCCompressed>(Self::chunk_asset_path(
                             session.project_save_dir.clone().unwrap(),
                             session.terrain_dir.clone().unwrap(),
                             uuid,
                         ));
-                    self.waiting_io_chunks.push((chunk_pos, chunk_asset_handle));
+                    self.waiting_io_chunks.insert(chunk_pos, chunk_asset_handle);
                     return;
                 };
                 if self.renderable_chunks.try_load_chunk(&chunk_pos, *model_id) {
@@ -586,10 +588,10 @@ impl VoxelChunks {
                     let chunk_node = region.get_chunk(&chunk_pos);
                     if let VoxelRegionLeafNode::Existing { uuid, model } = chunk_node {
                         assert!(model.is_none(), "We shouldn't be loading this chunk if it already has an existing model.");
-                        let chunk_asset_handle = assets.load_asset::<VoxelModelTHC>(
+                        let chunk_asset_handle = assets.load_asset::<VoxelModelTHCCompressed>(
                             Self::chunk_asset_path(session.project_save_dir.clone().unwrap(), session.terrain_dir.clone().expect("If the region was loaded then a directory for the terrain must exist."), uuid),
                         );
-                        self.waiting_io_chunks.push((chunk_pos, chunk_asset_handle));
+                        self.waiting_io_chunks.insert(chunk_pos, chunk_asset_handle);
                     }
                 }
                 self.regions
@@ -632,7 +634,7 @@ impl VoxelChunks {
                 }
                 AssetStatus::Loaded => {
                     let loaded_model = assets
-                        .take_asset::<ChunkModelType>(chunk_asset_handle)
+                        .take_asset::<VoxelModelTHCCompressed>(chunk_asset_handle)
                         .expect("If status says loaded then this should be loaded.");
 
                     chunk_model = Some(loaded_model);
@@ -665,7 +667,7 @@ impl VoxelChunks {
                         "chunk_{}_{}_{}",
                         chunk_position.x, chunk_position.y, chunk_position.z
                     ),
-                    VoxelModel::new(*chunk_model),
+                    VoxelModel::new(VoxelModelTHC::from(chunk_model.deref())),
                 );
                 let chunk_region = Self::chunk_to_region_pos(&chunk_position);
                 let chunk_node = self
@@ -693,17 +695,19 @@ impl VoxelChunks {
                     .expect("Should should exist and not be empty.");
                 *chunk_node = VoxelRegionLeafNode::Empty;
             }
-            to_remove_waiting_chunks.push(i);
+            to_remove_waiting_chunks.push(*chunk_position);
         }
 
         // Since we remove in reverse order the indices stay accurate.
-        for index in to_remove_waiting_chunks.into_iter().rev() {
-            self.waiting_io_chunks.remove(index);
+        for chunk_pos in to_remove_waiting_chunks.into_iter() {
+            self.waiting_io_chunks.remove_entry(&chunk_pos);
         }
     }
 
     pub fn mark_chunk_edited(&mut self, chunk_pos: Vector3<i32>) {
         self.edited_chunks.insert(chunk_pos);
+        // Mark dirty since the edited chunk may be a THC which would have a new model ptr.
+        self.renderable_chunks.is_dirty = true;
         Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
     }
 

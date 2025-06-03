@@ -150,6 +150,7 @@ impl Assets {
                                 }
                                 AssetLoadError::Other(err) => {
                                     log::error!("Error loading asset: {}", err.to_string());
+                                    log::error!("Backtrace: {}", err.backtrace().to_string());
                                     assets.asset_statuses.insert(*id, AssetStatus::Error(err));
                                 }
                             },

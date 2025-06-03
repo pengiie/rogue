@@ -232,7 +232,8 @@ impl winit::application::ApplicationHandler for App {
         device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
-        if self.resource_bank().has_resource::<Input>() {
+        if self.resource_bank().has_resource::<Input>() && self.resource_bank().has_resource::<UI>()
+        {
             let window = self.resource_bank().get_resource::<Window>();
             let ui = self.resource_bank().get_resource::<UI>();
             let editor = self.resource_bank().get_resource::<Editor>();

@@ -82,6 +82,8 @@ pub trait GraphicsBackendDevice {
         new_size: winit::dpi::PhysicalSize<NonZeroU32>,
         skip_frame: bool,
     );
+
+    fn device_info(&self) -> GfxDeviceInfo;
 }
 
 pub trait GraphicsBackendRecorder {
@@ -126,6 +128,12 @@ pub trait GraphicsBackendRenderPass {
     fn bind_index_buffer(&mut self, index_buffer: ResourceId<Buffer>, offset: u64);
     fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
     fn draw_indexed(&mut self, vertex_count: u32);
+}
+
+pub struct GfxDeviceInfo {
+    pub max_allocation_size: u64,
+    pub max_storage_buffer_size: u64,
+    pub max_storage_buffer_array_binding_count: u64,
 }
 
 pub struct GfxBlitInfo {

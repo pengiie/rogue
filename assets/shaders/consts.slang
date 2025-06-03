@@ -9,7 +9,9 @@ public static const float TERRAIN_CHUNK_METER_LENGTH = METERS_PER_VOXEL * (float
 
 public static const uint VOXEL_MODEL_SCHEMA_ESVO = CONST_VOXEL_MODEL_SCHEMA_ESVO;
 public static const uint VOXEL_MODEL_SCHEMA_FLAT = 2;
+// Relates to consts::voxel::MODEL_THC_COMPRESSED_SCHEMA.
 public static const uint VOXEL_MODEL_SCHEMA_THC = 3;
+public static const uint VOXEL_MODEL_SCHEMA_THC_COMPRESSED = 4;
 
 public static const uint VOXEL_ATTACHMENT_MAX_ID = 2;
 public static const uint VOXEL_ATTACHMENT_COUNT = VOXEL_ATTACHMENT_MAX_ID + 1;

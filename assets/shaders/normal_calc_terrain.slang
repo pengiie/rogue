@@ -27,10 +27,14 @@ void main(uint3 id: SV_DispatchThreadID) {
     return;
   }
   let schema = u_frame.voxel.model_info_data.Load<uint>(chunk_model_ptr << 2);
-  if (schema == consts::VOXEL_MODEL_SCHEMA_FLAT) {
-    normal_calc_flat(chunk_model_ptr, local_voxel_pos);
-  } else if (schema == consts::VOXEL_MODEL_SCHEMA_THC) {
-    normal_calc_thc(chunk_model_ptr, local_voxel_pos);
+  switch (schema) {
+    case consts::VOXEL_MODEL_SCHEMA_THC:
+    case consts::VOXEL_MODEL_SCHEMA_THC_COMPRESSED:
+      normal_calc_thc(chunk_model_ptr, local_voxel_pos);
+      break;
+    case consts::VOXEL_MODEL_SCHEMA_FLAT:
+      normal_calc_flat(chunk_model_ptr, local_voxel_pos);
+      break;
   }
 }
 

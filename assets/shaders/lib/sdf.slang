@@ -4,6 +4,22 @@ public float sdf_sphere(float3 ray_origin, float3 sphere_pos, float radius) {
   return length(ray_origin - sphere_pos) - radius;
 }
 
+public float sdf_ring(float3 ray_origin, float3 center, float3 normal, float2 stretch, float thickness) {
+  let rd = ray_origin - center; 
+  let p = (dot(rd, normal)) * normal;
+  let dir = normalize(rd - p);
+  let edge = center + dir * stretch.x;
+  return distance(edge, ray_origin) - thickness;
+}
+
+public float3 sdf_ring_normal(float3 ray_origin, float3 center, float3 normal, float2 stretch, float thickness) {
+  let rd = ray_origin - center; 
+  let p = (dot(rd, normal)) * normal;
+  let dir = normalize(rd - p);
+  let edge = center + dir * stretch.x;
+  return normalize(ray_origin - edge);
+}
+
 public float sdf_line_segment(float3 ray_origin, float3 start, float3 end, float radius) {
   var lv = end - start;
   let rd = ray_origin - start;

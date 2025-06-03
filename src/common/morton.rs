@@ -29,7 +29,7 @@ pub fn morton_decode(morton: u64) -> Vector3<u32> {
     Vector3::new(compact(morton), compact(morton >> 1), compact(morton >> 2))
 }
 
-pub fn morton_traversal(mut morton: u64, height: u32) -> u64 {
+pub fn morton_traversal_octree(mut morton: u64, height: u32) -> u64 {
     let mut reverse = 0u64;
     for i in 0..height {
         reverse = (reverse << 3) | (morton & 7);
@@ -39,13 +39,23 @@ pub fn morton_traversal(mut morton: u64, height: u32) -> u64 {
     reverse
 }
 
+pub fn morton_traversal_thc(mut morton: u64, height: u32) -> u64 {
+    let mut reverse = 0u64;
+    for i in 0..height {
+        reverse = (reverse << 6) | (morton & 0b111111);
+        morton >>= 6;
+    }
+
+    reverse
+}
+
 mod tests {
-    use crate::common::morton::morton_traversal;
+    use crate::common::morton::morton_traversal_octree;
 
     #[test]
     fn test_traversal() {
         let a = 0x2E; // 101110
         let b = 0x35; // 110101
-        assert_eq!(morton_traversal(a, 2), b);
+        assert_eq!(morton_traversal_octree(a, 2), b);
     }
 }

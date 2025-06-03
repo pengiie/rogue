@@ -64,7 +64,7 @@ public struct Terrain {
         let chunk_aabb = AABB.new_center_extents(chunk_center, 
                                                  float3(consts::TERRAIN_CHUNK_METER_LENGTH) * 0.5);
 
-        let model_test = trace_model(ray, chunk_aabb, chunk_model_ptr);
+        let model_test = trace_model(ray, chunk_aabb, chunk_model_ptr, matrix3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0));
         if (model_test.did_hit) {
           return RayTerrainTest.hit(model_test.color, model_test.depth_t);
         }
@@ -118,7 +118,7 @@ public struct EntityData {
       let hit_info = rotated_ray.test_aabb(entity_aabb);
 
       if(hit_info.hit) {
-        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr);
+        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_info.rotation);
         if (model_test.did_hit && model_test.depth_t < min_test.depth_t) {
           min_test = RayEntityTest.hit(model_test.color, model_test.depth_t);
         }
@@ -157,7 +157,7 @@ public struct RayModelTest {
   }
 }
 
-public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
+public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr, matrix3x3 rotation) {
   let info_data = u_frame.voxel.model_info_data;
   let model_schema = info_data.Load<uint>(voxel_model_ptr << 2);
   switch (model_schema) {
@@ -165,11 +165,12 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
       let esvo = ESVO(aabb, voxel_model_ptr);
       return esvo.trace(ray);
     case consts::VOXEL_MODEL_SCHEMA_THC:
+    case consts::VOXEL_MODEL_SCHEMA_THC_COMPRESSED:
       let thc = THC(voxel_model_ptr);
-      return thc.trace(ray, aabb);
+      return thc.trace(ray, aabb, rotation);
     case consts::VOXEL_MODEL_SCHEMA_FLAT:
       let flat = Flat(voxel_model_ptr);
-      return flat.trace(ray, aabb);
+      return flat.trace(ray, aabb, rotation);
   }
 
   return RayModelTest.miss();
@@ -207,7 +208,7 @@ public struct Flat {
       return is_present;
   }
 
-  public RayModelTest trace(Ray in_ray, AABB root_aabb) {
+  public RayModelTest trace(Ray in_ray, AABB root_aabb, matrix3x3 rotation) {
     let root_hit_info = ray_aabb_test(in_ray, root_aabb);
 
     var dda = RayDDA(in_ray.advance_clone(root_hit_info.t_enter),
@@ -222,7 +223,8 @@ public struct Flat {
         if (let pt_material = this.load_ptmaterial(voxel_index)) {
           var color = pt_material;
           if (let normal = this.load_normal(voxel_index)) {
-            let l = sqrt(dot(normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
+            let rot_normal = mul(rotation, normal);
+            let l = sqrt(dot(rot_normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
             color *= max(l, 0.2);
           }
           //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
@@ -550,7 +552,7 @@ public struct THC {
            global_grid.y < this.side_length && global_grid.z < this.side_length;
   }
 
-  public RayModelTest trace(Ray in_ray, AABB root_aabb) {
+  public RayModelTest trace(Ray in_ray, AABB root_aabb, matrix3x3 rotation) {
     let root_hit_info = ray_aabb_test(in_ray, root_aabb);
     if (!root_hit_info.hit) {
       return RayModelTest.miss();
@@ -584,7 +586,7 @@ public struct THC {
     if (testglobal) {
       printf("INIT THE VOXEL!!!!!\n");
     }
-    while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 200) {
+    while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 2000) {
       if (testglobal) {
         //printf("next iter\n");
       }
@@ -627,9 +629,9 @@ public struct THC {
               //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
               var color = pt_material;
               if (let normal = this.load_normal(voxel_addr)) {
-                let l = sqrt(dot(normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
+                let rot_normal = mul(rotation, normal);
+                let l = sqrt(dot(rot_normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
                 color *= max(l, 0.2);
-                
               }
               let next_point = curr_anchor_grid + curr_local_grid + max(unit_grid, 0);
               let next_t = ray_point_test(curr_ray, next_point);
@@ -671,7 +673,7 @@ public struct THC {
       let mask = curr_t == next_t;
       last_mask = mask;
       curr_local_grid += int3(mask) * unit_grid; 
-      curr_ray.advance(next_t + 0.00001);
+      curr_ray.advance(next_t + 0.0001);
       if (i == 1) {
         //if () {
 
@@ -835,6 +837,7 @@ public struct THCVoxelAddr {
   public uint child_bit;
 }
 
+// Returns a linear gamma space srgb color.
 public float3 ptmaterial_decode(uint comp) {
     return color::srgb_to_lsrgb(float3(
       (float) ((comp >> 16) & 0xFF) / 255.0,

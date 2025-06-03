@@ -18,14 +18,14 @@ use crate::{
         voxel::{
             attachment::{Attachment, AttachmentId, AttachmentMap},
             flat::VoxelModelFlat,
-            thc::{THCAttachmentLookupNode, THCNode, VoxelModelTHC},
+            thc::{THCAttachmentLookupNodeCompressed, THCNodeCompressed, VoxelModelTHCCompressed},
             voxel::{VoxelModelImpl, VoxelModelType},
         },
     },
 };
 
 pub struct VoxelModelTHCAsset {
-    model: VoxelModelTHC,
+    model: VoxelModelTHCCompressed,
 }
 
 const FILE_VERSION: u32 = 1;
@@ -43,7 +43,7 @@ impl AssetLoader for VoxelModelAnyAsset {
             }),
             Some("THC ") => Ok(VoxelModelAnyAsset {
                 model: Box::new(load_thc_model(reader)?),
-                model_type: VoxelModelType::THC,
+                model_type: VoxelModelType::THCCompressed,
             }),
             _ => Err(anyhow::anyhow!("Unknown header").into()),
         }
@@ -55,8 +55,8 @@ pub struct VoxelModelAnyAsset {
     pub model_type: VoxelModelType,
 }
 
-impl AssetLoader for VoxelModelTHC {
-    fn load(data: &AssetFile) -> std::result::Result<VoxelModelTHC, AssetLoadError>
+impl AssetLoader for VoxelModelTHCCompressed {
+    fn load(data: &AssetFile) -> std::result::Result<VoxelModelTHCCompressed, AssetLoadError>
     where
         Self: Sized + std::any::Any,
     {
@@ -67,14 +67,14 @@ impl AssetLoader for VoxelModelTHC {
 
 fn load_thc_model(
     mut reader: AssetByteReader,
-) -> std::result::Result<VoxelModelTHC, AssetLoadError> {
+) -> std::result::Result<VoxelModelTHCCompressed, AssetLoadError> {
     assert!(reader.version() == 1);
 
     let side_length = reader.read_u32()?;
 
     // Attachment block.
     let attachment_count = reader.read_u32()?;
-    let mut thc = VoxelModelTHC::new_empty(side_length);
+    let mut thc = VoxelModelTHCCompressed::new_empty(side_length);
     let mut attachment_presence_map: HashMap<
         /*presence_pointer*/ u32,
         /*attachment_id*/ u8,
@@ -98,7 +98,7 @@ fn load_thc_model(
         let child_mask_lower = reader.read_u32()?;
         let child_mask_upper = reader.read_u32()?;
         let child_mask = ((child_mask_upper as u64) << 32) | child_mask_lower as u64;
-        node_data.push(THCNode {
+        node_data.push(THCNodeCompressed {
             child_ptr,
             child_mask,
         })
@@ -114,7 +114,7 @@ fn load_thc_model(
             let attachment_mask_upper = reader.read_u32()?;
             let attachment_mask =
                 ((attachment_mask_upper as u64) << 32) | attachment_mask_lower as u64;
-            attachment_lookup_nodes.push(THCAttachmentLookupNode {
+            attachment_lookup_nodes.push(THCAttachmentLookupNodeCompressed {
                 data_ptr,
                 attachment_mask,
             })
@@ -133,7 +133,7 @@ fn load_thc_model(
     Ok(thc)
 }
 
-impl AssetSaver for VoxelModelTHC {
+impl AssetSaver for VoxelModelTHCCompressed {
     fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
     where
         Self: Sized,

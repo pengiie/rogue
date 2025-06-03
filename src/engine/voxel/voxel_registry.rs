@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     flat::{VoxelModelFlat, VoxelModelFlatGpu},
-    thc::{VoxelModelTHC, VoxelModelTHCGpu},
+    thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
     voxel::{
         VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelType,
@@ -50,6 +50,7 @@ pub struct VoxelModelInfo {
     pub asset_path: Option<AssetPath>,
 }
 
+#[derive(Clone)]
 pub struct VoxelModelRegistry {
     /// Each archetype is (VoxelModel<T>, VoxelModelGpu<T::Gpu>).
     /// The key is the (TypeId::of::<T>()) and the value is (Archetype, TypeId::of::<T::Gpu>())
@@ -103,14 +104,17 @@ impl VoxelModelRegistry {
         let voxel_model_gpu: Box<dyn VoxelModelGpuImpl> = match voxel_model_any.model_type {
             VoxelModelType::Flat => Box::new(VoxelModelFlatGpu::new()),
             VoxelModelType::THC => Box::new(VoxelModelTHCGpu::new()),
+            VoxelModelType::THCCompressed => Box::new(VoxelModelTHCCompressedGpu::new()),
         };
         let model_type_info = match voxel_model_any.model_type {
             VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlat>(),
             VoxelModelType::THC => TypeInfo::new::<VoxelModelTHC>(),
+            VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressed>(),
         };
         let gpu_type_info = match voxel_model_any.model_type {
             VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlatGpu>(),
             VoxelModelType::THC => TypeInfo::new::<VoxelModelTHCGpu>(),
+            VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressedGpu>(),
         };
         let id = self.next_id();
 
@@ -157,6 +161,18 @@ impl VoxelModelRegistry {
                 (
                     *voxel_model_any.model.downcast::<VoxelModelTHC>().unwrap(),
                     *voxel_model_gpu.downcast::<VoxelModelTHCGpu>().unwrap(),
+                ),
+            ),
+            VoxelModelType::THCCompressed => archetype.insert(
+                id.id,
+                (
+                    *voxel_model_any
+                        .model
+                        .downcast::<VoxelModelTHCCompressed>()
+                        .unwrap(),
+                    *voxel_model_gpu
+                        .downcast::<VoxelModelTHCCompressedGpu>()
+                        .unwrap(),
                 ),
             ),
         };

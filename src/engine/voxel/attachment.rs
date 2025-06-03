@@ -176,15 +176,13 @@ impl AttachmentInfoMap {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AttachmentMap<T> {
-    map: Vec<Option<T>>,
+    map: [Option<T>; Attachment::MAX_ATTACHMENT_ID as usize],
 }
 
 impl<T> AttachmentMap<T> {
     pub fn new() -> Self {
         Self {
-            map: (0..Attachment::MAX_ATTACHMENT_ID)
-                .map(|x| None)
-                .collect::<Vec<_>>(),
+            map: [const { None }; Attachment::MAX_ATTACHMENT_ID as usize],
         }
     }
 
@@ -196,6 +194,10 @@ impl<T> AttachmentMap<T> {
         //if let Some(old) = &self.map[attachment_id as usize] {
         //}
         self.map[attachment_id as usize] = Some(val);
+    }
+
+    pub fn clear(&mut self) {
+        self.map.fill_with(|| const { None });
     }
 
     pub fn get(&self, id: AttachmentId) -> Option<&T> {

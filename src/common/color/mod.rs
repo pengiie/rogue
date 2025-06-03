@@ -59,7 +59,7 @@ impl<S: ColorSpace> Color<S> {
 
 impl Color<ColorSpaceSrgb> {
     pub fn new_srgb(r: f32, g: f32, b: f32) -> Self {
-        Self::new(r, g, b)
+        Self::new(r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0))
     }
 
     pub fn new_srgb_hex(hex: impl ToString) -> Self {
@@ -77,6 +77,14 @@ impl Color<ColorSpaceSrgb> {
             xyz: Vector3::new(0.0, 0.0, 0.0),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn mix(&self, other: &Self, t: f32) -> Self {
+        Self::new(
+            (1.0 - t) * self.r() + other.r() * t,
+            (1.0 - t) * self.g() + other.g() * t,
+            (1.0 - t) * self.b() + other.b() * t,
+        )
     }
 
     pub fn multiply_gamma(&mut self, mul: f32) {

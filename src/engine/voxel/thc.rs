@@ -1,4 +1,8 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    time::Duration,
+};
 
 use log::debug;
 use nalgebra::Vector3;
@@ -6,9 +10,13 @@ use petgraph::matrix_graph::Zero;
 
 use crate::{
     common::{
+        aabb::AABB,
         bitset::Bitset,
         color::Color,
-        morton::{self, morton_decode},
+        morton::{
+            self, morton_decode, morton_encode, morton_traversal_octree, morton_traversal_thc,
+        },
+        ray::Ray,
     },
     consts,
     engine::{
@@ -25,30 +33,636 @@ use super::{
     flat::VoxelModelFlat,
     voxel::{
         VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelTrace, VoxelModelType,
+        VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
 };
+
+#[derive(Clone)]
+pub struct VoxelModelTHC {
+    side_length: u32,
+    attachment_map: AttachmentInfoMap,
+    root_node: Box<VoxelModelTHCNode>,
+    update_tracker: u32,
+}
+
+#[derive(Clone)]
+pub enum VoxelModelTHCNode {
+    Internal {
+        children: [Option<Box<VoxelModelTHCNode>>; 64],
+    },
+    Preleaf {
+        leaf_mask: u64,
+        attachment_data: AttachmentMap<(
+            /*attachment_mask*/ u64,
+            /*attachment_data*/ Vec<u32>,
+        )>,
+    },
+}
+
+impl VoxelModelTHCNode {
+    pub fn new_empty_internal() -> Self {
+        Self::Internal {
+            children: [const { None }; 64],
+        }
+    }
+
+    pub fn new_empty_preleaf() -> Self {
+        Self::Preleaf {
+            leaf_mask: 0,
+            attachment_data: AttachmentMap::new(),
+        }
+    }
+
+    pub fn set_attachment(
+        &mut self,
+        child_idx: u32,
+        attachment_id: u8,
+        attachment_size: usize,
+        data: &[u32],
+    ) {
+        assert_eq!(attachment_size, data.len());
+        match self {
+            VoxelModelTHCNode::Internal { children } => panic!(),
+            VoxelModelTHCNode::Preleaf {
+                leaf_mask,
+                attachment_data,
+            } => {
+                let Some((attachment_mask, attachment_data)) =
+                    attachment_data.get_mut(attachment_id)
+                else {
+                    attachment_data.insert(attachment_id, ((1 << child_idx), data.to_vec()));
+                    return;
+                };
+                let child_bit = (1 << child_idx);
+                let child_offset =
+                    (*attachment_mask & (child_bit - 1)).count_ones() as usize * attachment_size;
+                if (*attachment_mask & child_bit) > 0 {
+                    // Overwrite existing attachment.
+                    for i in 0..attachment_size {
+                        attachment_data[child_offset + i] = data[i];
+                    }
+                    return;
+                }
+
+                for i in 0..attachment_size {
+                    attachment_data.insert(child_offset, data[i]);
+                }
+                *attachment_mask |= (1 << child_idx);
+            }
+        }
+    }
+}
+
+impl VoxelModelTHC {
+    pub fn new_empty(side_length: u32) -> Self {
+        assert_eq!(
+            next_power_of_4(side_length),
+            side_length,
+            "Length for a THC must be a power of 4."
+        );
+        assert!(side_length >= 4, "Length for a THC must be atleast 4.");
+
+        let root_node = if side_length == 4 {
+            VoxelModelTHCNode::new_empty_preleaf()
+        } else {
+            VoxelModelTHCNode::new_empty_internal()
+        };
+        Self {
+            side_length,
+            attachment_map: AttachmentInfoMap::new(),
+            root_node: Box::new(root_node),
+            update_tracker: 0,
+        }
+    }
+
+    pub fn in_bounds_local(&self, local_position: Vector3<i32>) -> bool {
+        return local_position.x >= 0
+            && local_position.y >= 0
+            && local_position.z >= 0
+            && local_position.x < self.side_length as i32
+            && local_position.y < self.side_length as i32
+            && local_position.z < self.side_length as i32;
+    }
+
+    pub fn tree_height(&self) -> u32 {
+        self.side_length.trailing_zeros() / 2
+    }
+
+    pub fn get_or_create_preleaf(
+        &mut self,
+        local_voxel_pos: Vector3<u32>,
+    ) -> (&mut VoxelModelTHCNode, /*child_idx=*/ u32) {
+        let height = self.tree_height();
+        let mut traversal = morton_traversal_thc(morton_encode(local_voxel_pos), height);
+        let mut curr_node = &mut self.root_node;
+        for i in 0..height {
+            let index = ((traversal >> (i * 6)) & 0b111111) as u32;
+            if i == height - 1 {
+                return (curr_node, index);
+            } else {
+                let mut new_node;
+                match curr_node.deref_mut() {
+                    VoxelModelTHCNode::Internal { children } => {
+                        new_node = children[index as usize].get_or_insert_with(|| {
+                            if i < height.saturating_sub(2) {
+                                Box::new(VoxelModelTHCNode::new_empty_internal())
+                            } else {
+                                Box::new(VoxelModelTHCNode::new_empty_preleaf())
+                            }
+                        });
+                    }
+                    VoxelModelTHCNode::Preleaf { .. } => unreachable!(),
+                }
+                curr_node = new_node;
+            }
+        }
+
+        panic!();
+    }
+}
+
+impl From<&VoxelModelTHC> for VoxelModelTHCCompressed {
+    fn from(thc: &VoxelModelTHC) -> Self {
+        let mut compressed = VoxelModelTHCCompressed::new_empty(thc.side_length);
+        for (_, attachment) in thc.attachment_map.iter() {
+            compressed.initialize_attachment_buffers(attachment);
+        }
+
+        let mut stack = vec![(
+            &thc.root_node,
+            /*curr_compressed_node*/ 0,
+            /*curr_child_iter*/ 0,
+        )];
+        compressed.node_data.push(THCNodeCompressed::new_empty());
+        while !stack.is_empty() {
+            let curr_node_index = stack.len() - 1;
+            let (curr_node, compressed_node_idx, curr_child_iter) = &stack[curr_node_index];
+
+            let compressed_node_idx = *compressed_node_idx;
+            let curr_child_iter = *curr_child_iter;
+
+            match (*curr_node).deref() {
+                VoxelModelTHCNode::Internal { children } => {
+                    if curr_child_iter == 64 {
+                        stack.pop();
+                        continue;
+                    }
+
+                    if curr_child_iter == 0 {
+                        let mut child_mask = 0u64;
+                        let children_allocation_index = compressed.node_data.len();
+                        for i in 0..64 {
+                            if children[i].is_none() {
+                                continue;
+                            }
+                            child_mask |= (1 << i);
+                        }
+                        compressed.node_data[compressed_node_idx] = THCNodeCompressed {
+                            child_ptr: children_allocation_index as u32,
+                            child_mask,
+                        };
+                        compressed.node_data.resize(
+                            children_allocation_index + child_mask.count_ones() as usize,
+                            THCNodeCompressed::new_empty(),
+                        );
+                    }
+                    if let Some(next_child) = &children[curr_child_iter] {
+                        let curr_compressed_node = &compressed.node_data[compressed_node_idx];
+                        assert!(curr_compressed_node.child_ptr() != 0);
+
+                        let child_offset = (curr_compressed_node.child_mask
+                            & ((1 << curr_child_iter) - 1))
+                            .count_ones();
+                        stack.push((
+                            next_child,
+                            (curr_compressed_node.child_ptr() + child_offset) as usize,
+                            0,
+                        ));
+                    }
+
+                    let (_, _, curr_child_iter) = &mut stack[curr_node_index];
+                    *curr_child_iter += 1;
+                }
+                VoxelModelTHCNode::Preleaf {
+                    leaf_mask,
+                    attachment_data,
+                } => {
+                    compressed.node_data[compressed_node_idx] = THCNodeCompressed {
+                        child_ptr: 0x8000_0000,
+                        child_mask: *leaf_mask,
+                    };
+                    for (attachment_id, (src_attachment_mask, src_attachment_data)) in
+                        attachment_data.iter()
+                    {
+                        let lookup_nodes = compressed
+                            .attachment_lookup_data
+                            .get_mut(attachment_id)
+                            .unwrap();
+                        if lookup_nodes.len() < compressed.node_data.len() {
+                            lookup_nodes.resize(
+                                compressed.node_data.len(),
+                                THCAttachmentLookupNodeCompressed::new_empty(),
+                            );
+                        }
+                        let dst_attachment_data = compressed
+                            .attachment_raw_data
+                            .get_mut(attachment_id)
+                            .unwrap();
+                        lookup_nodes[compressed_node_idx] = THCAttachmentLookupNodeCompressed {
+                            data_ptr: dst_attachment_data.len() as u32,
+                            attachment_mask: *src_attachment_mask,
+                        };
+                        dst_attachment_data.extend_from_slice(src_attachment_data);
+                    }
+                    stack.pop();
+                    continue;
+                }
+            }
+        }
+
+        if thc.side_length == 16 {
+            log::info!("Result is node data:");
+            for node in &compressed.node_data {
+                log::info!("{:?}", node);
+            }
+        }
+
+        return compressed;
+    }
+}
+
+impl From<&VoxelModelTHCCompressed> for VoxelModelTHC {
+    fn from(compressed: &VoxelModelTHCCompressed) -> Self {
+        let mut root_node = Box::new(if compressed.node_data[0].is_leaf_node() {
+            VoxelModelTHCNode::new_empty_preleaf()
+        } else {
+            VoxelModelTHCNode::new_empty_internal()
+        });
+        let mut to_process = vec![(0, 0u64, 0usize, &mut root_node)];
+        while let Some((curr_height, traversal, compressed_node_index, node)) = to_process.pop() {
+            let compressed_node = &compressed.node_data[compressed_node_index];
+            match node.deref_mut() {
+                VoxelModelTHCNode::Internal { children } => {
+                    assert!(!compressed_node.is_leaf_node());
+                    for (i, child) in children.iter_mut().enumerate() {
+                        let child_bit = (1u64 << i);
+                        let is_present = (compressed_node.child_mask & child_bit) > 0;
+                        if !is_present {
+                            continue;
+                        }
+
+                        *child = Some(Box::new(if curr_height >= compressed.tree_height() - 2 {
+                            VoxelModelTHCNode::new_empty_preleaf()
+                        } else {
+                            VoxelModelTHCNode::new_empty_internal()
+                        }));
+                        let compressed_child_offset =
+                            (compressed_node.child_mask & (child_bit - 1)).count_ones() as usize;
+                        to_process.push((
+                            curr_height + 1,
+                            (traversal << 6) | i as u64,
+                            compressed_node.child_ptr() as usize + compressed_child_offset,
+                            child.as_mut().unwrap(),
+                        ));
+                    }
+                }
+                VoxelModelTHCNode::Preleaf {
+                    leaf_mask,
+                    attachment_data,
+                } => {
+                    assert!(compressed_node.is_leaf_node());
+                    *leaf_mask = compressed_node.child_mask;
+                    for (attachment_id, lookup_nodes) in compressed.attachment_lookup_data.iter() {
+                        // Lookup node may not be present since we don't always resize lookup buffer to save space.
+                        let Some(THCAttachmentLookupNodeCompressed {
+                            data_ptr,
+                            attachment_mask,
+                        }) = lookup_nodes.get(compressed_node_index)
+                        else {
+                            continue;
+                        };
+
+                        let data_ptr = *data_ptr as usize;
+                        attachment_data.insert(
+                            attachment_id,
+                            (
+                                *attachment_mask,
+                                compressed.attachment_raw_data.get(attachment_id).unwrap()
+                                    [data_ptr..(data_ptr + attachment_mask.count_ones() as usize)]
+                                    .to_vec(),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        return VoxelModelTHC {
+            side_length: compressed.side_length,
+            root_node,
+            attachment_map: compressed.attachment_map.clone(),
+            update_tracker: 0,
+        };
+    }
+}
+
+impl VoxelModelImpl for VoxelModelTHC {
+    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace> {
+        let original_pos = ray.origin;
+        let mut ray = ray.clone();
+        let Some(model_t) = ray.intersect_aabb(aabb) else {
+            return None;
+        };
+        ray.advance(model_t);
+
+        let local_pos = ray.origin - aabb.min;
+        let norm_pos = local_pos.zip_map(&aabb.side_length(), |x, y| (x / y).clamp(0.0, 0.9999));
+        // Our scaled position from [0, bounds).
+        let dda_pos = norm_pos * self.side_length as f32;
+
+        let height = self.tree_height() - 1;
+        let sl = self.side_length;
+        let quarter_sl = self.side_length >> 2;
+        let unit_grid = ray.dir.map(|x| x.signum() as i32);
+
+        let mut curr_ray = Ray::new(dda_pos, ray.dir);
+        let mut curr_node = &self.root_node;
+        let mut curr_height = 0;
+        let mut curr_local_grid = curr_ray
+            .origin
+            .map(|x| (x.floor() as u32 >> (height * 2)) as i32);
+        let mut curr_anchor = Vector3::<u32>::zeros();
+        // Don't include the leaf layer in the height.
+        let mut stack = Vec::new();
+        let mut i = 0;
+        while self.in_bounds_local(curr_ray.origin.map(|x| x.floor() as i32)) && (i < 2000) {
+            i += 1;
+            let should_pop = !(curr_local_grid.x >= 0
+                && curr_local_grid.y >= 0
+                && curr_local_grid.z >= 0
+                && curr_local_grid.x <= 3
+                && curr_local_grid.y <= 3
+                && curr_local_grid.z <= 3);
+            if should_pop {
+                if curr_height == 0 {
+                    break;
+                }
+                curr_node = stack.pop().unwrap();
+                curr_height -= 1;
+                curr_local_grid =
+                    curr_anchor.map(|x| ((x >> ((height - curr_height) * 2)) & 3) as i32);
+                curr_anchor = curr_anchor.map(|x| {
+                    (x >> ((height - curr_height + 1) * 2)) << ((height - curr_height + 1) * 2)
+                });
+            } else {
+                let child_index = morton::morton_encode(curr_local_grid.map(|x| x as u32));
+                let node_size = quarter_sl >> (curr_height * 2);
+
+                match curr_node.deref() {
+                    VoxelModelTHCNode::Internal { children } => {
+                        if let Some(child) = &children[child_index as usize] {
+                            stack.push(curr_node);
+                            curr_node = child;
+                            curr_height += 1;
+                            curr_anchor = curr_anchor
+                                .zip_map(&curr_local_grid, |x, y| x + y as u32 * node_size);
+
+                            let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
+                                (x.floor() as u32).clamp(y, y + node_size - 1)
+                            });
+                            curr_local_grid = global_grid_pos
+                                .map(|x| ((x >> ((height - curr_height) * 2)) & 0b11) as i32);
+                            continue;
+                        }
+                    }
+                    VoxelModelTHCNode::Preleaf {
+                        leaf_mask,
+                        attachment_data,
+                    } => {
+                        let is_leaf_present = (leaf_mask & (1 << child_index)) > 0;
+                        if is_leaf_present {
+                            curr_anchor = curr_anchor
+                                .zip_map(&curr_local_grid, |x, y| x + y as u32 * node_size);
+                            let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
+                                (x.floor() as u32).clamp(y, y + node_size - 1)
+                            });
+
+                            let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
+                            let world_pos_hit =
+                                aabb.min + curr_ray.origin.component_mul(&t_scaling);
+                            let depth_t = original_pos.metric_distance(&world_pos_hit);
+                            return Some(VoxelModelTrace {
+                                local_position: global_grid_pos,
+                                depth_t,
+                            });
+                        }
+                    }
+                }
+            }
+
+            let node_size = quarter_sl >> (curr_height * 2);
+            let next_point = curr_anchor
+                + curr_local_grid.map(|x| x as u32) * node_size
+                + unit_grid.map(|x| x.max(0) as u32) * node_size;
+            let next_t = curr_ray.intersect_point(next_point.cast::<f32>());
+            let min_t = next_t.min();
+            let mask = next_t.map(|x| if x == min_t { 1 } else { 0 });
+
+            curr_local_grid += unit_grid.component_mul(&mask);
+            curr_ray.advance(min_t + 0.0001);
+        }
+
+        return None;
+    }
+
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {
+        self.update_tracker += 1;
+        let other = &range.data.flat;
+        self.attachment_map.inherit_other(&other.attachment_map);
+
+        for i in 0..other.volume {
+            if !other.presence_data.get_bit(i) {
+                continue;
+            }
+
+            let dst_pos = range.offset + other.get_voxel_position(i);
+            let (dst_node, dst_index) = 'get_or_create_preleaf: {
+                let height = self.tree_height();
+                let mut traversal = morton_traversal_thc(morton_encode(dst_pos), height);
+                let mut curr_node = &mut self.root_node;
+                for i in 0..height {
+                    let index = (traversal & 0b111111) as u32;
+                    if i == height - 1 {
+                        break 'get_or_create_preleaf (curr_node, index);
+                    } else {
+                        let mut new_node;
+                        match curr_node.deref_mut() {
+                            VoxelModelTHCNode::Internal { children } => {
+                                new_node = children[index as usize].get_or_insert_with(|| {
+                                    if i < height.saturating_sub(2) {
+                                        Box::new(VoxelModelTHCNode::new_empty_internal())
+                                    } else {
+                                        Box::new(VoxelModelTHCNode::new_empty_preleaf())
+                                    }
+                                });
+                            }
+                            VoxelModelTHCNode::Preleaf { .. } => unreachable!(),
+                        }
+                        curr_node = new_node;
+                        traversal >>= 6;
+                    }
+                }
+
+                panic!();
+            };
+
+            let mut count = 0u32;
+            for (attachment_id, presence_data) in other.attachment_presence_data.iter() {
+                if presence_data.get_bit(i) {
+                    count += 1;
+                    let attachment = self.attachment_map.get_unchecked(attachment_id);
+                    let src_offset = i * attachment.size() as usize;
+                    let src_data = &other.attachment_data.get(attachment_id).unwrap()
+                        [src_offset..(src_offset + attachment.size() as usize)];
+                    dst_node.set_attachment(
+                        dst_index,
+                        attachment_id,
+                        attachment.size() as usize,
+                        src_data,
+                    );
+                }
+            }
+
+            if count == 0 {
+                // Optimize voxel removal to be per node for faster removals.
+                match dst_node.deref_mut() {
+                    VoxelModelTHCNode::Internal { children } => unreachable!(),
+                    VoxelModelTHCNode::Preleaf {
+                        leaf_mask,
+                        attachment_data,
+                    } => {
+                        *leaf_mask &= !(1 << dst_index);
+                        attachment_data.clear();
+                    }
+                }
+            } else {
+                match dst_node.deref_mut() {
+                    VoxelModelTHCNode::Internal { children } => unreachable!(),
+                    VoxelModelTHCNode::Preleaf {
+                        leaf_mask,
+                        attachment_data,
+                    } => {
+                        *leaf_mask |= (1 << dst_index);
+                    }
+                }
+            }
+        }
+    }
+
+    fn schema(&self) -> super::voxel::VoxelModelSchema {
+        consts::voxel::MODEL_THC_SCHEMA
+    }
+
+    fn length(&self) -> Vector3<u32> {
+        Vector3::new(self.side_length, self.side_length, self.side_length)
+    }
+}
+
+impl VoxelModelImplConcrete for VoxelModelTHC {
+    type Gpu = VoxelModelTHCGpu;
+
+    fn model_type() -> Option<VoxelModelType> {
+        Some(VoxelModelType::THC)
+    }
+}
+
+pub struct VoxelModelTHCGpu {
+    compressed_model: Option<VoxelModelTHCCompressed>,
+    compressed_model_gpu: VoxelModelTHCCompressedGpu,
+
+    initialized_data: bool,
+    update_tracker: u32,
+}
+
+impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
+    fn new() -> Self {
+        Self {
+            compressed_model: None,
+            compressed_model_gpu: VoxelModelTHCCompressedGpu::new(),
+
+            initialized_data: false,
+            update_tracker: 0,
+        }
+    }
+}
+
+impl VoxelModelGpuImpl for VoxelModelTHCGpu {
+    fn aggregate_model_info(&self) -> Option<Vec<u32>> {
+        self.compressed_model_gpu.aggregate_model_info()
+    }
+
+    fn update_gpu_objects(
+        &mut self,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) -> bool {
+        let model = model.downcast_ref::<VoxelModelTHC>().unwrap();
+
+        let mut did_allocate = false;
+        if self.update_tracker != model.update_tracker || !self.initialized_data {
+            self.initialized_data = true;
+            self.update_tracker = model.update_tracker;
+            let compressed_model = VoxelModelTHCCompressed::from(model);
+            if self.compressed_model.is_some() {
+                self.compressed_model_gpu.dealloc(allocator);
+            }
+
+            self.compressed_model = Some(compressed_model);
+            self.compressed_model_gpu = VoxelModelTHCCompressedGpu::new();
+        }
+
+        if let Some(compressed_model) = &self.compressed_model {
+            did_allocate = self
+                .compressed_model_gpu
+                .update_gpu_objects(allocator, compressed_model);
+        }
+
+        return did_allocate;
+    }
+
+    fn write_gpu_updates(
+        &mut self,
+        device: &mut GfxDevice,
+        allocator: &mut GpuBufferAllocator,
+        model: &dyn VoxelModelImpl,
+    ) {
+        if let Some(compressed_model) = &self.compressed_model {
+            self.compressed_model_gpu
+                .write_gpu_updates(device, allocator, compressed_model);
+        };
+    }
+}
 
 // Tetrahexacontree, aka., 64-tree. Essentially an octree where each node is
 // two octree nodes squashed together, resulting in 64 children in each node.
 #[derive(Clone)]
-pub struct VoxelModelTHC {
+pub struct VoxelModelTHCCompressed {
     pub side_length: u32,
-    pub node_data: Vec<THCNode>,
-    pub attachment_lookup_data: AttachmentMap<Vec<THCAttachmentLookupNode>>,
+    pub node_data: Vec<THCNodeCompressed>,
+    pub attachment_lookup_data: AttachmentMap<Vec<THCAttachmentLookupNodeCompressed>>,
     pub attachment_raw_data: AttachmentMap<Vec<u32>>,
     pub attachment_map: AttachmentInfoMap,
 }
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct THCNode {
+pub struct THCNodeCompressed {
     // Left most bit determines if this node is a leaf.
     pub child_ptr: u32,
     pub child_mask: u64,
 }
 
-impl std::fmt::Debug for THCNode {
+impl std::fmt::Debug for THCNodeCompressed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut child_mask = String::with_capacity(64);
         for i in 0usize..64 {
@@ -68,7 +682,7 @@ impl std::fmt::Debug for THCNode {
     }
 }
 
-impl THCNode {
+impl THCNodeCompressed {
     pub fn new_empty() -> Self {
         Self {
             child_ptr: 0,
@@ -90,13 +704,20 @@ impl THCNode {
 }
 
 #[derive(Clone)]
-pub struct THCAttachmentLookupNode {
+pub struct THCAttachmentLookupNodeCompressed {
     pub data_ptr: u32,
     // A mask designating which children have the attachment.
     pub attachment_mask: u64,
 }
 
-impl THCAttachmentLookupNode {
+impl THCAttachmentLookupNodeCompressed {
+    pub const fn new_empty() -> Self {
+        Self {
+            data_ptr: 0,
+            attachment_mask: 0,
+        }
+    }
+
     pub fn data_ptr(&self) -> u32 {
         self.data_ptr
     }
@@ -106,7 +727,15 @@ impl THCAttachmentLookupNode {
     }
 }
 
-impl VoxelModelTHC {
+pub fn next_power_of_4(x: u32) -> u32 {
+    let x = x.next_power_of_two();
+    if (x.trailing_zeros() % 2 == 0) {
+        return x;
+    }
+    return x << 1;
+}
+
+impl VoxelModelTHCCompressed {
     pub fn new_empty(length: u32) -> Self {
         assert_eq!(
             Self::next_power_of_4(length),
@@ -116,11 +745,20 @@ impl VoxelModelTHC {
         assert!(length >= 4, "Length for a THC must be atleast 4.");
         Self {
             side_length: length,
-            node_data: vec![THCNode::new_empty()],
+            node_data: vec![THCNodeCompressed::new_empty()],
             attachment_lookup_data: AttachmentMap::new(),
             attachment_raw_data: AttachmentMap::new(),
             attachment_map: AttachmentMap::new(),
         }
+    }
+
+    pub fn in_bounds_local(&self, local_position: Vector3<i32>) -> bool {
+        return local_position.x >= 0
+            && local_position.y >= 0
+            && local_position.z >= 0
+            && local_position.x < self.side_length as i32
+            && local_position.y < self.side_length as i32
+            && local_position.z < self.side_length as i32;
     }
 
     pub fn next_power_of_4(x: u32) -> u32 {
@@ -131,66 +769,126 @@ impl VoxelModelTHC {
         return x << 1;
     }
 
-    pub fn tree_height(&self) -> u32 {
-        self.side_length.trailing_zeros() / 2
-    }
+    // If not existing already, will intialize the attachment buffers and register to the
+    // attachment map.
+    pub fn initialize_attachment_buffers(&mut self, attachment: &Attachment) {
+        self.attachment_map
+            .insert(attachment.id(), attachment.clone());
 
-    pub fn get_or_create_preleaf(
-        &mut self,
-        local_position: Vector3<u32>,
-    ) -> (
-        /*idx of preleaf*/ usize,
-        /*index into child mask*/ u32,
-    ) {
-        let mut traversal = morton::morton_traversal(
-            morton::morton_encode(local_position),
-            self.side_length.trailing_zeros(),
-        );
-
-        let mut curr_height = 0;
-        let mut curr_node = 0;
-        loop {
-            let curr_idx = traversal & 0b111111;
-            if curr_height + 1 == self.tree_height() {
-                return (curr_node, curr_idx as u32);
-            } else {
-                let n = &self.node_data[curr_node];
-                let is_child_present = (n.child_mask & (1 << curr_idx)) > 0;
-                if is_child_present {
-                } else {
-                }
-            }
-
-            curr_height += 1;
-            traversal <<= 6;
+        if !self.attachment_lookup_data.contains(attachment.id()) {
+            self.attachment_lookup_data.insert(
+                attachment.id(),
+                vec![THCAttachmentLookupNodeCompressed::new_empty(); self.node_data.len()],
+            );
+            self.attachment_raw_data.insert(attachment.id(), Vec::new());
         }
     }
 
-    pub fn set_voxel_attachment(
-        &mut self,
-        local_position: Vec<u32>,
-        attachment_id: AttachmentId,
-        data: Option<Vec<u32>>,
-    ) {
+    pub fn tree_height(&self) -> u32 {
+        self.side_length.trailing_zeros() / 2
     }
 }
 
-impl VoxelModelImplConcrete for VoxelModelTHC {
-    type Gpu = VoxelModelTHCGpu;
+impl VoxelModelImplConcrete for VoxelModelTHCCompressed {
+    type Gpu = VoxelModelTHCCompressedGpu;
 
     fn model_type() -> Option<VoxelModelType> {
-        Some(VoxelModelType::THC)
+        Some(VoxelModelType::THCCompressed)
     }
 }
 
-impl VoxelModelImpl for VoxelModelTHC {
-    fn trace(
-        &self,
-        ray: &crate::common::ray::Ray,
-        aabb: &crate::common::aabb::AABB,
-    ) -> Option<VoxelModelTrace> {
+impl VoxelModelImpl for VoxelModelTHCCompressed {
+    fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace> {
+        let mut ray = ray.clone();
+        let Some(model_t) = ray.intersect_aabb(aabb) else {
+            return None;
+        };
+        ray.advance(model_t);
+
+        let local_pos = ray.origin - aabb.min;
+        let norm_pos = local_pos.zip_map(&aabb.side_length(), |x, y| (x / y).clamp(0.0, 0.9999));
+        // Our scaled position from [0, bounds).
+        let dda_pos = norm_pos * self.side_length as f32;
+
+        let height = self.tree_height() - 1;
+        let sl = self.side_length;
+        let quarter_sl = self.side_length >> 2;
+        let unit_grid = ray.dir.map(|x| x.signum() as i32);
+
+        let mut curr_ray = Ray::new(dda_pos, ray.dir);
+        let mut curr_node_index = 0;
+        let mut curr_height = 0;
+        let mut curr_local_grid = curr_ray
+            .origin
+            .map(|x| (x.floor() as u32 >> (height * 2)) as i32);
+        let mut curr_anchor = Vector3::<u32>::zeros();
+        // Don't include the leaf layer in the height.
+        let mut stack = Vec::new();
+        let mut i = 0;
+        while self.in_bounds_local(curr_ray.origin.map(|x| x.floor() as i32)) && (i < 2000) {
+            i += 1;
+            let should_pop = !(curr_local_grid.x >= 0
+                && curr_local_grid.y >= 0
+                && curr_local_grid.z >= 0
+                && curr_local_grid.x <= 3
+                && curr_local_grid.y <= 3
+                && curr_local_grid.z <= 3);
+            if should_pop {
+                if curr_height == 0 {
+                    break;
+                }
+                curr_node_index = stack.pop().unwrap();
+                curr_height -= 1;
+                curr_local_grid =
+                    curr_anchor.map(|x| ((x >> ((height - curr_height) * 2)) & 3) as i32);
+                curr_anchor = curr_anchor.map(|x| {
+                    (x >> ((height - curr_height + 1) * 2)) << ((height - curr_height + 1) * 2)
+                });
+            } else {
+                let child_index = morton::morton_encode(curr_local_grid.map(|x| x as u32));
+                let curr_node = &self.node_data[curr_node_index];
+                let is_present = (curr_node.child_mask & (1 << child_index)) > 0;
+                if is_present {
+                    let node_size = quarter_sl >> (curr_height * 2);
+                    let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
+                        (x.floor() as u32).clamp(y, y + node_size - 1)
+                    });
+                    if curr_node.is_leaf_node() {
+                        let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
+                        let world_pos_hit = aabb.min + curr_ray.origin.component_mul(&t_scaling);
+                        let depth_t = ray.origin.metric_distance(&world_pos_hit);
+                        return Some(VoxelModelTrace {
+                            local_position: global_grid_pos,
+                            depth_t,
+                        });
+                    }
+                    let child_offset =
+                        (curr_node.child_mask & ((1 << child_index) - 1)).count_ones();
+                    stack.push(curr_node_index);
+                    curr_node_index = (curr_node.child_ptr() + child_offset) as usize;
+
+                    curr_height += 1;
+                    curr_local_grid = global_grid_pos
+                        .map(|x| ((x >> ((height - curr_height) * 2)) & 0b11) as i32);
+                    continue;
+                }
+            }
+
+            let node_size = quarter_sl >> (curr_height * 2);
+            let next_point = curr_anchor
+                + curr_local_grid.map(|x| x as u32) * node_size
+                + unit_grid.map(|x| x.max(0) as u32);
+            let next_t = curr_ray.intersect_point(next_point.cast::<f32>());
+            let min_t = next_t.min();
+            let mask = next_t.map(|x| if x == min_t { 1 } else { 0 });
+
+            curr_local_grid += unit_grid.component_mul(&mask);
+            // Epsilon since sometimes we advance out of bounds but due to fp math it's just barely
+            // off, messing up the traversal.
+            curr_ray.advance(min_t + 0.0001);
+        }
+
         return None;
-        //todo!()
     }
 
     fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {
@@ -198,7 +896,7 @@ impl VoxelModelImpl for VoxelModelTHC {
     }
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
-        consts::voxel::MODEL_THC_SCHEMA
+        consts::voxel::MODEL_THC_COMPRESSED_SCHEMA
     }
 
     fn length(&self) -> nalgebra::Vector3<u32> {
@@ -206,7 +904,7 @@ impl VoxelModelImpl for VoxelModelTHC {
     }
 }
 
-pub struct VoxelModelTHCGpu {
+pub struct VoxelModelTHCCompressedGpu {
     // Model side length in voxels.
     side_length: u32,
     nodes_allocation: Option<Allocation>,
@@ -216,9 +914,7 @@ pub struct VoxelModelTHCGpu {
     initialized_model_data: bool,
 }
 
-impl VoxelModelTHCGpu {}
-
-impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
+impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {
     fn new() -> Self {
         Self {
             side_length: 0,
@@ -231,7 +927,21 @@ impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelTHCGpu {
+impl VoxelModelTHCCompressedGpu {
+    pub fn dealloc(&mut self, allocator: &mut GpuBufferAllocator) {
+        if let Some(nodes_alloc) = self.nodes_allocation.take() {
+            allocator.free(&nodes_alloc);
+        }
+        for (_, alloc) in self.attachment_lookup_allocations.drain() {
+            allocator.free(&alloc);
+        }
+        for (_, alloc) in self.attachment_raw_allocations.drain() {
+            allocator.free(&alloc);
+        }
+    }
+}
+
+impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         let Some(data_allocation) = &self.nodes_allocation else {
             return None;
@@ -287,7 +997,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
         allocator: &mut crate::engine::graphics::gpu_allocator::GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) -> bool {
-        let model = model.downcast_ref::<VoxelModelTHC>().unwrap();
+        let model = model.downcast_ref::<VoxelModelTHCCompressed>().unwrap();
         let mut did_allocate = false;
 
         if self.nodes_allocation.is_none() {
@@ -301,33 +1011,35 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
         }
 
         for (attachment, data) in model.attachment_lookup_data.iter() {
+            assert!(!data.is_empty());
             if !self.attachment_lookup_allocations.contains_key(&attachment) {
                 let lookup_data_allocation_size = data.len() as u64 * 12;
                 self.attachment_lookup_allocations.insert(
                     attachment.clone(),
                     allocator
                         .allocate(lookup_data_allocation_size)
-                        .expect("Failed to allocate ESVO attachment lookup data."),
+                        .expect("Failed to allocate THC attachment lookup data."),
                 );
                 did_allocate = true;
             }
         }
 
         for (attachment, data) in model.attachment_raw_data.iter() {
+            assert!(!data.is_empty());
             if !self.attachment_raw_allocations.contains_key(&attachment) {
                 let raw_data_allocation_size = data.len() as u64 * 4;
                 self.attachment_raw_allocations.insert(
                     attachment.clone(),
                     allocator
                         .allocate(raw_data_allocation_size)
-                        .expect("Failed to allocate ESVO attachment raw data."),
+                        .expect("Failed to allocate THC attachment raw data."),
                 );
                 did_allocate = true;
             }
         }
 
         // Add implicit normal attachment.
-        if !model.attachment_lookup_data.contains(Attachment::NORMAL_ID)
+        if !model.attachment_raw_data.contains(Attachment::NORMAL_ID)
             && model
                 .attachment_lookup_data
                 .contains(Attachment::PTMATERIAL_ID)
@@ -354,7 +1066,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
                     if old_allocation.length_bytes() < req_data_allocation_size {
                         let new_allocation = allocator
                             .reallocate(e.get(), req_data_allocation_size)
-                            .expect("Failed to reallocate flat attachment raw data.");
+                            .expect("Failed to reallocate thc attachment raw data.");
 
                         if old_allocation.start_index_stride_bytes()
                             != new_allocation.start_index_stride_bytes()
@@ -368,7 +1080,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
                     vacant.insert(
                         allocator
                             .allocate(req_data_allocation_size as u64)
-                            .expect("Failed to allocate flat attachment raw data."),
+                            .expect("Failed to allocate thc attachment raw data."),
                     );
                     did_allocate = true;
                 }
@@ -391,7 +1103,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
         allocator: &mut GpuBufferAllocator,
         model: &dyn VoxelModelImpl,
     ) {
-        let model = model.downcast_ref::<VoxelModelTHC>().unwrap();
+        let model = model.downcast_ref::<VoxelModelTHCCompressed>().unwrap();
 
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
@@ -466,24 +1178,36 @@ impl From<VoxelModelFlat> for VoxelModelTHC {
 
 impl From<&VoxelModelFlat> for VoxelModelTHC {
     fn from(flat: &VoxelModelFlat) -> Self {
+        VoxelModelTHC::from(&VoxelModelTHCCompressed::from(flat))
+    }
+}
+
+impl From<VoxelModelFlat> for VoxelModelTHCCompressed {
+    fn from(value: VoxelModelFlat) -> Self {
+        From::<&VoxelModelFlat>::from(&value)
+    }
+}
+
+impl From<&VoxelModelFlat> for VoxelModelTHCCompressed {
+    fn from(flat: &VoxelModelFlat) -> Self {
         let length = flat
             .side_length()
-            .map(|x| VoxelModelTHC::next_power_of_4(x))
+            .map(|x| VoxelModelTHCCompressed::next_power_of_4(x))
             .max()
             .max(4);
         let volume = (length as u64).pow(3);
         // With just the root node being a height of 1, since log4(4) == log2(4) / 2 == 1.
         let height = length.trailing_zeros() / 2;
 
-        let mut levels: Vec<Vec<Option<THCNode>>> =
+        let mut levels: Vec<Vec<Option<THCNodeCompressed>>> =
             (0..=height).map(|_| Vec::new()).collect::<Vec<_>>();
-        let mut node_list_rev: Vec<THCNode> = Vec::new();
+        let mut node_list_rev: Vec<THCNodeCompressed> = Vec::new();
         for i in 0..volume {
             let pos = morton_decode(i);
             if !flat.in_bounds(pos) || !flat.get_voxel(pos).exists() {
                 levels[height as usize].push(None);
             } else {
-                levels[height as usize].push(Some(THCNode::new_empty()));
+                levels[height as usize].push(Some(THCNodeCompressed::new_empty()));
             }
 
             for h in (1..=height).rev() {
@@ -513,7 +1237,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                     let child_ptr = (child_ptr != u32::MAX)
                         .then_some(child_ptr)
                         .unwrap_or(0x8000_0000);
-                    levels[h as usize - 1].push(Some(THCNode {
+                    levels[h as usize - 1].push(Some(THCNodeCompressed {
                         child_ptr,
                         child_mask,
                     }));
@@ -522,9 +1246,11 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
                 }
             }
         }
-        let root_node = levels[0][0].clone().unwrap_or(THCNode::new_empty());
+        let root_node = levels[0][0]
+            .clone()
+            .unwrap_or(THCNodeCompressed::new_empty());
         if root_node.child_mask == 0 {
-            return VoxelModelTHC::new_empty(length);
+            return VoxelModelTHCCompressed::new_empty(length);
         }
         node_list_rev.push(root_node);
 
@@ -554,7 +1280,7 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
             attachment_lookup_data.insert(
                 present_attachment,
                 vec![
-                    THCAttachmentLookupNode {
+                    THCAttachmentLookupNodeCompressed {
                         data_ptr: 0,
                         attachment_mask: 0
                     };
@@ -668,14 +1394,14 @@ impl From<&VoxelModelFlat> for VoxelModelTHC {
 
                 //debug!("Settings index {} for raw ptr {}", curr_node_index, raw_ptr);
                 attachment_lookup_data.get_mut(*attachment_id).unwrap()[curr_node_index] =
-                    THCAttachmentLookupNode {
+                    THCAttachmentLookupNodeCompressed {
                         data_ptr: *raw_ptr,
                         attachment_mask: *attachment_mask,
                     };
             }
         }
 
-        VoxelModelTHC {
+        VoxelModelTHCCompressed {
             side_length: length,
             node_data,
             attachment_lookup_data,

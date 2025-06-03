@@ -1,5 +1,5 @@
 use log::debug;
-use nalgebra::Vector3;
+use nalgebra::{Vector2, Vector3};
 
 use super::aabb::AABB;
 
@@ -25,6 +25,45 @@ impl Ray {
 
     pub fn advance(&mut self, t: f32) {
         self.origin = self.origin + self.dir * t;
+    }
+
+    fn sdf_ring(
+        pos: Vector3<f32>,
+        center: Vector3<f32>,
+        normal: Vector3<f32>,
+        stretch: Vector2<f32>,
+        thickness: f32,
+    ) -> f32 {
+        let rd = pos - center;
+        let p = rd.dot(&normal) * normal;
+        let dir = (rd - p).normalize();
+        let edge = center + dir * stretch.x;
+        return edge.metric_distance(&pos) - thickness;
+    }
+
+    pub fn intersect_ring_segment(
+        &self,
+        center: Vector3<f32>,
+        normal: Vector3<f32>,
+        stretch: Vector2<f32>,
+        thickness: f32,
+        max_t: f32,
+    ) -> Option<f32> {
+        let mut t = 0.0;
+        while t < max_t {
+            let d = Self::sdf_ring(
+                self.origin + self.dir * t,
+                center,
+                normal,
+                stretch,
+                thickness,
+            );
+            if d < 0.001 {
+                return Some(t + d);
+            }
+            t += d;
+        }
+        return None;
     }
 
     fn sdf_line_segment(

@@ -31,6 +31,15 @@ impl Input {
             consts::actions::EDITOR_TOGGLE,
             consts::actions::keybind::EDITOR_TOGGLE_DEBUG,
         );
+        keybinds.register_key(
+            consts::actions::EDITOR_GIZMO_TRANSLATION,
+            consts::actions::keybind::EDITOR_GIZMO_TRANSLATION,
+        );
+        keybinds.register_key(
+            consts::actions::EDITOR_GIZMO_ROTATION,
+            consts::actions::keybind::EDITOR_GIZMO_ROTATION,
+        );
+
         Self {
             keyboard: Keyboard::new(),
             mouse: Mouse::new(),
@@ -72,6 +81,15 @@ impl Input {
         }
 
         return axes;
+    }
+
+    pub fn is_action_pressed(&self, action: &str) -> bool {
+        let key = *self
+            .keybinds
+            .pressed_key_mappings
+            .get(action)
+            .expect("Action does not exist.");
+        return self.is_key_pressed(key);
     }
 
     pub fn did_action(&self, action: &str) -> bool {

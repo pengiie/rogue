@@ -20,6 +20,7 @@ pub mod voxel {
     pub const MODEL_ESVO_SCHEMA: VoxelModelSchema = 1;
     pub const MODEL_FLAT_SCHEMA: VoxelModelSchema = 2;
     pub const MODEL_THC_SCHEMA: VoxelModelSchema = 3;
+    pub const MODEL_THC_COMPRESSED_SCHEMA: VoxelModelSchema = 4;
 
     pub mod attachment {
         use crate::engine::voxel::attachment::AttachmentId;
@@ -50,10 +51,15 @@ pub mod actions {
 
         pub const EDITOR_TOGGLE: Key = Key::F2;
         pub const EDITOR_TOGGLE_DEBUG: Key = Key::C;
+
+        pub const EDITOR_GIZMO_TRANSLATION: Key = Key::T;
+        pub const EDITOR_GIZMO_ROTATION: Key = Key::R;
     }
 
     pub const EDITOR_TOGGLE: &str = "editor_toggle";
     pub const EDITOR_TOGGLE_DEBUG: &str = "editor_toggle_debug";
+    pub const EDITOR_GIZMO_TRANSLATION: &str = "editor_gizmo_translation";
+    pub const EDITOR_GIZMO_ROTATION: &str = "editor_gizmo_rotation";
 }
 
 pub mod egui {
@@ -77,10 +83,19 @@ pub mod egui {
 
 pub mod editor {
     pub mod gizmo {
-        pub const THICKNESS: f32 = 0.2;
-        pub const LENGTH: f32 = 1.5;
+        use nalgebra::Vector2;
 
-        pub const DRAGGING_SENSITIVITY: f32 = 0.05;
+        pub const TRANSLATION_THICKNESS: f32 = 0.1;
+        pub const TRANSLATION_LENGTH: f32 = 1.5;
+
+        pub const ROTATION_THICKNESS: f32 = 0.05;
+        pub const ROTATION_DISTANCE_X: Vector2<f32> = Vector2::new(1.5, 1.5);
+        pub const ROTATION_DISTANCE_Y: Vector2<f32> = Vector2::new(1.5, 1.5);
+        pub const ROTATION_DISTANCE_Z: Vector2<f32> = Vector2::new(1.5, 1.5);
+
+        pub const DRAGGING_TRANSFORM_SENSITIVITY: f32 = 0.05;
+        pub const DRAGGING_ROTATION_SENSITIVITY: f32 = 0.25;
     }
+    pub const ENTITY_OUTLINE_THICKNESS: f32 = 0.03;
     pub const DOUBLE_CLICK_TIME_SECS: f32 = 0.5;
 }

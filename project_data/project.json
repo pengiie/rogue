@@ -2,15 +2,15 @@
   "editor_camera_transform": {
     "transform": {
       "position": [
-        -1.7076135,
-        3.1335704,
-        9.482891
+        -9.435574,
+        5.364713,
+        -1.602825
       ],
       "rotation": [
-        0.11610839,
-        0.86492723,
-        -0.23447359,
-        0.42830113
+        0.36276773,
+        0.5361709,
+        -0.27338815,
+        0.7114628
       ],
       "scale": 1.0
     }
@@ -23,12 +23,12 @@
     }
   },
   "rotation_anchor": [
-    2.2417135,
-    0.2278048,
-    6.4730105
+    3.9821374,
+    -9.375738,
+    3.347818
   ],
-  "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/test/terrain",
-  "game_camera": null,
+  "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/terrain/overworld",
+  "game_camera": "9ee2f23d-27e1-4704-962c-dec41fdee49e",
   "game_entities": [
     {
       "name": "My first entity",
@@ -42,10 +42,10 @@
               0.0
             ],
             "rotation": [
+              -3.885534e-8,
+              -8.785169e-7,
               0.0,
-              0.0,
-              0.0,
-              1.0
+              0.999995
             ],
             "scale": 1.0
           }
@@ -91,9 +91,36 @@
         {
           "Transform": {
             "position": [
-              1.8289685,
+              2.0289674,
               0.06568834,
-              6.2569356
+              5.6569347
+            ],
+            "rotation": [
+              -3.9518227e-8,
+              -4.088807e-8,
+              1.4901161e-8,
+              1.0
+            ],
+            "scale": 1.0
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "test::models::16_16::rvox"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Camera",
+      "uuid": "9ee2f23d-27e1-4704-962c-dec41fdee49e",
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              1.2054803,
+              0.23044059,
+              4.795869
             ],
             "rotation": [
               0.0,
@@ -105,8 +132,8 @@
           }
         },
         {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "test::models::64_64::rvox"
+          "Camera": {
+            "fov": 1.5707964
           }
         }
       ]

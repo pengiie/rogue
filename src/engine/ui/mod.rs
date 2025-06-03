@@ -72,6 +72,7 @@ pub struct EditorUIState {
     pub asset_browser: EditorAssetBrowserState,
     pub texture_map: HashMap<String, egui::TextureHandle>,
     pub initialized_icons: bool,
+    pub message: String,
 
     pub right_pane_state: EditorTab,
 }
@@ -174,6 +175,7 @@ impl EditorUIState {
         let terrain_dialog_channel = std::sync::mpsc::channel();
         let existing_model_dialog_channel = std::sync::mpsc::channel();
         Self {
+            message: String::new(),
             new_project_dialog: None,
             new_model_dialog: None,
             terrain_dialog: EditorTerrainDialog {

@@ -1,15 +1,9 @@
 use core::panic;
 use std::{
-    any::Any,
-    borrow::BorrowMut,
-    collections::{HashMap, HashSet},
-    ffi::CString,
-    num::NonZeroU32,
-    sync::{
+    any::Any, borrow::BorrowMut, collections::{HashMap, HashSet}, ffi::CString, num::NonZeroU32, str::FromStr, sync::{
         atomic::{AtomicU32, AtomicU64},
         Arc,
-    },
-    u32, u64,
+    }, u32, u64
 };
 
 use anyhow::{anyhow, Context};
@@ -28,17 +22,7 @@ use crate::{
         event::Events,
         graphics::{
             backend::{
-                BindGroup, Binding, Buffer, ComputePipeline, GfxAddressMode, GfxBlendFactor,
-                GfxBlendOp, GfxBufferCreateInfo, GfxBufferInfo, GfxComputePipelineCreateInfo,
-                GfxComputePipelineInfo, GfxCullMode, GfxFilterMode, GfxFrontFace,
-                GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxImageWrite,
-                GfxLoadOp, GfxPresentMode, GfxRasterPipelineBlendStateAttachmentInfo,
-                GfxRasterPipelineBlendStateCreateInfo, GfxRasterPipelineCreateInfo,
-                GfxSamplerCreateInfo, GfxSwapchainInfo, GfxVertexAttribute,
-                GfxVertexAttributeFormat, GfxVertexFormat, GraphicsBackendDevice,
-                GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image, Memory,
-                RasterPipeline, ResourceId, Sampler, ShaderSetData, ShaderWriter, UniformSetData,
-                Untyped,
+                BindGroup, Binding, Buffer, ComputePipeline, GfxAddressMode, GfxBlendFactor, GfxBlendOp, GfxBufferCreateInfo, GfxBufferInfo, GfxComputePipelineCreateInfo, GfxComputePipelineInfo, GfxCullMode, GfxDeviceInfo, GfxFilterMode, GfxFrontFace, GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxImageWrite, GfxLoadOp, GfxPresentMode, GfxRasterPipelineBlendStateAttachmentInfo, GfxRasterPipelineBlendStateCreateInfo, GfxRasterPipelineCreateInfo, GfxSamplerCreateInfo, GfxSwapchainInfo, GfxVertexAttribute, GfxVertexAttributeFormat, GfxVertexFormat, GraphicsBackendDevice, GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline, ResourceId, Sampler, ShaderSetData, ShaderWriter, UniformSetData, Untyped
             },
             gpu_allocator::{Allocation, AllocatorTree},
             shader::{
@@ -146,6 +130,10 @@ pub struct VulkanContext {
 impl VulkanContext {
     pub fn device(&self) -> ash::Device {
         self.inner.device.clone()
+    }
+    
+    pub fn physical_device(&self) -> &VulkanPhysicalDevice {
+        &self.inner.physical_device
     }
 
     pub fn swapchain(&self) -> parking_lot::RwLockReadGuard<Arc<VulkanSwapchain>> {
@@ -365,6 +353,7 @@ pub struct VulkanSwapchain {
 pub struct VulkanPhysicalDevice {
     physical_device: ash::vk::PhysicalDevice,
     properties: ash::vk::PhysicalDeviceProperties,
+    max_memory_allocation_size: ash::vk::DeviceSize,
     memory_properties: ash::vk::PhysicalDeviceMemoryProperties,
     queue_family_properties: Vec<ash::vk::QueueFamilyProperties>,
     features: ash::vk::PhysicalDeviceFeatures,
@@ -429,9 +418,21 @@ impl VulkanDevice {
             )?);
             if enable_debug {
                 enabled_extensions_ptrs.push(ash::ext::debug_utils::NAME.as_ptr());
+                enabled_extensions_ptrs.push(ash::ext::layer_settings::NAME.as_ptr());
             }
 
+            let validation_layer_cstr = std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap();
+            let print_f_cstr = std::ffi::CString::new("printf_enable").unwrap();
+            let print_f_cstr_name = std::ffi::CString::new("VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT").unwrap();
+            let layer_settings = [ash::vk::LayerSettingEXT::default()
+                                    .layer_name(&validation_layer_cstr)
+                                    .ty(ash::vk::LayerSettingTypeEXT::BOOL32)
+                                    .setting_name(&print_f_cstr)
+                                    .values(&[1u8, 0u8, 0u8, 0u8])];
+            let mut layer_settings_info = ash::vk::LayerSettingsCreateInfoEXT::default().settings(&layer_settings);
+
             let instance_create_info = ash::vk::InstanceCreateInfo::default()
+                //.push_next(&mut layer_settings_info)
                 .application_info(&application_info)
                 .enabled_layer_names(&enabled_layers_ptrs)
                 .enabled_extension_names(&enabled_extensions_ptrs);
@@ -479,6 +480,9 @@ impl VulkanDevice {
                 .filter_map(|physical_device| {
                     let properties =
                         unsafe { instance.get_physical_device_properties(physical_device) };
+                    let mut maintenance3 = ash::vk::PhysicalDeviceMaintenance3Properties::default();
+                    let mut properties2 = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut maintenance3);
+                    unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
                     let features =
                         unsafe { instance.get_physical_device_features(physical_device) };
                     let memory_properties =
@@ -509,6 +513,7 @@ impl VulkanDevice {
                     Some(VulkanPhysicalDevice {
                         physical_device,
                         properties,
+                        max_memory_allocation_size: maintenance3.max_memory_allocation_size,
                         memory_properties,
                         queue_family_properties,
                         features,
@@ -1141,6 +1146,15 @@ impl GraphicsBackendDevice for VulkanDevice {
     fn get_buffer_info(&self, buffer: &ResourceId<Buffer>) -> GfxBufferInfo {
         let buf = self.context.get_buffer(*buffer);
         GfxBufferInfo { size: buf.size }
+    }
+
+    fn device_info(&self) -> GfxDeviceInfo {
+        let dev = self.context.physical_device();
+        GfxDeviceInfo {
+            max_allocation_size: dev.max_memory_allocation_size,
+            max_storage_buffer_size: dev.properties.limits.max_storage_buffer_range as u64,
+            max_storage_buffer_array_binding_count: dev.properties.limits.max_descriptor_set_storage_buffers as u64,
+        }
     }
 }
 

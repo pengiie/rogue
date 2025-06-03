@@ -8,7 +8,7 @@ use std::{
 use egui::Color32;
 use egui_dock::DockState;
 use hecs::With;
-use nalgebra::{SimdValue, Translation3, Vector2, Vector3, Vector4};
+use nalgebra::{SimdValue, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use crate::{
     common::color::Color,
@@ -31,7 +31,7 @@ use crate::{
         voxel::{
             factory::VoxelModelFactory,
             flat::VoxelModelFlat,
-            thc::VoxelModelTHC,
+            thc::{VoxelModelTHC, VoxelModelTHCCompressed},
             voxel::{VoxelModel, VoxelModelImpl, VoxelModelImplConcrete, VoxelModelType},
             voxel_registry::{VoxelModelId, VoxelModelInfo},
             voxel_world::{self, VoxelWorld},
@@ -639,10 +639,6 @@ fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUI
                         consts::egui::icons::FOLDER
                     } else {
                         let Some(ext) = asset.file_sub_path.extension() else {
-                            log::error!(
-                                "Couldn't get extension of file {}",
-                                asset.file_sub_path.to_string_lossy()
-                            );
                             return;
                         };
 
@@ -695,6 +691,11 @@ fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUI
                     }
                 }
             });
+
+            // Console
+            ui.separator();
+
+            ui.label(egui::RichText::new(&state.message));
         });
 }
 
@@ -854,6 +855,52 @@ fn entity_properties_pane(
                                 .fixed_decimals(2),
                         );
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Rotation:");
+                        ui.label("X");
+                        let (mut roll, mut pitch, mut yaw) = transform.rotation.euler_angles();
+                        let original = Vector3::new(roll, pitch, yaw).map(|x| x.to_degrees());
+                        let mut edit = original.clone();
+                        ui.add(
+                            egui::DragValue::new(&mut edit.x)
+                                .suffix("°")
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
+                        ui.label("Y");
+                        ui.add(
+                            egui::DragValue::new(&mut edit.y)
+                                .suffix("°")
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
+                        ui.label("Z");
+                        ui.add(
+                            egui::DragValue::new(&mut edit.z)
+                                .suffix("°")
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
+                        let diff = edit - original;
+                        if diff.x != 0.0 {
+                            transform.rotation *= UnitQuaternion::from_axis_angle(
+                                &Vector3::x_axis(),
+                                diff.x.to_radians(),
+                            );
+                        }
+                        if diff.y != 0.0 {
+                            transform.rotation *= UnitQuaternion::from_axis_angle(
+                                &Vector3::y_axis(),
+                                diff.y.to_radians(),
+                            );
+                        }
+                        if diff.z != 0.0 {
+                            transform.rotation *= UnitQuaternion::from_axis_angle(
+                                &Vector3::z_axis(),
+                                diff.z.to_radians(),
+                            );
+                        }
+                    });
                 });
             }
 
@@ -936,10 +983,17 @@ fn entity_properties_pane(
                                         assets.save_asset(asset_path, flat);
                                     }
                                     Some(VoxelModelType::THC) => {
-                                        let thc = voxel_world
-                                            .get_model::<VoxelModelTHC>(model_id)
+                                        let thc = voxel_world.get_model::<VoxelModelTHC>(model_id);
+                                        assets.save_asset(
+                                            asset_path,
+                                            VoxelModelTHCCompressed::from(thc),
+                                        );
+                                    }
+                                    Some(VoxelModelType::THCCompressed) => {
+                                        let thc_compressed = voxel_world
+                                            .get_model::<VoxelModelTHCCompressed>(model_id)
                                             .clone();
-                                        assets.save_asset(asset_path, thc);
+                                        assets.save_asset(asset_path, thc_compressed);
                                     }
                                     None => {
                                         log::error!("Don't know how to save this asset format");
@@ -993,14 +1047,15 @@ fn entity_properties_pane(
                                         .clicked()
                                     {
                                         match model_type {
-                                            VoxelModelType::THC => {
-                                                convert_model::<VoxelModelTHC, VoxelModelFlat>(
-                                                    voxel_world,
-                                                    &mut renderable_voxel_model,
-                                                    &info,
-                                                    model_id,
-                                                )
-                                            }
+                                            VoxelModelType::THC => convert_model::<
+                                                VoxelModelTHCCompressed,
+                                                VoxelModelFlat,
+                                            >(
+                                                voxel_world,
+                                                &mut renderable_voxel_model,
+                                                &info,
+                                                model_id,
+                                            ),
                                             _ => unreachable!(),
                                         }
                                         ui.close_menu();
@@ -1020,8 +1075,16 @@ fn entity_properties_pane(
                                                     &info,
                                                     model_id,
                                                 )
+                                            },
+                                            VoxelModelType::THCCompressed => {
+                                                convert_model::<VoxelModelTHCCompressed, VoxelModelTHC>(
+                                                    voxel_world,
+                                                    &mut renderable_voxel_model,
+                                                    &info,
+                                                    model_id,
+                                                )
                                             }
-                                            _ => unreachable!(),
+                                            ty => {log::error!("Can't convert from {} to THC since it's not implemented yet.", ty.to_string());},
                                         }
                                         ui.close_menu();
                                     }
@@ -1101,13 +1164,7 @@ fn world_pane(
                 let is_dir_empty = read.count() == 0;
 
                 session.terrain_dir = Some(path);
-                voxel_world.chunks.enqueue_save_all();
-                voxel_world
-                    .chunks
-                    .save_terrain(assets, &voxel_world.registry, &session);
-                if !is_dir_empty {
-                    voxel_world.chunks.clear();
-                }
+                voxel_world.chunks.clear();
             }
             Err(_) => {}
         }
@@ -1445,6 +1502,32 @@ pub fn game_pane(
 ) {
     let content = |ui: &mut egui::Ui| {
         ui.label(egui::RichText::new("Game Settings").size(20.0));
+        ui.horizontal(|ui| {
+            ui.label("Main camera:");
+            let existing_camera_name = 'existing_camera: {
+                let Some(game_camera_entity) = session.game_camera else {
+                    break 'existing_camera "Missing".to_owned();
+                };
+                let Ok(mut q) =
+                    ecs_world.query_one::<With<&GameEntity, &Camera>>(game_camera_entity)
+                else {
+                    break 'existing_camera "Missing (Invalid)".to_owned();
+                };
+                let Some(game_entity) = q.get() else {
+                    break 'existing_camera "Missing (Invalid)".to_owned();
+                };
+                game_entity.name.clone()
+            };
+            ui.menu_button(existing_camera_name, |ui| {
+                let mut q = ecs_world.query::<With<&GameEntity, &Camera>>();
+                for (entity, game_entity) in q.iter() {
+                    if ui.button(&game_entity.name).clicked() {
+                        session.game_camera = Some(entity);
+                        ui.close_menu();
+                    }
+                }
+            });
+        });
     };
 
     egui::ScrollArea::vertical()

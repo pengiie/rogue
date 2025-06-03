@@ -6,7 +6,6 @@ struct ShaderUniforms {
   // Logical screen size since egui performs scaling.
   float2 screen_size;
 
-  [format("rgba8")]
   Texture2D<float4> texture; 
   SamplerState sampler;
 }

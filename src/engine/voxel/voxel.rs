@@ -39,6 +39,7 @@ use super::{
 pub enum VoxelModelType {
     Flat,
     THC,
+    THCCompressed,
 }
 
 impl AsRef<str> for VoxelModelType {
@@ -46,6 +47,7 @@ impl AsRef<str> for VoxelModelType {
         match self {
             VoxelModelType::Flat => "Flat",
             VoxelModelType::THC => "THC",
+            VoxelModelType::THCCompressed => "THC (Compressed)",
         }
     }
 }

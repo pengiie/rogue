@@ -26,7 +26,7 @@ use crate::{
         resource::{Res, ResMut},
         voxel::{
             flat::VoxelModelFlat,
-            thc::VoxelModelTHC,
+            thc::VoxelModelTHCCompressed,
             voxel::{VoxelModel, VoxelModelType},
             voxel_world::VoxelWorld,
         },

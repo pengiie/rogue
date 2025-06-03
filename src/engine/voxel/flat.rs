@@ -24,7 +24,7 @@ use crate::{
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     esvo::{VoxelModelESVO, VoxelModelESVONode},
-    thc::VoxelModelTHC,
+    thc::VoxelModelTHCCompressed,
     voxel::{
         VoxelData, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
@@ -38,8 +38,8 @@ pub struct VoxelModelFlat {
     pub attachment_presence_data: AttachmentMap<Bitset>,
     pub attachment_map: AttachmentInfoMap,
     pub presence_data: Bitset,
-    side_length: Vector3<u32>,
-    volume: usize,
+    pub side_length: Vector3<u32>,
+    pub volume: usize,
     update_tracker: u32,
 }
 
@@ -1032,8 +1032,8 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
     }
 }
 
-impl From<&VoxelModelTHC> for VoxelModelFlat {
-    fn from(thc: &VoxelModelTHC) -> Self {
+impl From<&VoxelModelTHCCompressed> for VoxelModelFlat {
+    fn from(thc: &VoxelModelTHCCompressed) -> Self {
         let mut flat = VoxelModelFlat::new_empty(Vector3::new(
             thc.side_length,
             thc.side_length,

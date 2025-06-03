@@ -20,6 +20,12 @@ pub struct ECSWorld {
     world: hecs::World,
 }
 
+impl Clone for ECSWorld {
+    fn clone(&self) -> Self {
+        todo!()
+    }
+}
+
 impl ECSWorld {
     pub fn new() -> ECSWorld {
         ECSWorld {

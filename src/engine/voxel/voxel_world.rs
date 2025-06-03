@@ -18,7 +18,7 @@ use crate::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         bitset::Bitset,
         dyn_vec::TypeInfo,
-        morton::{self, morton_encode, morton_traversal},
+        morton::{self, morton_encode, morton_traversal_octree},
         ray::Ray,
     },
     consts::{self, voxel::VOXEL_METER_LENGTH},
@@ -27,7 +27,10 @@ use crate::{
         entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
         event::Events,
         graphics::{
-            backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendRecorder, ResourceId},
+            backend::{
+                Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, GraphicsBackendRecorder,
+                ResourceId,
+            },
             device::DeviceResource,
             frame_graph::FrameGraphContext,
             gpu_allocator::{Allocation, GpuBufferAllocator},
@@ -35,11 +38,7 @@ use crate::{
         },
         physics::transform::Transform,
         resource::{Res, ResMut},
-        voxel::{
-            voxel::VoxelModelEdit,
-            voxel_terrain::{ChunkModelType, VoxelRegionLeafNode},
-            voxel_world,
-        },
+        voxel::{voxel::VoxelModelEdit, voxel_terrain::VoxelRegionLeafNode, voxel_world},
         window::time::Stopwatch,
     },
     session::Session,
@@ -51,7 +50,7 @@ use super::{
     cursor::{VoxelEditEntityInfo, VoxelEditInfo},
     esvo::{VoxelModelESVO, VoxelModelESVOGpu},
     flat::VoxelModelFlat,
-    thc::VoxelModelTHC,
+    thc::{VoxelModelTHC, VoxelModelTHCCompressed},
     voxel::{
         VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema,
@@ -184,7 +183,11 @@ impl VoxelWorld {
             to_update_normals: HashSet::new(),
 
             chunk_edit_handler_pool: rayon::ThreadPoolBuilder::new()
-                .num_threads(1)
+                .num_threads(
+                    std::thread::available_parallelism()
+                        .map(|x| x.get())
+                        .unwrap_or(0),
+                )
                 .build()
                 .unwrap(),
             chunk_edit_handler_count: 0,
@@ -198,6 +201,19 @@ impl VoxelWorld {
     /// Number of async edits currently in progress.
     pub fn async_edit_count(&self) -> u32 {
         self.async_edit_queue.len() as u32 + self.chunk_edit_handler_count
+    }
+
+    pub fn register_renderable_voxel_model<T>(
+        &mut self,
+        name: impl ToString,
+        voxel_model: VoxelModel<T>,
+    ) -> VoxelModelId
+    where
+        T: VoxelModelImplConcrete,
+    {
+        let id = self.register_renderable_voxel_model(name, voxel_model);
+        self.to_update_normals.insert(id);
+        return id;
     }
 
     pub fn process_chunk_edits(&mut self, assets: &mut Assets) {
@@ -336,7 +352,7 @@ impl VoxelWorld {
             ));
         }
 
-        if let Some((world_voxel_hit, depth_t)) = self.trace_terrain(ray, 100.0) {
+        if let Some((world_voxel_hit, depth_t)) = self.trace_terrain(ray, 1000.0) {
             let mut is_closer = true;
             if let Some((entity_t, _, _, _)) = &closest_entity {
                 is_closer = is_closer && depth_t < *entity_t;
@@ -691,6 +707,24 @@ pub enum VoxelTraceInfo {
 pub struct FinishedChunkEdit {
     pub chunk_position: Vector3<i32>,
     pub edit_result: VoxelModelEdit,
+}
+
+pub struct VoxelDataPtr(u32);
+
+impl VoxelDataPtr {}
+
+pub struct VoxelDataAllocator {
+    allocators: Vec<GpuBufferAllocator>,
+}
+
+impl VoxelDataAllocator {
+    pub fn new(device: &impl GraphicsBackendDevice) -> Self {
+        todo!()
+    }
+
+    pub fn allocate_data(&mut self) -> VoxelDataPtr {
+        todo!()
+    }
 }
 
 #[derive(Resource)]

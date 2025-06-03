@@ -61,6 +61,7 @@ pub struct GraphConstantsEditorUI {
 
 pub struct GraphConstantsDebug3D {
     pub buffer_lines: &'static str,
+    pub buffer_rings: &'static str,
 
     pub pipeline_compute_shapes: &'static str,
     pub pipeline_compute_shapes_info: FrameGraphComputeInfo<'static>,
@@ -159,6 +160,7 @@ impl Renderer {
         },
         debug_3d: GraphConstantsDebug3D {
             buffer_lines: "debug_3d_buffer_lines",
+            buffer_rings: "debug_3d_buffer_rings",
 
             pipeline_compute_shapes: "debug_3d_compute_shapes",
             pipeline_compute_shapes_info: FrameGraphComputeInfo {
@@ -336,6 +338,7 @@ impl Renderer {
         // Draw debug gizmos and shapes on game content backbuffer.
         {
             builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_lines);
+            builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_rings);
 
             builder.create_compute_pipeline(
                 &Self::GRAPH.debug_3d.pipeline_compute_shapes,
@@ -347,6 +350,7 @@ impl Renderer {
                     &Self::GRAPH.image_backbuffer,
                     &Self::GRAPH.rt.image_depth,
                     &Self::GRAPH.debug_3d.buffer_lines,
+                    &Self::GRAPH.debug_3d.buffer_rings,
                 ],
                 &[&Self::GRAPH.image_backbuffer],
             );
