@@ -1,9 +1,10 @@
 use std::{
     borrow::Borrow,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     str::FromStr,
     sync::mpsc::{Receiver, Sender},
+    time::Duration,
 };
 
 use egui::{Button, Separator};
@@ -16,7 +17,6 @@ use crate::{
     common::color::Color,
     consts,
     engine::asset::{asset::AssetPath, repr::settings::SettingsAsset},
-    game::entity::GameEntity,
     session::Session,
     settings::Settings,
 };
@@ -26,6 +26,7 @@ use super::{
     editor::{self, editor::Editor},
     entity::{
         ecs_world::{ECSWorld, Entity},
+        scripting::Scripts,
         RenderableVoxelEntity,
     },
     graphics::renderer::Renderer,
@@ -68,13 +69,25 @@ pub struct EditorUIState {
     pub new_model_dialog: Option<EditorNewVoxelModelDialog>,
     pub existing_model_dialog: EditorExistingModelDialog,
     pub terrain_dialog: EditorTerrainDialog,
+    pub add_script_dialog: EditorAddScriptDialog,
 
     pub asset_browser: EditorAssetBrowserState,
     pub texture_map: HashMap<String, egui::TextureHandle>,
     pub initialized_icons: bool,
     pub message: String,
+    pub selecting_new_parent: Option<Entity>,
+
+    pub stats: EditorUIStatistics,
 
     pub right_pane_state: EditorTab,
+}
+
+pub struct EditorUIStatistics {
+    pub time_length: Duration,
+    pub samples: u32,
+    pub last_sample: Instant,
+    pub cpu_frame_time_samples_max: Duration,
+    pub cpu_frame_time_samples: VecDeque<Duration>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -83,6 +96,8 @@ pub enum EditorTab {
     WorldProperties,
     Editing,
     Game,
+    Stats,
+    User,
 }
 
 pub struct EditorTerrainDialog {
@@ -91,6 +106,12 @@ pub struct EditorTerrainDialog {
 }
 
 pub struct EditorExistingModelDialog {
+    pub tx_file_name: Sender<String>,
+    pub rx_file_name: Receiver<String>,
+    pub associated_entity: Entity,
+}
+
+pub struct EditorAddScriptDialog {
     pub tx_file_name: Sender<String>,
     pub rx_file_name: Receiver<String>,
     pub associated_entity: Entity,
@@ -174,10 +195,12 @@ impl EditorUIState {
     pub fn new() -> Self {
         let terrain_dialog_channel = std::sync::mpsc::channel();
         let existing_model_dialog_channel = std::sync::mpsc::channel();
+        let add_script_dialog_channel = std::sync::mpsc::channel();
         Self {
             message: String::new(),
             new_project_dialog: None,
             new_model_dialog: None,
+            selecting_new_parent: None,
             terrain_dialog: EditorTerrainDialog {
                 tx_file_name: terrain_dialog_channel.0,
                 rx_file_name: terrain_dialog_channel.1,
@@ -185,6 +208,11 @@ impl EditorUIState {
             existing_model_dialog: EditorExistingModelDialog {
                 tx_file_name: existing_model_dialog_channel.0,
                 rx_file_name: existing_model_dialog_channel.1,
+                associated_entity: Entity::DANGLING,
+            },
+            add_script_dialog: EditorAddScriptDialog {
+                tx_file_name: add_script_dialog_channel.0,
+                rx_file_name: add_script_dialog_channel.1,
                 associated_entity: Entity::DANGLING,
             },
 
@@ -196,6 +224,13 @@ impl EditorUIState {
             texture_map: HashMap::new(),
             initialized_icons: false,
             right_pane_state: EditorTab::EntityProperties,
+            stats: EditorUIStatistics {
+                time_length: Duration::from_secs(5),
+                samples: 1000,
+                last_sample: Instant::now(),
+                cpu_frame_time_samples_max: Duration::ZERO,
+                cpu_frame_time_samples: VecDeque::new(),
+            },
         }
     }
 
@@ -298,6 +333,8 @@ impl UI {
         mut ecs_world: ResMut<ECSWorld>,
         mut editor: ResMut<Editor>,
         mut session: ResMut<Session>,
+        time: Res<Time>,
+        mut scripts: ResMut<Scripts>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let ui: &mut UI = &mut ui;
@@ -332,6 +369,8 @@ impl UI {
                     &mut session,
                     &mut assets,
                     window,
+                    &time,
+                    &mut scripts,
                 );
             } else {
                 egui::Window::new("Debug")

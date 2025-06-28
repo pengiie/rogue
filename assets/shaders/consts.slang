@@ -13,7 +13,7 @@ public static const uint VOXEL_MODEL_SCHEMA_FLAT = 2;
 public static const uint VOXEL_MODEL_SCHEMA_THC = 3;
 public static const uint VOXEL_MODEL_SCHEMA_THC_COMPRESSED = 4;
 
-public static const uint VOXEL_ATTACHMENT_MAX_ID = 2;
+public static const uint VOXEL_ATTACHMENT_MAX_ID = 3;
 public static const uint VOXEL_ATTACHMENT_COUNT = VOXEL_ATTACHMENT_MAX_ID + 1;
 
 } // namespace consts

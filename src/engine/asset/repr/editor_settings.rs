@@ -9,7 +9,8 @@ use crate::{
         editor::editor::Editor,
         entity::{
             ecs_world::{ECSWorld, Entity},
-            RenderableVoxelEntity,
+            scripting::{ScriptableEntity, Scripts},
+            EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
         graphics::camera::Camera,
         physics::transform::Transform,
@@ -17,7 +18,6 @@ use crate::{
             voxel::VoxelModelImpl, voxel_registry::VoxelModelRegistry, voxel_world::VoxelWorld,
         },
     },
-    game::entity::GameEntity,
     session::{RenderableEntityLoad, Session},
 };
 
@@ -109,6 +109,8 @@ impl EditorProjectAsset {
 pub struct EditorGameEntityAsset {
     pub name: String,
     pub uuid: String,
+    pub parent: Option</*uuid*/ String>,
+    pub children: Vec</*uuid*/ String>,
     pub components: Vec<EditorGameComponentAsset>,
 }
 
@@ -117,13 +119,16 @@ pub enum EditorGameComponentAsset {
     Transform {
         position: Vector3<f32>,
         rotation: UnitQuaternion<f32>,
-        scale: f32,
+        scale: Vector3<f32>,
     },
     Camera {
         fov: f32,
     },
     RenderableVoxelEntity {
         model_asset_path: String,
+    },
+    ScriptableEntity {
+        script_asset_paths: Vec<String>,
     },
 }
 
@@ -132,9 +137,36 @@ impl EditorGameEntityAsset {
         let game_entity = ecs_world.get::<&GameEntity>(entity_id).unwrap();
         let mut map = serde_json::Map::new();
 
+        let parent_uuid = ecs_world
+            .get::<&EntityParent>(entity_id)
+            .map(|parent| {
+                ecs_world
+                    .get::<&GameEntity>(parent.parent)
+                    .map(|parent_game_entity| parent_game_entity.uuid.to_string())
+                    .ok()
+            })
+            .unwrap_or(None);
+        let children_uuids = ecs_world
+            .get::<&EntityChildren>(entity_id)
+            .map(|children| {
+                let mut uuids = Vec::new();
+                for child in children.children.iter() {
+                    if let Ok(child_uuid) = ecs_world
+                        .get::<&GameEntity>(*child)
+                        .map(|child_game_entity| child_game_entity.uuid.to_string())
+                    {
+                        uuids.push(child_uuid);
+                    }
+                }
+                uuids
+            })
+            .unwrap_or(Vec::new());
+
         let mut s = Self {
             name: game_entity.name.clone(),
             uuid: game_entity.uuid.to_string(),
+            parent: parent_uuid,
+            children: children_uuids,
             components: Vec::new(),
         };
 
@@ -166,6 +198,17 @@ impl EditorGameEntityAsset {
             }
         }
 
+        if let Ok(scriptable) = ecs_world.get::<&ScriptableEntity>(entity_id) {
+            s.components
+                .push(EditorGameComponentAsset::ScriptableEntity {
+                    script_asset_paths: scriptable
+                        .scripts
+                        .iter()
+                        .map(|asset_path| asset_path.asset_path.clone().unwrap())
+                        .collect::<Vec<_>>(),
+                })
+        }
+
         return s;
     }
 
@@ -175,6 +218,7 @@ impl EditorGameEntityAsset {
         mut ecs_world: &mut ECSWorld,
         assets: &mut Assets,
         loading_renderables: &mut HashMap<Entity, AssetHandle>,
+        scripts: &mut Scripts,
     ) -> Entity {
         let uuid = uuid::Uuid::from_str(&self.uuid).unwrap();
         let id = ecs_world.spawn((GameEntity {
@@ -207,6 +251,23 @@ impl EditorGameEntityAsset {
                         AssetPath::new_project_dir(project_dir.clone(), model_asset_path.clone());
                     let asset_handle = assets.load_asset::<VoxelModelAnyAsset>(asset_path);
                     loading_renderables.insert(id, asset_handle);
+                }
+                EditorGameComponentAsset::ScriptableEntity {
+                    script_asset_paths: script_project_paths,
+                } => {
+                    let mut asset_paths = Vec::new();
+                    for asset_path in script_project_paths {
+                        let asset_path =
+                            AssetPath::new_project_dir(project_dir.clone(), asset_path.clone());
+                        scripts.load_script(asset_path.clone());
+                        asset_paths.push(asset_path);
+                    }
+                    ecs_world.insert_one(
+                        id,
+                        ScriptableEntity {
+                            scripts: asset_paths,
+                        },
+                    );
                 }
             }
         }

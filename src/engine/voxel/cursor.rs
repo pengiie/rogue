@@ -59,11 +59,13 @@ impl VoxelCursor {
     ) {
         let mut player_query =
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();
-        let Some((_player_entity, (player_transform, player_camera, player))) =
+        let Some((player_entity, (player_local_transform, player_camera, player))) =
             player_query.try_player()
         else {
             return;
         };
+        let player_world_transform =
+            ecs_world.get_world_transform(player_entity, &player_local_transform);
 
         if cursor.selected_entity.is_some() && !ecs_world.contains(cursor.selected_entity.unwrap())
         {
@@ -150,8 +152,8 @@ impl VoxelCursor {
         }
 
         if input.is_mouse_button_pressed(mouse::Button::Middle) {
-            let voxel_pos = player_transform
-                .position()
+            let voxel_pos = player_local_transform
+                .position
                 .map(|x| (x / consts::voxel::VOXEL_METER_LENGTH).floor() as i32);
 
             let mut attachment_map = AttachmentMap::new();
@@ -175,7 +177,7 @@ impl VoxelCursor {
             || input.is_mouse_button_pressed(mouse::Button::Left)
         {
             if let Some(trace_info) =
-                voxel_world.trace_world(&&ecs_world, player_transform.get_ray())
+                voxel_world.trace_world(&&ecs_world, player_local_transform.get_ray())
             {
                 match trace_info {
                     VoxelTraceInfo::Terrain { world_voxel_pos } => {
@@ -187,7 +189,7 @@ impl VoxelCursor {
                                 consts::voxel::VOXEL_METER_LENGTH * 0.5,
                             );
                         let player_voxel_distance =
-                            (hit_voxel_meter - player_transform.position).magnitude();
+                            (hit_voxel_meter - player_local_transform.position).magnitude();
 
                         let mut cursor_data = VoxelCursorData {
                             brush: Some(VoxelBrush::new(ui.debug_state.brush_color.clone())),
@@ -226,7 +228,7 @@ impl VoxelCursor {
             if input.is_mouse_button_down(mouse::Button::Right)
                 || input.is_mouse_button_down(mouse::Button::Left)
             {
-                let mut player_ray = player_transform.get_ray();
+                let mut player_ray = player_local_transform.get_ray();
                 player_ray.advance(cursor_data.ray_distance);
                 let new_voxel = player_ray
                     .origin

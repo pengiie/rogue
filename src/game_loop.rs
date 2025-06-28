@@ -6,6 +6,7 @@ use crate::{
         asset::{self, asset::Assets},
         debug::DebugRenderer,
         editor::editor::{Editor, EditorView},
+        entity::scripting::Scripts,
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -19,7 +20,7 @@ use crate::{
         window::time::{Instant, Time},
     },
     game::entity::player::Player,
-    session::Session,
+    session::{Session, SessionState},
 };
 
 pub fn game_loop(app: &App) {
@@ -36,10 +37,19 @@ pub fn game_loop(app: &App) {
     // ------- RENDERER SETUP
     app.run_system(Renderer::begin_frame);
 
-    // ------ Editor session related stuff
+    // ------ SESSION ----------
+
+    // Since we are about to run scripts, ensure state is updated.
+    app.run_system(Scripts::update_world_state);
+
+    // Starts and stops the game, running Scripts::on_setup.
+    // Manages project asset loading.
     app.run_system(Session::update);
 
     // ------- ASSETS --------
+
+    // Load any requested scripts
+    app.run_system(Scripts::update_loaded_scripts);
 
     // Run any queued up asset tasks and update finished tasks.
     app.run_system(Assets::update_assets);
@@ -50,7 +60,7 @@ pub fn game_loop(app: &App) {
     app.run_system(UI::update);
     app.run_system(UI::draw);
 
-    // ------- PHYSICS/INPUT---------
+    // ------- EDITOR INPUT---------
 
     app.run_system(Editor::update_toggle);
     if app.get_resource::<Editor>().is_active {
@@ -65,13 +75,28 @@ pub fn game_loop(app: &App) {
             }
         }
         app.run_system(Editor::update_camera_animations);
-    } else {
-        // Update player logic.
-        app.run_system(Player::update_from_input);
-        app.run_system(VoxelCursor::update_post_physics);
     }
 
-    app.run_system(PhysicsWorld::do_physics_update);
+    let session_state = app.get_resource::<Session>().session_state;
+    match session_state {
+        SessionState::Editor => {}
+        SessionState::Game => {
+            // -------- SCRIPTS ---------
+
+            app.run_system(Scripts::update_loaded_scripts);
+            app.run_system(Scripts::run_on_update);
+            app.run_system(Scripts::update_script_events);
+
+            let physics_updates = 0;
+            for _ in 0..physics_updates {
+                // -------- PHYSICS ----------
+                app.run_system(Scripts::run_on_physics_update);
+                app.run_system(Scripts::update_script_events);
+                app.run_system(PhysicsWorld::do_physics_update);
+            }
+        }
+        SessionState::GamePaused => todo!(),
+    }
 
     // ------- VOXEL WORLD -------
     app.run_system(VoxelWorld::update_post_physics);

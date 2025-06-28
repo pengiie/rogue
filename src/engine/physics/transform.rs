@@ -8,13 +8,15 @@ use nalgebra::{
 use crate::{
     common::{aabb::AABB, obb::OBB, ray::Ray},
     consts,
+    engine::entity::ecs_world::ECSWorld,
 };
 
+/// Transform relative to the world-space or parent transform if one exists.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Transform {
     pub position: Vector3<f32>,
     pub rotation: UnitQuaternion<f32>,
-    pub scale: f32,
+    pub scale: Vector3<f32>,
 }
 
 impl Transform {
@@ -22,7 +24,7 @@ impl Transform {
         Self {
             position: Vector3::zeros(),
             rotation: UnitQuaternion::identity(),
-            scale: 1.0,
+            scale: Vector3::new(1.0, 1.0, 1.0),
         }
     }
 
@@ -31,10 +33,11 @@ impl Transform {
         Self {
             position: translation.vector,
             rotation: UnitQuaternion::identity(),
-            scale: 1.0,
+            scale: Vector3::new(1.0, 1.0, 1.0),
         }
     }
 
+    // The world-space transformation matrix of this entity.
     pub fn to_transformation_matrix(&self) -> Matrix4<f32> {
         let translation = Matrix4::<f32>::new_translation(&self.position);
         let rot = self.rotation.to_homogeneous();
@@ -62,32 +65,30 @@ impl Transform {
     }
 
     pub fn forward(&self) -> Vector3<f32> {
-        self.rotation.transform_vector(&Vector3::new(0.0, 0.0, 1.0))
+        self.rotation.transform_vector(&Vector3::z())
+    }
+
+    pub fn right(&self) -> Vector3<f32> {
+        self.rotation.transform_vector(&Vector3::x())
+    }
+
+    pub fn up(&self) -> Vector3<f32> {
+        self.rotation.transform_vector(&Vector3::y())
     }
 
     pub fn as_voxel_model_obb(&self, model_dimensions: Vector3<u32>) -> OBB {
-        let half_length = model_dimensions.map(|x| x as f32)
+        let half_length = model_dimensions.zip_map(&self.scale, |x, y| x as f32 * y)
             * consts::voxel::VOXEL_METER_LENGTH
-            * self.scale
             * 0.5;
-        let min = self.position() - half_length;
-        let max = self.position() + half_length;
-
-        let rotation_anchor = self.position();
+        let min = self.position - half_length;
+        let max = self.position + half_length;
+        let rotation_anchor = self.position;
 
         OBB::new(
             AABB::new_two_point(min, max),
             self.rotation,
             rotation_anchor,
         )
-    }
-
-    pub fn rotation(&self) -> Rotation3<f32> {
-        self.rotation.to_rotation_matrix()
-    }
-
-    pub fn position(&self) -> Vector3<f32> {
-        self.position
     }
 }
 

@@ -52,8 +52,8 @@ use super::{
     flat::VoxelModelFlat,
     thc::{VoxelModelTHC, VoxelModelTHCCompressed},
     voxel::{
-        VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema,
+        VoxelMaterialSet, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
     },
     voxel_registry::{VoxelModelId, VoxelModelRegistry},
     voxel_terrain::{self, RenderableChunksGpu, VoxelChunks},
@@ -161,7 +161,7 @@ impl<'a> VoxelEdit<'a> {
 pub struct VoxelWorld {
     pub registry: VoxelModelRegistry,
     pub chunks: VoxelChunks,
-
+    //pub global_materials: VoxelMaterialSet,
     pub to_update_normals: HashSet<VoxelModelId>,
 
     pub edit_queue: VecDeque<QueuedVoxelEdit>,
@@ -179,7 +179,7 @@ impl VoxelWorld {
         Self {
             registry: VoxelModelRegistry::new(),
             chunks: VoxelChunks::new(settings),
-
+            // global_materials: VoxelMaterialSet::new(1),
             to_update_normals: HashSet::new(),
 
             chunk_edit_handler_pool: rayon::ThreadPoolBuilder::new()
@@ -211,7 +211,9 @@ impl VoxelWorld {
     where
         T: VoxelModelImplConcrete,
     {
-        let id = self.register_renderable_voxel_model(name, voxel_model);
+        let id = self
+            .registry
+            .register_renderable_voxel_model(name, voxel_model);
         self.to_update_normals.insert(id);
         return id;
     }
@@ -313,22 +315,24 @@ impl VoxelWorld {
         let mut closest_entity: Option<(f32, hecs::Entity, VoxelModelId, Vector3<u32>)> = None;
 
         let mut renderable_model_query = ecs_world.query::<(&Transform, &RenderableVoxelEntity)>();
-        for (entity_id, (transform, renderable)) in renderable_model_query.iter() {
+        for (entity_id, (local_transform, renderable)) in renderable_model_query.iter() {
             let Some(voxel_model_id) = renderable.voxel_model_id() else {
                 continue;
             };
 
             let model = self.registry.get_dyn_model(voxel_model_id);
 
-            let half_side_length = model.length().cast::<f32>()
+            let world_transform = ecs_world.get_world_transform(entity_id, &local_transform);
+            let half_side_length = model
+                .length()
+                .zip_map(&world_transform.scale, |x, y| x as f32 * y)
                 * consts::voxel::VOXEL_METER_LENGTH
-                * 0.5
-                * transform.scale;
-            let min = transform.position() - half_side_length;
-            let max = transform.position() + half_side_length;
+                * 0.5;
+            let min = world_transform.position - half_side_length;
+            let max = world_transform.position + half_side_length;
             let aabb = AABB::new_two_point(min, max);
-            let rotation_anchor = transform.position();
-            let r = transform.rotation().inverse();
+            let rotation_anchor = world_transform.position;
+            let r = world_transform.rotation.to_rotation_matrix().inverse();
 
             let rotated_ray_origin =
                 (r.matrix() * (ray.origin - rotation_anchor)) + rotation_anchor;
@@ -940,7 +944,7 @@ impl VoxelWorldGpu {
         let mut voxel_entity_data = Vec::new();
         let mut voxel_entities_query = Self::query_voxel_entities(&ecs_world);
         voxel_world_gpu.rendered_voxel_model_entity_count = 0;
-        for (entity, (transform, voxel_entity)) in voxel_entities_query.iter() {
+        for (entity, (local_transform, voxel_entity)) in voxel_entities_query.iter() {
             let Some(voxel_model_id) = voxel_entity.voxel_model_id() else {
                 continue;
             };
@@ -951,13 +955,15 @@ impl VoxelWorldGpu {
                 panic!("Model should be loaded by now");
             };
 
-            let side_length = model_gpu_info.voxel_model_dimensions.cast::<f32>()
+            let world_transform = ecs_world.get_world_transform(entity, local_transform);
+            let side_length = model_gpu_info
+                .voxel_model_dimensions
+                .zip_map(&world_transform.scale, |x, y| x as f32 * y)
                 * consts::voxel::VOXEL_METER_LENGTH
-                * 0.5
-                * transform.scale;
-            let min = transform.position - side_length;
-            let max = transform.position + side_length;
-            let r = transform.rotation();
+                * 0.5;
+            let min = world_transform.position - side_length;
+            let max = world_transform.position + side_length;
+            let r = world_transform.rotation.to_rotation_matrix();
             // Transpose cause its inverse and nalgebra is clockwise? i dunno for sure.
             let r = r.matrix().transpose();
             let model_ptr = model_gpu_info.info_allocation.start_index_stride_dword() as u32;

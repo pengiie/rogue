@@ -1,12 +1,15 @@
 use std::{
-    fs::Metadata,
+    fs::{metadata, Metadata},
+    ops::Deref,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use egui::Color32;
 use egui_dock::DockState;
+use egui_plot::{Plot, PlotPoints};
 use hecs::With;
 use nalgebra::{SimdValue, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
@@ -18,10 +21,14 @@ use crate::{
             asset::{AssetPath, Assets},
             repr::{
                 editor_settings::EditorProjectAsset, image::ImageAsset,
-                world::voxel::VoxelModelAnyAsset,
+                world::voxel::VoxelModelAnyAsset, TextAsset,
             },
         },
-        entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
+        entity::{
+            ecs_world::{ECSWorld, Entity},
+            scripting::{ScriptableEntity, Scripts},
+            EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
+        },
         graphics::camera::Camera,
         physics::transform::Transform,
         ui::{
@@ -36,10 +43,12 @@ use crate::{
             voxel_registry::{VoxelModelId, VoxelModelInfo},
             voxel_world::{self, VoxelWorld},
         },
-        window::window::Window,
+        window::{
+            time::{Instant, Time},
+            window::Window,
+        },
     },
-    game::entity::GameEntity,
-    session::Session,
+    session::{Session, SessionState},
 };
 
 use super::editor::{Editor, EditorEditingTool, EditorView};
@@ -208,6 +217,8 @@ pub fn egui_editor_ui(
     session: &mut Session,
     assets: &mut Assets,
     window: &mut Window,
+    time: &Time,
+    mut scripts: &mut Scripts,
 ) -> Vector4<f32> {
     if !ui_state.initialized_icons {
         init_editor_ui_textures(ctx, ui_state);
@@ -221,6 +232,7 @@ pub fn egui_editor_ui(
     dock_style.main_surface_border_stroke.width = 0.0;
     dock_style.main_surface_border_stroke.color = egui::Color32::TRANSPARENT;
 
+    // TOP BAR
     content_padding.x = egui::TopBottomPanel::top("top_editor_pane")
         .frame(
             egui::Frame::new()
@@ -272,6 +284,7 @@ pub fn egui_editor_ui(
 
             ui.add_space(4.0);
 
+            // TOP BAR ACTIONS
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
@@ -291,6 +304,41 @@ pub fn egui_editor_ui(
                     .clicked()
                 {
                     editor.switch_to_fps(window);
+                }
+
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // Stop button
+                if ui
+                    .add_enabled(
+                        session.session_state != SessionState::Editor,
+                        egui::Button::new("\u{23F9}"),
+                    )
+                    .clicked()
+                {
+                    session.stop_game();
+                }
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if session.session_state == SessionState::Game {
+                    ui.push_id("pause", |ui| {
+                        // Pause button
+                        if ui.add(egui::Button::new("\u{23F8}")).clicked() {}
+                    });
+                } else {
+                    ui.push_id("play", |ui| {
+                        // Play button
+                        let can_start_game =
+                            session.can_start_game() && scripts.can_start_game(ecs_world);
+                        if ui
+                            .add_enabled(can_start_game, egui::Button::new("\u{23F5}"))
+                            .clicked()
+                        {
+                            session.start_game();
+                        }
+                    });
+                };
+
+                if ui.button("\u{27F3}").clicked() {
+                    scripts.refresh();
                 }
             });
         })
@@ -334,7 +382,7 @@ pub fn egui_editor_ui(
                         ));
                     }
                     if ui.button("Cube").clicked() {
-                        let model_id = voxel_world.registry.register_renderable_voxel_model(
+                        let model_id = voxel_world.register_renderable_voxel_model(
                             "entity",
                             VoxelModelFactory::create_cuboid(
                                 Vector3::new(32, 32, 32),
@@ -355,8 +403,22 @@ pub fn egui_editor_ui(
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let mut game_entity_query = ecs_world.query::<&GameEntity>();
-                    for (entity_id, game_entity) in game_entity_query.into_iter() {
+                    let mut game_entity_query =
+                        ecs_world.query::<hecs::Without<&GameEntity, &EntityParent>>();
+                    let game_entities = game_entity_query
+                        .into_iter()
+                        .map(|(entity, game_entity)| (entity, game_entity.clone()))
+                        .collect::<Vec<_>>();
+                    drop(game_entity_query);
+
+                    fn render_entity_label(
+                        ui: &mut egui::Ui,
+                        editor: &mut Editor,
+                        ecs_world: &mut ECSWorld,
+                        ui_state: &mut EditorUIState,
+                        entity_id: Entity,
+                        game_entity: &GameEntity,
+                    ) {
                         let label_id =
                             egui::Id::new(format!("left_panel_{}_entity_label", entity_id.id()));
                         let is_hovering = ui.data(|w| w.get_temp(label_id).unwrap_or(false));
@@ -377,8 +439,58 @@ pub fn egui_editor_ui(
                             editor.hovered_entity = Some(entity_id);
                         }
                         if label.clicked() {
-                            editor.selected_entity = Some(entity_id);
+                            if let Some(new_child) = ui_state.selecting_new_parent.take() {
+                                ecs_world.set_parent(new_child, entity_id);
+                            } else {
+                                editor.selected_entity = Some(entity_id);
+                            }
                         }
+                    };
+
+                    for (entity_id, game_entity) in game_entities {
+                        render_entity_label(
+                            ui,
+                            editor,
+                            ecs_world,
+                            ui_state,
+                            entity_id,
+                            &game_entity,
+                        );
+
+                        fn render_children(
+                            ui: &mut egui::Ui,
+                            editor: &mut Editor,
+                            ecs_world: &mut ECSWorld,
+                            ui_state: &mut EditorUIState,
+                            entity_id: Entity,
+                        ) {
+                            let Ok(children_query) = ecs_world.get::<&EntityChildren>(entity_id)
+                            else {
+                                return;
+                            };
+                            let children = children_query.children.clone();
+                            drop(children_query);
+                            ui.horizontal(|ui| {
+                                ui.add_space(12.0);
+                                ui.vertical(|ui| {
+                                    for child in children {
+                                        let child_game_entity = ecs_world.get::<&GameEntity>(child);
+                                        if child_game_entity.is_err() {
+                                            continue;
+                                        }
+                                        let ge =
+                                            child_game_entity.as_ref().unwrap().deref().clone();
+                                        drop(child_game_entity);
+                                        render_entity_label(
+                                            ui, editor, ecs_world, ui_state, child, &ge,
+                                        );
+                                        render_children(ui, editor, ecs_world, ui_state, child);
+                                    }
+                                });
+                            });
+                        };
+
+                        render_children(ui, editor, ecs_world, ui_state, entity_id);
                     }
                 });
             //ui.label(egui::RichText::new("Performance:").size(8.0));
@@ -406,6 +518,8 @@ pub fn egui_editor_ui(
                 &mut ui_state,
                 session,
                 assets,
+                &time,
+                &mut scripts,
             );
         })
         .response
@@ -566,7 +680,7 @@ pub fn new_voxel_model_dialog(
                         &file_path,
                     );
                     assets.save_asset(asset_path.clone(), flat.model.clone());
-                    let model_id = voxel_world.registry.register_renderable_voxel_model(
+                    let model_id = voxel_world.register_renderable_voxel_model(
                         format!(
                             "asset_{:?}",
                             file_path.strip_prefix(session.project_assets_dir().unwrap())
@@ -581,7 +695,6 @@ pub fn new_voxel_model_dialog(
                     {
                         renderable.set_id(model_id);
                     }
-                    voxel_world.to_update_normals.insert(model_id);
                     force_close = true;
                 }
             });
@@ -707,6 +820,7 @@ fn entity_properties_pane(
     ui_state: &mut EditorUIState,
     session: &mut Session,
     assets: &mut Assets,
+    scripts: &mut Scripts,
 ) {
     'existing_model_dialog_rx: {
         match ui_state.existing_model_dialog.rx_file_name.try_recv() {
@@ -761,6 +875,54 @@ fn entity_properties_pane(
             Err(_) => {}
         }
     }
+    'add_script_rx: {
+        match ui_state.add_script_dialog.rx_file_name.try_recv() {
+            Ok(model_path) => {
+                let Ok(path) = PathBuf::from_str(&model_path) else {
+                    break 'add_script_rx;
+                };
+                if !path.is_absolute() {
+                    break 'add_script_rx;
+                }
+                if !path.starts_with(session.project_assets_dir().unwrap()) {
+                    log::error!(
+                        "Picked script that {:?} does not start with the assets dir.",
+                        path
+                    );
+                    break 'add_script_rx;
+                }
+
+                let Ok(metadata) = std::fs::metadata(&path) else {
+                    log::error!("Failed to get script file metadata.");
+                    break 'add_script_rx;
+                };
+                if !metadata.is_file() {
+                    log::error!("Script path must be a file.");
+                    break 'add_script_rx;
+                }
+
+                let model_path = PathBuf::from_str(&model_path).unwrap();
+                let asset_path = AssetPath::from_project_dir_path(
+                    session.project_save_dir.as_ref().unwrap(),
+                    &model_path,
+                );
+                if let Ok(mut scriptable) = ecs_world
+                    .get::<&mut ScriptableEntity>(ui_state.add_script_dialog.associated_entity)
+                {
+                    if scriptable
+                        .scripts
+                        .iter()
+                        .find(|path| &&asset_path == path)
+                        .is_none()
+                    {
+                        scriptable.scripts.push(asset_path.clone());
+                        scripts.load_script(asset_path);
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Entity properties").size(20.0));
@@ -772,6 +934,10 @@ fn entity_properties_pane(
                 }
                 if ui.button("Renderable").clicked() {
                     ecs_world.insert_one(*selected_entity, RenderableVoxelEntity::new_null());
+                    ui.close_menu();
+                }
+                if ui.button("Script").clicked() {
+                    ecs_world.insert_one(*selected_entity, ScriptableEntity::new());
                     ui.close_menu();
                 }
             });
@@ -826,8 +992,30 @@ fn entity_properties_pane(
                     ui.text_edit_singleline(&mut game_entity.name);
                 });
                 ui.label(format!("UUID: {}", game_entity.uuid));
+                ui.horizontal(|ui| {
+                    ui.label("Parent: ");
+
+                    let parent = ecs_world.get::<&EntityParent>(*selected_entity).ok();
+                    let parent_name = parent.as_ref().map_or_else(
+                        || "None".to_owned(),
+                        |parent| {
+                            let parent_game_entity = ecs_world
+                                .get::<&GameEntity>(parent.parent)
+                                .expect("Parent should be a GameEntity");
+                            parent_game_entity.name.clone()
+                        },
+                    );
+                    drop(parent);
+                    ui.menu_button(parent_name, |ui| {
+                        ui.label("Set parent:");
+                        if ui.button("Select parent entity").clicked() {
+                            ui_state.selecting_new_parent = Some(*selected_entity);
+                            ui.close_menu();
+                        }
+                    });
+                });
             });
-            drop(game_entity);
+            drop(game_entity); // End GameEntity
 
             if let Ok(mut transform) = ecs_world.get::<&mut Transform>(*selected_entity) {
                 component_widget(ui, "Transform", None, |ui| {
@@ -861,48 +1049,72 @@ fn entity_properties_pane(
                         let (mut roll, mut pitch, mut yaw) = transform.rotation.euler_angles();
                         let original = Vector3::new(roll, pitch, yaw).map(|x| x.to_degrees());
                         let mut edit = original.clone();
+                        // nalgebra uses positive rotation for clockwise but intuitively
+                        // counter-clockwise makes more sense since math.
+                        edit.x *= -1.0;
+                        edit.z *= -1.0;
                         ui.add(
                             egui::DragValue::new(&mut edit.x)
                                 .suffix("°")
-                                .speed(0.01)
+                                .speed(0.05)
                                 .fixed_decimals(2),
                         );
                         ui.label("Y");
                         ui.add(
                             egui::DragValue::new(&mut edit.y)
                                 .suffix("°")
-                                .speed(0.01)
+                                .speed(0.05)
                                 .fixed_decimals(2),
                         );
                         ui.label("Z");
                         ui.add(
                             egui::DragValue::new(&mut edit.z)
                                 .suffix("°")
+                                .speed(0.05)
+                                .fixed_decimals(2),
+                        );
+                        edit.x *= -1.0;
+                        edit.z *= -1.0;
+                        let diff = edit - original;
+                        if diff.x != 0.0 {
+                            transform.rotation =
+                                UnitQuaternion::from_euler_angles(edit.x.to_radians(), pitch, yaw);
+                        }
+                        if diff.y != 0.0 {
+                            transform.rotation =
+                                UnitQuaternion::from_euler_angles(roll, edit.y.to_radians(), yaw);
+                        }
+                        if diff.z != 0.0 {
+                            transform.rotation =
+                                UnitQuaternion::from_euler_angles(roll, pitch, edit.z.to_radians());
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Scale:");
+                        ui.label("X");
+                        ui.add(
+                            egui::DragValue::new(&mut transform.scale.x)
+                                .range(0.001..=1000.0)
                                 .speed(0.01)
                                 .fixed_decimals(2),
                         );
-                        let diff = edit - original;
-                        if diff.x != 0.0 {
-                            transform.rotation *= UnitQuaternion::from_axis_angle(
-                                &Vector3::x_axis(),
-                                diff.x.to_radians(),
-                            );
-                        }
-                        if diff.y != 0.0 {
-                            transform.rotation *= UnitQuaternion::from_axis_angle(
-                                &Vector3::y_axis(),
-                                diff.y.to_radians(),
-                            );
-                        }
-                        if diff.z != 0.0 {
-                            transform.rotation *= UnitQuaternion::from_axis_angle(
-                                &Vector3::z_axis(),
-                                diff.z.to_radians(),
-                            );
-                        }
+                        ui.label("Y");
+                        ui.add(
+                            egui::DragValue::new(&mut transform.scale.y)
+                                .range(0.001..=1000.0)
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
+                        ui.label("Z");
+                        ui.add(
+                            egui::DragValue::new(&mut transform.scale.z)
+                                .range(0.001..=1000.0)
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
                     });
                 });
-            }
+            } // End Transform
 
             let mut remove_renderable = false;
             if let Ok(mut renderable_voxel_model) =
@@ -1098,7 +1310,7 @@ fn entity_properties_pane(
             }
             if remove_renderable {
                 ecs_world.remove_one::<RenderableVoxelEntity>(*selected_entity);
-            }
+            } // End RenderableVoxelEntity
 
             let mut remove_camera = false;
             if let Ok(mut camera) = ecs_world.get::<&mut Camera>(*selected_entity) {
@@ -1116,7 +1328,45 @@ fn entity_properties_pane(
                 if Some(*selected_entity) == session.game_camera {
                     session.game_camera = None;
                 }
+            } // End Camera
+
+            let mut remove_scripts = false;
+            if let Ok(mut scriptable) = ecs_world.get::<&mut ScriptableEntity>(*selected_entity) {
+                component_widget(ui, "Scripts", Some(&mut remove_scripts), |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Add script").clicked() {
+                            let send = ui_state.add_script_dialog.tx_file_name.clone();
+                            ui_state.add_script_dialog.associated_entity = *selected_entity;
+                            std::thread::spawn(|| {
+                                pollster::block_on(async move {
+                                    let file = rfd::AsyncFileDialog::new()
+                                        .add_filter("lua", &["lua"])
+                                        .pick_file()
+                                        .await;
+                                    let Some(file) = file else {
+                                        return;
+                                    };
+                                    send.send(file.path().to_string_lossy().to_string());
+                                });
+                            });
+                            ui.close_menu();
+                        }
+                    });
+                    if scriptable.scripts.is_empty() {
+                    } else {
+                        for asset_path in &scriptable.scripts {
+                            if ui.label(asset_path.asset_path.as_ref().unwrap()).clicked() {}
+                        }
+                    }
+                });
             }
+            if remove_camera {
+                ecs_world.remove_one::<Camera>(*selected_entity);
+                if Some(*selected_entity) == session.game_camera {
+                    session.game_camera = None;
+                }
+            } // End Camera
+        } else {
             ui.label("No entity selected.");
         }
     };
@@ -1399,6 +1649,8 @@ fn right_editor_pane(
     ui_state: &mut EditorUIState,
     session: &mut Session,
     assets: &mut Assets,
+    time: &Time,
+    scripts: &mut Scripts,
 ) {
     ui.horizontal(|ui| {
         ui.style_mut().spacing.item_spacing.x = 1.0;
@@ -1439,6 +1691,24 @@ fn right_editor_pane(
         {
             ui_state.right_pane_state = EditorTab::Game;
         }
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::Stats,
+                egui::Button::new("Stats"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::Stats;
+        }
+        if ui
+            .add_enabled(
+                ui_state.right_pane_state != EditorTab::User,
+                egui::Button::new("User"),
+            )
+            .clicked()
+        {
+            ui_state.right_pane_state = EditorTab::User;
+        }
     });
 
     egui::Frame::NONE
@@ -1453,6 +1723,7 @@ fn right_editor_pane(
                     ui_state,
                     session,
                     assets,
+                    scripts,
                 );
             }
             EditorTab::WorldProperties => {
@@ -1486,6 +1757,30 @@ fn right_editor_pane(
                     ui_state,
                     session,
                     assets,
+                );
+            }
+            EditorTab::Stats => {
+                stats_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    ui_state,
+                    session,
+                    assets,
+                    time,
+                );
+            }
+            EditorTab::User => {
+                user_pane(
+                    ui,
+                    ecs_world,
+                    editor,
+                    voxel_world,
+                    ui_state,
+                    session,
+                    assets,
+                    time,
                 );
             }
         });
@@ -1528,6 +1823,104 @@ pub fn game_pane(
                 }
             });
         });
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, content);
+}
+
+pub fn stats_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+    assets: &mut Assets,
+    time: &Time,
+) {
+    let content = |ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("Statistics").size(20.0));
+        ui.add_space(16.0);
+        let stats = &mut ui_state.stats;
+
+        let time_between_samples =
+            Duration::from_secs_f32(stats.time_length.as_secs_f32() / stats.samples as f32);
+        stats.cpu_frame_time_samples_max = stats.cpu_frame_time_samples_max.max(time.delta_time());
+        if stats.last_sample.elapsed() > time_between_samples {
+            stats
+                .cpu_frame_time_samples
+                .push_back(stats.cpu_frame_time_samples_max);
+            if stats.cpu_frame_time_samples.len() > stats.samples as usize {
+                stats.cpu_frame_time_samples.pop_front();
+            }
+            stats.last_sample = Instant::now();
+            stats.cpu_frame_time_samples_max = Duration::ZERO;
+        }
+        let cpu_frame_time_points = PlotPoints::Owned(
+            stats
+                .cpu_frame_time_samples
+                .iter()
+                .enumerate()
+                .map(|(i, time)| egui_plot::PlotPoint {
+                    x: (i as f64 / stats.samples as f64) * -stats.time_length.as_secs_f64(),
+                    y: time.as_micros() as f64 / 1000.0,
+                })
+                .collect::<Vec<egui_plot::PlotPoint>>(),
+        );
+        let cpu_frame_time_line = egui_plot::Line::new("Frame time (ms)", cpu_frame_time_points);
+
+        egui_plot::Plot::new(egui::Id::new("frame_time_plot"))
+            .link_axis(egui::Id::new("timings_plot"), egui::Vec2b::new(true, true))
+            .view_aspect(1.0)
+            .include_x(-stats.time_length.as_secs_f64())
+            .include_x(0.0)
+            .include_y(3.0)
+            .include_y(10.0)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .allow_boxed_zoom(false)
+            .legend(egui_plot::Legend::default())
+            .y_grid_spacer(|grid_input| {
+                let mut v = Vec::new();
+                let mut distance = grid_input.bounds.1 - grid_input.bounds.0;
+                let marks = 10;
+                let step_size = distance / marks as f64;
+                for i in 0..=marks {
+                    v.push(egui_plot::GridMark {
+                        value: grid_input.bounds.0 + i as f64 * step_size,
+                        step_size,
+                    });
+                }
+                v
+            })
+            .set_margin_fraction(egui::vec2(0.0, 0.0))
+            .cursor_color(egui::Color32::TRANSPARENT)
+            .show(ui, |ui| {
+                ui.line(cpu_frame_time_line);
+            });
+    };
+
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, content);
+}
+
+pub fn user_pane(
+    ui: &mut egui::Ui,
+    ecs_world: &mut ECSWorld,
+    editor: &mut Editor,
+    voxel_world: &mut VoxelWorld,
+    ui_state: &mut EditorUIState,
+    session: &mut Session,
+    assets: &mut Assets,
+    time: &Time,
+) {
+    let content = |ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("User Settings").size(20.0));
+        ui.add_space(16.0);
     };
 
     egui::ScrollArea::vertical()

@@ -597,9 +597,9 @@ where
     {
         match data.path.extension() {
             "json" => match data.read_contents() {
-                Ok(contents) => {
-                    Ok(serde_json::from_str::<T>(&contents).expect("Failed to deserialize file."))
-                }
+                Ok(contents) => serde_json::from_str::<T>(&contents).map_err(|_| {
+                    AssetLoadError::Other(anyhow::anyhow!("Failed to deserialize file."))
+                }),
                 Err(err) => match err.kind() {
                     std::io::ErrorKind::NotFound => Err(AssetLoadError::NotFound { path: None }),
                     _ => Err(AssetLoadError::Other(anyhow::anyhow!(err.to_string()))),

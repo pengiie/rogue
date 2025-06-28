@@ -9,6 +9,7 @@ use super::{
 
 /// Power of 2 allocator operating on gpu-only buffers.
 pub struct GpuBufferAllocator {
+    allocator_name: String,
     buffer: ResourceId<Buffer>,
 
     // TODO: create deallocation reciever so we can cleanup removed models.
@@ -27,6 +28,7 @@ impl GpuBufferAllocator {
         });
 
         Self {
+            allocator_name: name.to_owned(),
             buffer,
             allocations: AllocatorTree::new(0, 0, size),
             total_allocated_size: 0,
@@ -42,6 +44,13 @@ impl GpuBufferAllocator {
         );
         let allocation_size = bytes.next_power_of_two();
         self.total_allocated_size += allocation_size;
+        log::info!(
+            "Allocator {} allocated just allocated {} bytes, {}/{} remaining",
+            self.allocator_name,
+            allocation_size,
+            self.allocations.size - self.total_allocated_size,
+            self.allocations.size
+        );
         let allocation = self.allocations.allocate(allocation_size, 4);
 
         allocation

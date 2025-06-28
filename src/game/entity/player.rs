@@ -6,7 +6,7 @@ use nalgebra::{AbstractRotation, Rotation3, Translation3, UnitQuaternion, Vector
 
 use crate::{
     engine::{
-        entity::ecs_world::ECSWorld,
+        entity::{ecs_world::ECSWorld, GameEntity},
         graphics::camera::{Camera, MainCamera},
         input::{keyboard::Key, Input},
         physics::transform::Transform,
@@ -16,8 +16,6 @@ use crate::{
     },
     settings::Settings,
 };
-
-use super::GameEntity;
 
 pub struct Player {
     euler: Vector3<f32>,

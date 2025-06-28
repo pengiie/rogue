@@ -248,7 +248,8 @@ impl winit::application::ApplicationHandler for App {
                     winit::event::DeviceEvent::Key(winit::event::RawKeyEvent {
                         state: ElementState::Pressed,
                         ..
-                    }) => {
+                    })
+                    | winit::event::DeviceEvent::MouseWheel { .. } => {
                         return;
                     }
                     _ => {}

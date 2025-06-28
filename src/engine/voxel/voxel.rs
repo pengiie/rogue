@@ -19,6 +19,7 @@ use crate::{
     },
     engine::{
         graphics::{
+            backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId},
             device::{DeviceResource, GfxDevice},
             gpu_allocator::GpuBufferAllocator,
         },
@@ -283,4 +284,117 @@ impl VoxelData {
     pub fn attachment_ids(&self) -> impl Iterator<Item = &AttachmentId> {
         self.data.keys()
     }
+}
+
+#[derive(Clone)]
+pub struct VoxelMaterialSet {
+    data: Vec<u32>,
+    name_map: HashMap<String, VoxelMaterialId>,
+    // In u32s.
+    material_size: u32,
+}
+
+impl VoxelMaterialSet {
+    /// material_byte_size must be a multiple of 32.
+    pub fn new(material_byte_size: u32) -> Self {
+        assert_eq!(
+            material_byte_size % 32,
+            0,
+            "material_byte_size must be a multiple of 32"
+        );
+        Self {
+            data: Vec::new(),
+            name_map: HashMap::new(),
+            material_size: material_byte_size / 32,
+        }
+    }
+
+    pub fn register_material(
+        &mut self,
+        name: Option<impl ToString>,
+        data: &[u32],
+    ) -> VoxelMaterialId {
+        assert_eq!(data.len(), self.material_size as usize);
+        let id = VoxelMaterialId(self.data.len() as u32 / self.material_size);
+        if let Some(name) = name {
+            let old = self.name_map.insert(name.to_string(), id);
+            assert!(
+                old.is_none(),
+                "Overwrote previous material with same name, use replace_material instead.",
+            );
+        }
+        self.data.extend_from_slice(data);
+
+        return id;
+    }
+
+    pub fn replace_material(&mut self, id: VoxelMaterialId, data: &[u32]) {
+        assert_eq!(data.len(), self.material_size as usize);
+        let start = (id.0 * self.material_size) as usize;
+        self.data[start..(start + self.material_size as usize)].copy_from_slice(data);
+    }
+
+    pub fn replace_material_with_name(&mut self, name: impl AsRef<str>, data: &[u32]) {
+        assert_eq!(data.len(), self.material_size as usize);
+        let id = self
+            .name_map
+            .get(name.as_ref())
+            .expect("Material doesn't exist");
+        let start = (id.0 * self.material_size) as usize;
+        self.data[start..(start + self.material_size as usize)].copy_from_slice(data);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct VoxelMaterialId(pub u32);
+
+impl VoxelMaterialId {}
+
+/// Buffer backed version of a VoxelMaterialSet, for an allocation
+/// backed version, use VoxelMaterialSetAllocatedGpu.
+pub struct VoxelMaterialSetGpu {
+    name: String,
+    material_data: Option<ResourceId<Buffer>>,
+}
+
+impl VoxelMaterialSetGpu {
+    pub fn new(name: impl ToString) -> Self {
+        Self {
+            name: name.to_string(),
+            material_data: None,
+        }
+    }
+
+    pub fn update_gpu_objects(
+        &mut self,
+        material_data: &VoxelMaterialSet,
+        device: &mut impl GraphicsBackendDevice,
+    ) {
+        let req_bytes = material_data.data.len() as u64 * 4;
+        if req_bytes > 0 {
+            match &mut self.material_data {
+                Some(buffer) => {
+                    let buffer_info = device.get_buffer_info(buffer);
+                    if buffer_info.size < req_bytes {
+                        // TODO: Delete old buffer.
+                        let new_size =
+                            req_bytes.max((buffer_info.size as f32 * 1.5).floor() as u64);
+                        *buffer = device.create_buffer(GfxBufferCreateInfo {
+                            name: format!("material_set_{}", self.name),
+                            size: new_size,
+                        });
+                    }
+                }
+                None => {
+                    const INITIAL_BYTES: u64 = 4 * 256;
+                    self.material_data = Some(device.create_buffer(GfxBufferCreateInfo {
+                        name: format!("material_set_{}", self.name),
+                        size: INITIAL_BYTES,
+                    }));
+                }
+            }
+        }
+    }
+
+    pub fn write_render_data(&mut self, material_data: &VoxelMaterialSet) {}
 }

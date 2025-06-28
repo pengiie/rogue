@@ -12,8 +12,14 @@ pub struct MainCamera {
 }
 
 impl MainCamera {
-    pub fn new() -> Self {
+    pub fn new_empty() -> Self {
         Self { camera: None }
+    }
+
+    pub fn new(entity: Entity, name: impl ToString) -> Self {
+        Self {
+            camera: Some((entity, name.to_string())),
+        }
     }
 
     pub fn camera(&self) -> Option<Entity> {

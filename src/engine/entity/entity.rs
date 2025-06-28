@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::engine::{
     asset::asset::{AssetHandle, AssetPath},
     voxel::voxel_registry::VoxelModelId,
@@ -5,6 +7,22 @@ use crate::engine::{
 
 use super::ecs_world::Entity;
 
+#[derive(Clone)]
+pub struct GameEntity {
+    pub uuid: uuid::Uuid,
+    pub name: String,
+}
+
+impl GameEntity {
+    pub fn new(name: impl ToString) -> Self {
+        Self {
+            uuid: uuid::Uuid::new_v4(),
+            name: name.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct RenderableVoxelEntity {
     /// Nullable.
     voxel_model_id: VoxelModelId,
@@ -38,10 +56,18 @@ impl RenderableVoxelEntity {
     }
 }
 
-pub struct ScriptableEntity {
-    pub script: AssetHandle,
+#[derive(Clone, PartialEq, Eq)]
+pub struct EntityParent {
+    pub parent: Entity,
 }
 
-pub struct HasParent {
-    parent: Entity,
+impl EntityParent {
+    pub fn new(parent: Entity) -> Self {
+        Self { parent: parent }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct EntityChildren {
+    pub children: HashSet<Entity>,
 }

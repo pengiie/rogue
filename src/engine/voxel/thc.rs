@@ -32,8 +32,8 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,
     voxel::{
-        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
-        VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
+        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
 };
 
@@ -541,8 +541,15 @@ impl VoxelModelImpl for VoxelModelTHC {
                         leaf_mask,
                         attachment_data,
                     } => {
-                        *leaf_mask &= !(1 << dst_index);
-                        attachment_data.clear();
+                        let dst_bit = 1 << dst_index;
+                        *leaf_mask &= !dst_bit;
+                        for (attachment_mask, data) in attachment_data.values_mut() {
+                            if (*attachment_mask & dst_bit) > 0 {
+                                let data_offset = (*attachment_mask & (dst_bit - 1)).count_ones();
+                                *attachment_mask &= !dst_bit;
+                                data.remove(data_offset as usize);
+                            }
+                        }
                     }
                 }
             } else {
@@ -850,9 +857,12 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
                 let is_present = (curr_node.child_mask & (1 << child_index)) > 0;
                 if is_present {
                     let node_size = quarter_sl >> (curr_height * 2);
+                    curr_anchor =
+                        curr_anchor.zip_map(&curr_local_grid, |x, y| x + y as u32 * node_size);
                     let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
                         (x.floor() as u32).clamp(y, y + node_size - 1)
                     });
+
                     if curr_node.is_leaf_node() {
                         let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
                         let world_pos_hit = aabb.min + curr_ray.origin.component_mul(&t_scaling);
@@ -891,9 +901,7 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
         return None;
     }
 
-    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {
-        todo!();
-    }
+    fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {}
 
     fn schema(&self) -> super::voxel::VoxelModelSchema {
         consts::voxel::MODEL_THC_COMPRESSED_SCHEMA
@@ -1011,7 +1019,6 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
         }
 
         for (attachment, data) in model.attachment_lookup_data.iter() {
-            assert!(!data.is_empty());
             if !self.attachment_lookup_allocations.contains_key(&attachment) {
                 let lookup_data_allocation_size = data.len() as u64 * 12;
                 self.attachment_lookup_allocations.insert(
@@ -1025,7 +1032,6 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
         }
 
         for (attachment, data) in model.attachment_raw_data.iter() {
-            assert!(!data.is_empty());
             if !self.attachment_raw_allocations.contains_key(&attachment) {
                 let raw_data_allocation_size = data.len() as u64 * 4;
                 self.attachment_raw_allocations.insert(

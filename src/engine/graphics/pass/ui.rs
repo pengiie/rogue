@@ -56,6 +56,9 @@ pub struct UIPass {
     ui_textures: HashMap<egui::TextureId, (ResourceId<Image>, ResourceId<Sampler>)>,
     ui_samplers: HashMap<egui::TextureOptions, ResourceId<Sampler>>,
 
+    last_required_vertex_size: usize,
+    last_required_index_size: usize,
+
     ui_render_prims: Vec<UIRenderPrim>,
     pixels_per_egui_point: f32,
 }
@@ -132,6 +135,8 @@ impl UIPass {
         return Self {
             ui_textures: HashMap::new(),
             ui_samplers: HashMap::new(),
+            last_required_vertex_size: 0,
+            last_required_index_size: 0,
             ui_render_prims: Vec::new(),
             pixels_per_egui_point: 0.0,
         };
@@ -268,6 +273,15 @@ impl UIPass {
         // will have a n-sized tuple with the corresponding write pointers in the same order.
         let required_vertex_size = std::mem::size_of::<epaint::Vertex>() * total_vertex_count;
         let required_index_size = std::mem::size_of::<u32>() * total_index_count;
+        if required_vertex_size > ui_pass.last_required_vertex_size {
+            ui_pass.last_required_vertex_size = (required_vertex_size as f32 * 1.5) as usize;
+        }
+        if required_index_size > ui_pass.last_required_index_size {
+            ui_pass.last_required_index_size = (required_index_size as f32 * 1.5) as usize;
+        }
+        let required_vertex_size = ui_pass.last_required_vertex_size;
+        let required_index_size = ui_pass.last_required_index_size;
+
         let writeable_vertex_buffer = renderer
             .frame_graph_executor
             .write_buffer(

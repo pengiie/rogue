@@ -17,8 +17,9 @@ winit = "0.30.5"
 # Egui
 catppuccin-egui = { version = "5.5.0", default-features = false, features = ["egui31"] }
 egui = { version = "0.31.1", features = ["bytemuck"] }
-egui-winit = { version = "0.31.1", default-features = false, features = [] }
 egui_dock = "0.16"
+egui_plot = "0.32.1"
+egui-winit = { version = "0.31.1", default-features = false, features = [] }
 epaint = { version = "0.31.1", features = ["bytemuck"] }
 # Utility
 anyhow = { version = "1.0.89" }
@@ -42,7 +43,7 @@ uuid = { version = "1.15.1", features = [ "v4", "bytemuck" ]}
 nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
 noise = "0.9.0"
 # Scripting
-luajit = "0.1.1"
+mlua = { version = "0.10.5", features = ["lua54", "vendored"]}
 # Audio
 cpal = "0.15.3"
 # Gamepad

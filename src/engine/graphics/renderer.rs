@@ -454,16 +454,18 @@ impl Renderer {
                 );
 
                 if let Some(mut camera_query) = ecs_world.try_get_main_camera(&main_camera) {
-                    let (camera_transform, camera) = camera_query.get().unwrap();
+                    let (camera_local_transform, camera) = camera_query.get().unwrap();
+                    let camera_world_transform = ecs_world
+                        .get_world_transform(main_camera.camera().unwrap(), camera_local_transform);
 
                     let proj_view_matrix = camera.projection_matrix(backbuffer_aspect_ratio)
-                        * camera_transform.to_view_matrix();
+                        * camera_world_transform.to_view_matrix();
                     writer.write_uniform_mat4(
                         "u_frame.world_info.camera.proj_view",
                         &proj_view_matrix,
                     );
 
-                    let transformation_matrix = camera_transform.to_transformation_matrix();
+                    let transformation_matrix = camera_world_transform.to_transformation_matrix();
                     writer.write_uniform_mat4(
                         "u_frame.world_info.camera.transform",
                         &transformation_matrix,

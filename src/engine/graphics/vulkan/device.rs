@@ -417,8 +417,9 @@ impl VulkanDevice {
                 window.display_handle()?.as_raw(),
             )?);
             if enable_debug {
+                debug!("Pushing debug extensions");
                 enabled_extensions_ptrs.push(ash::ext::debug_utils::NAME.as_ptr());
-                enabled_extensions_ptrs.push(ash::ext::layer_settings::NAME.as_ptr());
+            //    enabled_extensions_ptrs.push(ash::ext::layer_settings::NAME.as_ptr());
             }
 
             let validation_layer_cstr = std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap();
@@ -1251,6 +1252,21 @@ impl VulkanAllocator {
         ))
     }
 
+    fn create_shared_memory(&mut self, allocation_size: u64, allocation_alignment: u64, memory_property_flags: ash::vk::MemoryPropertyFlags) -> anyhow::Result<VulkanMemoryIndex> {
+        let device_memory_size = Self::SHARED_MEMORY_CHUNK_SIZE;
+        let (device_memory, memory_type) =
+            self.allocate_device_memory(device_memory_size, memory_property_flags)?;
+        self.shared_memory.push(VulkanSharedMemory {
+            memory: device_memory,
+            memory_property_flags: memory_type.property_flags,
+            allocator: AllocatorTree::new_root(device_memory_size),
+            free_size_remaining: device_memory_size,
+            active_allocations: 0,
+        });
+
+        Ok(self.shared_memory.len() as VulkanMemoryIndex - 1)
+    }
+
     fn find_or_create_shared_memory(
         &mut self,
         allocation_size: u64,
@@ -1272,18 +1288,7 @@ impl VulkanAllocator {
             }
         }
 
-        let device_memory_size = Self::SHARED_MEMORY_CHUNK_SIZE;
-        let (device_memory, memory_type) =
-            self.allocate_device_memory(device_memory_size, memory_property_flags)?;
-        self.shared_memory.push(VulkanSharedMemory {
-            memory: device_memory,
-            memory_property_flags: memory_type.property_flags,
-            allocator: AllocatorTree::new_root(device_memory_size),
-            free_size_remaining: device_memory_size,
-            active_allocations: 0,
-        });
-
-        Ok(self.shared_memory.len() as VulkanMemoryIndex - 1)
+        return self.create_shared_memory(allocation_size, allocation_alignment, memory_property_flags);
     }
 
     // Since this is a power of 2 allocator, alignment happens automatically.
@@ -1319,19 +1324,35 @@ impl VulkanAllocator {
                     }
                     _ => unreachable!(),
                 };
-                let shared_memory_index = self.find_or_create_shared_memory(
+                let mut shared_memory_index = self.find_or_create_shared_memory(
                     size,
                     alignment as u64,
                     memory_property_flags,
                 )?;
-                let shared_memory = self
+                let mut shared_memory = self
                     .shared_memory
                     .get_mut(shared_memory_index as usize)
                     .unwrap();
-                let shared_memory_traversal = shared_memory
+                let shared_memory_traversal = match shared_memory
                     .allocator
-                    .allocate(size.next_power_of_two(), alignment)
-                    .unwrap();
+                    .allocate(size.next_power_of_two(), alignment) {
+                        Some(traversal) => traversal,
+                        None => {
+                            shared_memory_index = self.create_shared_memory(
+                                size,
+                                alignment as u64,
+                                memory_property_flags,
+                            )?;
+                            shared_memory = self
+                                .shared_memory
+                                .get_mut(shared_memory_index as usize)
+                                .unwrap();
+
+                            shared_memory
+                                .allocator
+                                .allocate(size.next_power_of_two(), alignment).unwrap()
+                        },
+                    };
                 shared_memory.active_allocations += 1;
                 shared_memory.free_size_remaining -= shared_memory_traversal.length_bytes();
 

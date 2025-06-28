@@ -310,6 +310,9 @@ impl VoxelChunks {
     }
 
     pub fn clear(&mut self) {
+        self.edited_regions.clear();
+        self.edited_chunks.clear();
+        self.renderable_chunks.clear();
         self.regions.clear();
         self.chunk_load_iter.reset();
     }
@@ -896,6 +899,12 @@ impl RenderableChunks {
             || local_chunk_pos.x >= self.side_length as i32
             || local_chunk_pos.y >= self.side_length as i32
             || local_chunk_pos.z >= self.side_length as i32)
+    }
+
+    pub fn clear(&mut self) {
+        self.to_update_chunk_normals.clear();
+        self.chunk_model_pointers.fill(VoxelModelId::null());
+        self.is_dirty = true;
     }
 
     pub fn try_load_chunk(

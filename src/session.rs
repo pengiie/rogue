@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     path::PathBuf,
+    str::FromStr,
     sync::mpsc::{Receiver, Sender},
     time::Duration,
 };
@@ -21,9 +22,13 @@ use crate::{
         editor::editor::Editor,
         entity::{
             ecs_world::{ECSWorld, Entity},
+            scripting::Scripts,
             RenderableVoxelEntity,
         },
+        graphics::camera::{Camera, MainCamera},
+        physics::transform::Transform,
         resource::{Res, ResMut},
+        ui::UI,
         voxel::{
             flat::VoxelModelFlat,
             thc::VoxelModelTHCCompressed,
@@ -34,6 +39,13 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SessionState {
+    Editor,
+    Game,
+    GamePaused,
+}
+
 #[derive(Resource)]
 pub struct Session {
     pub editor_settings: EditorSettingsAsset,
@@ -43,6 +55,11 @@ pub struct Session {
     pub project_save_dir: Option<PathBuf>,
     pub terrain_dir: Option<PathBuf>,
     pub game_camera: Option<Entity>,
+
+    pub session_state: SessionState,
+    pub editor_ecs_world: Option<ECSWorld>,
+    pub should_start_game: bool,
+    pub should_stop_game: bool,
 
     pub loading_renderables: HashMap<Entity, AssetHandle>,
 }
@@ -62,22 +79,40 @@ impl Session {
             }
         }
 
+        let mut load_error = None;
         let project = editor_settings
             .last_project_dir
             .as_ref()
             .map(|last_project_dir| {
-                Assets::load_asset_sync::<EditorProjectAsset>(AssetPath::new(
+                let res = Assets::load_asset_sync::<EditorProjectAsset>(AssetPath::new(
                     last_project_dir.join("project.json"),
-                ))
-                .ok()
+                ));
+                if res.is_err() {
+                    load_error = Some(res.as_ref().err().unwrap().to_string());
+                }
+                res.ok()
             })
             .unwrap_or_else(|| None)
             .unwrap_or_else(|| EditorProjectAsset::new_empty());
 
-        let project_save_dir = editor_settings.last_project_dir.clone();
+        let project_save_dir = if let Some(load_error) = load_error {
+            log::error!(
+                "Failed to load previous project data at {:?}, error: {}",
+                editor_settings.last_project_dir.as_ref().unwrap(),
+                load_error
+            );
+            None
+        } else {
+            editor_settings.last_project_dir.clone()
+        };
+
         Self {
             editor_settings,
             project,
+            session_state: SessionState::Editor,
+            editor_ecs_world: None,
+            should_start_game: false,
+            should_stop_game: false,
 
             project_save_dir,
             terrain_dir: None,
@@ -96,27 +131,82 @@ impl Session {
         mut session: ResMut<Session>,
         mut ecs_world: ResMut<ECSWorld>,
         mut assets: ResMut<Assets>,
+        mut scripts: ResMut<Scripts>,
     ) {
         let session: &mut Session = &mut session;
+        let mut uuid_map = HashMap::new();
+        let mut to_add_children = Vec::new();
         for entity in &session.project.game_entities {
+            if entity.parent.is_some() {
+                to_add_children.push(entity);
+                continue;
+            }
             let entity_id = entity.spawn(
                 session.project_save_dir.clone().unwrap(),
                 &mut ecs_world,
                 &mut assets,
                 &mut session.loading_renderables,
+                &mut scripts,
             );
+            uuid_map.insert(uuid::Uuid::from_str(&entity.uuid).unwrap(), entity_id);
             if Some(&entity.uuid) == session.project.game_camera.as_ref() {
                 session.game_camera = Some(entity_id);
             }
         }
+
+        while !to_add_children.is_empty() {
+            to_add_children = to_add_children
+                .into_iter()
+                .filter(|entity| {
+                    let Some(parent) = uuid_map
+                        .get(&uuid::Uuid::from_str(entity.parent.as_ref().unwrap()).unwrap())
+                    else {
+                        return true;
+                    };
+                    let entity_id = entity.spawn(
+                        session.project_save_dir.clone().unwrap(),
+                        &mut ecs_world,
+                        &mut assets,
+                        &mut session.loading_renderables,
+                        &mut scripts,
+                    );
+                    ecs_world.set_parent(entity_id, *parent);
+                    uuid_map.insert(uuid::Uuid::from_str(&entity.uuid).unwrap(), entity_id);
+                    if Some(&entity.uuid) == session.project.game_camera.as_ref() {
+                        session.game_camera = Some(entity_id);
+                    }
+                    return false;
+                })
+                .collect::<Vec<_>>();
+        }
+    }
+
+    pub fn can_start_game(&self) -> bool {
+        self.game_camera.is_some()
+    }
+
+    pub fn start_game(&mut self) {
+        assert_eq!(self.session_state, SessionState::Editor);
+        if !self.can_start_game() {
+            return;
+        }
+        self.should_start_game = true;
+    }
+
+    pub fn stop_game(&mut self) {
+        assert_ne!(self.session_state, SessionState::Editor);
+        self.should_stop_game = true;
     }
 
     pub fn update(
         mut session: ResMut<Session>,
         mut assets: ResMut<Assets>,
         mut voxel_world: ResMut<VoxelWorld>,
-        ecs_world: Res<ECSWorld>,
-        editor: Res<Editor>,
+        mut main_camera: ResMut<MainCamera>,
+        mut ecs_world: ResMut<ECSWorld>,
+        mut editor: ResMut<Editor>,
+        mut scripts: ResMut<Scripts>,
+        mut ui: ResMut<UI>,
     ) {
         let session: &mut Session = &mut session;
 
@@ -162,6 +252,36 @@ impl Session {
         }
         for e in completed {
             session.loading_renderables.remove(&e);
+        }
+
+        if session.should_start_game {
+            // Start the game.
+            session.should_start_game = false;
+            session.session_state = SessionState::Game;
+            main_camera.set_camera(session.game_camera.as_ref().unwrap().clone(), "game_camera");
+            session.editor_ecs_world = Some(ecs_world.clone_game_entities());
+            scripts.run_setup(&mut ecs_world, &assets, &mut ui);
+        }
+
+        if session.should_stop_game {
+            session.should_stop_game = false;
+            session.session_state = SessionState::Editor;
+            let (editor_camera, editor_transform) = ecs_world
+                .query_one_mut::<(&Camera, &Transform)>(editor.editor_camera_entity.unwrap())
+                .unwrap();
+            let editor_camera = editor_camera.clone();
+            let editor_transform = editor_transform.clone();
+            // Reset the ECS world to the old state with just game entities and the editor camera.
+            *ecs_world = session.editor_ecs_world.take().unwrap();
+            editor.editor_camera_entity = Some(ecs_world.spawn((editor_camera, editor_transform)));
+            main_camera.set_camera(
+                editor
+                    .editor_camera_entity
+                    .expect("Editor camera should exist"),
+                "Editor camera",
+            );
+            log::info!("Stopping game");
+            // We must respawn the editor camera.
         }
 
         if session.autosave_timer.try_complete() {

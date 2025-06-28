@@ -21,16 +21,19 @@ impl Attachment {
     pub const PTMATERIAL_ID: AttachmentId = 0;
     pub const NORMAL_ID: AttachmentId = 1;
     pub const EMMISIVE_ID: AttachmentId = 2;
-    pub const MAX_ATTACHMENT_ID: AttachmentId = 2;
+    pub const BMAT_ID: AttachmentId = 3;
+    pub const MAX_ATTACHMENT_ID: AttachmentId = 3;
 
     pub const PTMATERIAL: Attachment =
         Attachment::new(Attachment::PTMATERIAL_ID, "pathtracing_material", 1);
     pub const NORMAL: Attachment = Attachment::new(Attachment::NORMAL_ID, "normal", 1);
     pub const EMMISIVE: Attachment = Attachment::new(Attachment::EMMISIVE_ID, "emmisive", 1);
+    pub const BMAT: Attachment = Attachment::new(Attachment::BMAT_ID, "builtin_material", 1);
 
     pub fn from_id(id: AttachmentId) -> Self {
         match id {
             Self::PTMATERIAL_ID => Self::PTMATERIAL,
+            Self::BMAT_ID => Self::BMAT,
             _ => panic!("Can't find attachment for id {}.", id),
         }
     }
@@ -85,6 +88,18 @@ impl Attachment {
         let z = ((normal & 0xFF) as f32 / 255.0) * 2.0 - 1.0;
 
         Vector3::new(x, y, z)
+    }
+}
+
+pub struct CBMaterial(u32);
+
+impl CBMaterial {
+    pub fn new(material_id: u16) -> Self {
+        Self(material_id as u32)
+    }
+
+    pub fn encode(&self) -> u32 {
+        self.0
     }
 }
 
@@ -238,6 +253,10 @@ impl<T> AttachmentMap<T> {
 
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.map.iter().filter_map(|a| a.as_ref())
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.map.iter_mut().filter_map(|a| a.as_mut())
     }
 }
 

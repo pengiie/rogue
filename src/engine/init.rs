@@ -7,6 +7,7 @@ use super::asset::asset::AssetPath;
 use super::asset::repr::settings::SettingsAsset;
 use super::debug::DebugRenderer;
 use super::editor::editor::Editor;
+use super::entity::scripting::Scripts;
 use super::graphics::camera::MainCamera;
 use super::{
     asset::asset::Assets,
@@ -23,6 +24,7 @@ pub fn init_pre_graphics(app: &mut App) {
     app.insert_resource(Assets::new());
     app.insert_resource(Events::new());
     app.insert_resource(Session::new());
+    app.insert_resource(Scripts::new());
 
     let settings = Settings::from(&match Assets::load_asset_sync::<SettingsAsset>(
         AssetPath::new_user_dir(consts::io::SETTINGS_FILE),
@@ -42,7 +44,7 @@ pub fn init_pre_graphics(app: &mut App) {
     app.insert_resource(Time::new());
     app.insert_resource(PhysicsWorld::new());
     app.insert_resource(Audio::new());
-    app.insert_resource(MainCamera::new());
+    app.insert_resource(MainCamera::new_empty());
 }
 
 /// The graphics `DeviceResource` has been inserted before this.

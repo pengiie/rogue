@@ -474,6 +474,8 @@ pub struct VulkanRenderPass<'a> {
 }
 
 impl GraphicsBackendRenderPass for VulkanRenderPass<'_> {
+    // TODO: Queue renderpass commands and uniform bindings beforehand since we are not allowed to
+    // do image transitions during a render pass.
     fn bind_uniforms(&mut self, writer_fn: &mut dyn FnMut(&mut ShaderWriter)) {
         self.uniforms_bound = true;
 
