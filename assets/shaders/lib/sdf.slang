@@ -4,6 +4,27 @@ public float sdf_sphere(float3 ray_origin, float3 sphere_pos, float radius) {
   return length(ray_origin - sphere_pos) - radius;
 }
 
+/// More like sdf_quad since it is contrained and not an infinite plane.
+public float sdf_plane(float3 ray_origin, float3 center, float3 normal, float2 size) {
+  let rd = ray_origin - center;
+  let p = (dot(rd, normal) / dot(normal, normal)) * normal;
+  let r = select(normal.z < 0.99, float3(0.0, 0.0, 1.0), float3(0.0, 1.0, 0.0));
+  let sx = cross(normal, r) * size.x;
+  let sz = cross(normal, normalize(sx)) * size.y;
+  let psx = clamp(dot(rd, sx) / dot(sx, sx), -1.0, 1.0);
+  let psz = clamp(dot(rd, sz) / dot(sz, sz), -1.0, 1.0);
+  let closest_point = center + psx * sx + psz * sz;
+  return distance(ray_origin, closest_point);
+}
+
+public float3 sdf_plane_normal(float3 ray_origin, float3 center, float3 normal) {
+  let rd = ray_origin - center;
+  if (dot(rd, normal) < 0.0) {
+    normal = -normal;
+  }
+  return normal;
+}
+
 public float sdf_ring(float3 ray_origin, float3 center, float3 normal, float2 stretch, float thickness) {
   let rd = ray_origin - center; 
   let p = (dot(rd, normal)) * normal;

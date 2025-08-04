@@ -12,7 +12,6 @@ pub mod device;
 pub mod frame_graph;
 pub mod gpu_allocator;
 pub mod pass;
-pub mod render_contants;
 pub mod renderer;
 //pub mod sampler;
 pub mod shader;

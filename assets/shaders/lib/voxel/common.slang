@@ -73,7 +73,9 @@ public struct Terrain {
       i += 1;
     }
 
-    return RayTerrainTest.hit(float3(i / 512.0), 100000.0);
+    // Return for chunk grid background
+    // return RayTerrainTest.hit(float3(i / 512.0), 100000.0);
+    return RayTerrainTest.miss();
   }
 }
 
@@ -161,9 +163,9 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr, matrix
   let info_data = u_frame.voxel.model_info_data;
   let model_schema = info_data.Load<uint>(voxel_model_ptr << 2);
   switch (model_schema) {
-    case consts::VOXEL_MODEL_SCHEMA_ESVO:
-      let esvo = ESVO(aabb, voxel_model_ptr);
-      return esvo.trace(ray);
+    //case consts::VOXEL_MODEL_SCHEMA_ESVO:
+    //  let esvo = ESVO(aabb, voxel_model_ptr);
+    //  return esvo.trace(ray);
     case consts::VOXEL_MODEL_SCHEMA_THC:
     case consts::VOXEL_MODEL_SCHEMA_THC_COMPRESSED:
       let thc = THC(voxel_model_ptr);
@@ -180,7 +182,7 @@ public struct Flat {
   uint voxel_model_ptr;
   uint3 side_length; 
                         
-  uint presence_data_ptr;
+  VoxelDataRange presence_data;
 
   public __init(uint in_voxel_model_ptr) {
     let info_data = u_frame.voxel.model_info_data;
@@ -191,7 +193,7 @@ public struct Flat {
       info_data.Load<uint>((voxel_model_ptr + 2) << 2),
       info_data.Load<uint>((voxel_model_ptr + 3) << 2)
     );
-    presence_data_ptr = info_data.Load<uint>((voxel_model_ptr + 4) << 2);
+    presence_data = VoxelDataRange(info_data.Load<uint>((voxel_model_ptr + 4) << 2));
   }
 
   public uint3 get_side_length() {
@@ -203,7 +205,7 @@ public struct Flat {
   }
 
   public bool voxel_exists(uint voxel_index) {
-      let presence_u32 = u_frame.voxel.model_voxel_data.Load<uint>((this.presence_data_ptr + (voxel_index / 32)) << 2);
+      let presence_u32 = this.presence_data.load(voxel_index / 32);
       let is_present = (presence_u32 & (1 << (voxel_index % 32))) > 0;
       return is_present;
   }
@@ -247,7 +249,7 @@ public struct Flat {
     return RayModelTest.miss();
   }
 
-  private Optional<Tuple<uint, uint>> load_attachment_ptrs(uint attachment_index) {
+  private Optional<Tuple<VoxelDataRange, VoxelDataRange>> load_attachment_ptrs(uint attachment_index) {
     let info_data = u_frame.voxel.model_info_data;
     let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 5 + attachment_index) << 2);
     if (attachment_presence_ptr == 0xFFFFFFFF) {
@@ -259,10 +261,12 @@ public struct Flat {
       return none;
     }
 
-    return makeTuple(attachment_presence_ptr, attachment_raw_ptr);
+    return makeTuple(
+        VoxelDataRange(attachment_presence_ptr), 
+        VoxelDataRange(attachment_raw_ptr));
   }
 
-  private Optional<uint> load_voxel_attachment(uint attachment_index, uint voxel_index) {
+  private Optional<VoxelDataRange> load_voxel_attachment(uint attachment_index, uint voxel_index) {
     let attachment_ptr_pair = load_attachment_ptrs(attachment_index);
     if (attachment_ptr_pair == none) {
       return none;
@@ -270,13 +274,13 @@ public struct Flat {
     let attachment_presence_ptr = attachment_ptr_pair.value._0;
     let attachment_raw_ptr = attachment_ptr_pair.value._1;
 
-    let attachment_mask = u_frame.voxel.model_voxel_data.Load<uint>((attachment_presence_ptr + (voxel_index / 32)) << 2);
+    let attachment_mask = attachment_presence_ptr.load(voxel_index / 32);
     let is_attachment_present = (attachment_mask & (1 << (voxel_index % 32))) > 0;
     if (!is_attachment_present) {
       return none;
     }
 
-    return attachment_raw_ptr + voxel_index;
+    return attachment_raw_ptr.with_offset(voxel_index);
   }
 
   private Optional<float3> load_ptmaterial(uint voxel_index) {
@@ -285,10 +289,7 @@ public struct Flat {
       return none;
     }
     let ptmaterial_data_ptr = ptmaterial_data_ptr_opt.value;
-    let compressed_ptmaterial = u_frame.voxel.model_voxel_data.Load<uint>(ptmaterial_data_ptr << 2);
-    if (testglobal) {
-      //printf("mat is %u\n", compressed_ptmaterial);
-    }
+    let compressed_ptmaterial = ptmaterial_data_ptr.load(0);
 
     return color::srgb_to_lsrgb(float3(
       (float) ((compressed_ptmaterial >> 16) & 0xFF) / 255.0,
@@ -304,8 +305,8 @@ public struct Flat {
     if (normal_data_ptrs == none) {
       return none;
     }
-    let normal_data_ptr = normal_data_ptrs.value._1 + voxel_index;
-    let compressed_normal = u_frame.voxel.model_voxel_data.Load<uint>(normal_data_ptr << 2);
+    let normal_data_ptr = normal_data_ptrs.value._1.with_offset(voxel_index);
+    let compressed_normal = normal_data_ptr.load(0);
 
     return float3(
       ((float) ((compressed_normal >> 16) & 0xFF) / 255.0) * 2.0 - 1.0,
@@ -325,206 +326,206 @@ public struct Flat {
     let compressed_normal = (((uint) floor((normal.x * 0.5 + 0.5) * 255.0)) << 16) |
                             (((uint) floor((normal.y * 0.5 + 0.5) * 255.0)) << 8) |
                             (uint) floor((normal.z * 0.5 + 0.5) * 255.0);
-
-    u_frame.voxel.rw_model_voxel_data.Store<uint>((data_ptr + voxel_index) << 2, compressed_normal);
+    data_ptr.store(voxel_index, compressed_normal);
   }
 }
 
-struct ESVOStackItem {
-  uint node_index; 
-  uint octant;
-}
-
-public struct ESVO {
-  AABB root_aabb;
-  uint voxel_model_ptr;
-  uint node_data_ptr;
-
-  public __init(AABB in_aabb, uint in_voxel_model_ptr) {
-    let info_data = u_frame.voxel.model_info_data;
-
-    root_aabb = in_aabb;
-    voxel_model_ptr = in_voxel_model_ptr;
-    node_data_ptr = info_data.Load<uint>((voxel_model_ptr + 1) << 2);
-  }
-
-  private static uint next_octant_morton(Ray ray, float3 octant_center, float t_enter) {
-    let t_center = ray_point_test(ray, octant_center);
-
-    var octant = 0u;
-    if (t_center.x <= t_enter) {
-      if (ray.dir.x >= 0.0) {
-        octant |= 1u;
-      }
-    } else {
-      if (ray.dir.x < 0.0) {
-        octant |= 1u;
-      }
-    }
-
-    if (t_center.y <= t_enter) {
-      if (ray.dir.y >= 0.0) {
-        octant |= 2u;
-      }
-    } else {
-      if (ray.dir.y < 0.0) {
-        octant |= 2u;
-      }
-    }
-
-    if (t_center.z <= t_enter) {
-      if (ray.dir.z >= 0.0) {
-        octant |= 4u;
-      }
-    } else {
-      if (ray.dir.z < 0.0) {
-        octant |= 4u;
-      }
-    }
-
-    return octant;
-  }
-
-  private static AABB next_octant_aabb(AABB parent_aabb, uint octant_morton) {
-    let signs = float3(
-      ((float) (octant_morton & 1)) * 2.0 - 1.0,
-      ((float) (octant_morton & 2)) - 1.0,
-      ((float) (octant_morton & 4)) * 0.5 - 1.0,
-    );
-    let octant_half_side_length = parent_aabb.half_side_length * 0.5;
-    return AABB.new_center_extents(parent_aabb.center + octant_half_side_length * signs,
-                                   octant_half_side_length);
-  }
-
-  private static AABB next_octant_parent_aabb(AABB octant_aabb, uint octant_morton) {
-    let signs = float3(
-      ((float) (octant_morton & 1)) * -2.0 + 1.0,
-      ((float) (octant_morton & 2)) * -1.0 + 1.0,
-      ((float) (octant_morton & 4)) * -0.5 + 1.0,
-    );
-    let parent_half_side_length = octant_aabb.half_side_length * 2;
-    return AABB.new_center_extents(octant_aabb.center + octant_aabb.half_side_length * signs,
-                                   parent_half_side_length);
-  }
-
-  private static bool should_pop(Ray ray, uint octant_morton, uint advance_morton) {
-    if (ray.dir.x < 0 && ((advance_morton & 1) > (octant_morton & 1))) {
-      return (true);
-    }
-    if (ray.dir.y < 0 && ((advance_morton & 2) > (octant_morton & 2))) {
-      return true;
-    }
-    if (ray.dir.z < 0 && ((advance_morton & 4) > (octant_morton & 4))) {
-      return true;
-    }
-
-    if (ray.dir.x > 0 && ((advance_morton & 1) < (octant_morton & 1))) {
-      return true;
-    }
-    if (ray.dir.y > 0 && ((advance_morton & 2) < (octant_morton & 2))) {
-      return true;
-    }
-    if (ray.dir.z > 0 && ((advance_morton & 4) < (octant_morton & 4))) {
-      return true;
-    }
-
-    return false;
-  }
-
-  public RayModelTest trace(Ray ray) {
-    let root_hit_info = ray_aabb_test(ray, this.root_aabb);
- 
-                        
-    var curr_octant = ESVO.next_octant_morton(ray, this.root_aabb.center, root_hit_info.t_enter);
-    var curr_aabb = ESVO.next_octant_aabb(this.root_aabb, curr_octant);
-    var curr_node_index = 1u; // 0u is our page header.
-    var curr_node_data = this.load_node(curr_node_index);
-    var curr_height = 0;
-    var should_push = true;
-    ESVOStackItem stack[8];
-
-    for (uint i = 0; i < 1028; i++) {
-      if (curr_height >= 8) {
-        // Break early so we don't overwrite the bounds of our stack.
-        return RayModelTest.hit(float3(1.0, 0.0, 0.0), 1.0);
-      }
-      let octant_hit_info = ray_aabb_test(ray, curr_aabb);
-
-      let value_mask = (curr_node_data >> 8) & 0xFF;
-      let is_octant_present = (value_mask & (0x1u << curr_octant)) > 0;
-      if (should_push && is_octant_present) {
-        let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
-        if (is_leaf) { 
-                        
-          let depth_t = octant_hit_info.t_enter;
-          // More vibrant.
-          return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 12.0) / 1028.0, log((i * 16.0) / 1028.0), (i * 8.0) / 1028.0)), depth_t);
-          //return RayModelTest.hit(float3(i / 1028.0), depth_t);
-        }
-
-        let children_offset = curr_node_data >> 17;
-        let child_offset = countbits(((1 << curr_octant) - 1) & value_mask);
-
-        stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
-
-        curr_octant = ESVO.next_octant_morton(ray, curr_aabb.center, octant_hit_info.t_enter);
-        curr_aabb = ESVO.next_octant_aabb(curr_aabb, curr_octant);
-        curr_node_index = curr_node_index + children_offset + child_offset;
-        curr_node_data = this.load_node(curr_node_index);
-        curr_height += 1;
-
-        continue;
-      }
-
-      let exit_axis: bool3 = octant_hit_info.t_exit == octant_hit_info.t_max;
-      let exit_morton = (uint) exit_axis.x | (((uint) exit_axis.y) << 1)
-                                           | (((uint) exit_axis.z) << 2);
-      let advance_morton = curr_octant ^ exit_morton;
-      should_push = !ESVO.should_pop(ray, curr_octant, advance_morton);
-      if (!should_push) {
-        if (curr_height == 0) {
-          break;
-        }
-
-        curr_height -= 1;
-        let item = stack[curr_height];
-
-        curr_aabb = ESVO.next_octant_parent_aabb(curr_aabb, curr_octant);
-        curr_octant = item.octant;
-        curr_node_index = item.node_index;
-        curr_node_data = this.load_node(curr_node_index);
-      } else {
-        let advance_sign = (float3) exit_axis * sign(ray.dir);
-        curr_aabb.center = curr_aabb.center + curr_aabb.side_length() * advance_sign;
-        curr_octant = advance_morton;
-      }
-    }
-
-    var color = float3(0.0);
-    if ((curr_octant & 1) > 0) {
-      color.r = 1.0;
-    }
-    if ((curr_octant & 2) > 0) {
-      color.g = 1.0;
-    }
-    if ((curr_octant & 4) > 0) {
-      color.b = 1.0;
-    }
-
-    return RayModelTest.miss();
-  }
-
-  private uint load_node(uint node_index) {
-    return u_frame.voxel.model_voxel_data.Load<uint>(
-      (this.node_data_ptr + node_index) << 2
-    );
-  }
-}
+// struct ESVOStackItem {
+//   uint node_index; 
+//   uint octant;
+// }
+// 
+// public struct ESVO {
+//   AABB root_aabb;
+//   uint voxel_model_ptr;
+//   uint node_data_ptr;
+// 
+//   public __init(AABB in_aabb, uint in_voxel_model_ptr) {
+//     let info_data = u_frame.voxel.model_info_data;
+// 
+//     root_aabb = in_aabb;
+//     voxel_model_ptr = in_voxel_model_ptr;
+//     node_data_ptr = info_data.Load<uint>((voxel_model_ptr + 1) << 2);
+//   }
+// 
+//   private static uint next_octant_morton(Ray ray, float3 octant_center, float t_enter) {
+//     let t_center = ray_point_test(ray, octant_center);
+// 
+//     var octant = 0u;
+//     if (t_center.x <= t_enter) {
+//       if (ray.dir.x >= 0.0) {
+//         octant |= 1u;
+//       }
+//     } else {
+//       if (ray.dir.x < 0.0) {
+//         octant |= 1u;
+//       }
+//     }
+// 
+//     if (t_center.y <= t_enter) {
+//       if (ray.dir.y >= 0.0) {
+//         octant |= 2u;
+//       }
+//     } else {
+//       if (ray.dir.y < 0.0) {
+//         octant |= 2u;
+//       }
+//     }
+// 
+//     if (t_center.z <= t_enter) {
+//       if (ray.dir.z >= 0.0) {
+//         octant |= 4u;
+//       }
+//     } else {
+//       if (ray.dir.z < 0.0) {
+//         octant |= 4u;
+//       }
+//     }
+// 
+//     return octant;
+//   }
+// 
+//   private static AABB next_octant_aabb(AABB parent_aabb, uint octant_morton) {
+//     let signs = float3(
+//       ((float) (octant_morton & 1)) * 2.0 - 1.0,
+//       ((float) (octant_morton & 2)) - 1.0,
+//       ((float) (octant_morton & 4)) * 0.5 - 1.0,
+//     );
+//     let octant_half_side_length = parent_aabb.half_side_length * 0.5;
+//     return AABB.new_center_extents(parent_aabb.center + octant_half_side_length * signs,
+//                                    octant_half_side_length);
+//   }
+// 
+//   private static AABB next_octant_parent_aabb(AABB octant_aabb, uint octant_morton) {
+//     let signs = float3(
+//       ((float) (octant_morton & 1)) * -2.0 + 1.0,
+//       ((float) (octant_morton & 2)) * -1.0 + 1.0,
+//       ((float) (octant_morton & 4)) * -0.5 + 1.0,
+//     );
+//     let parent_half_side_length = octant_aabb.half_side_length * 2;
+//     return AABB.new_center_extents(octant_aabb.center + octant_aabb.half_side_length * signs,
+//                                    parent_half_side_length);
+//   }
+// 
+//   private static bool should_pop(Ray ray, uint octant_morton, uint advance_morton) {
+//     if (ray.dir.x < 0 && ((advance_morton & 1) > (octant_morton & 1))) {
+//       return (true);
+//     }
+//     if (ray.dir.y < 0 && ((advance_morton & 2) > (octant_morton & 2))) {
+//       return true;
+//     }
+//     if (ray.dir.z < 0 && ((advance_morton & 4) > (octant_morton & 4))) {
+//       return true;
+//     }
+// 
+//     if (ray.dir.x > 0 && ((advance_morton & 1) < (octant_morton & 1))) {
+//       return true;
+//     }
+//     if (ray.dir.y > 0 && ((advance_morton & 2) < (octant_morton & 2))) {
+//       return true;
+//     }
+//     if (ray.dir.z > 0 && ((advance_morton & 4) < (octant_morton & 4))) {
+//       return true;
+//     }
+// 
+//     return false;
+//   }
+// 
+//   public RayModelTest trace(Ray ray) {
+//     let root_hit_info = ray_aabb_test(ray, this.root_aabb);
+//  
+//                         
+//     var curr_octant = ESVO.next_octant_morton(ray, this.root_aabb.center, root_hit_info.t_enter);
+//     var curr_aabb = ESVO.next_octant_aabb(this.root_aabb, curr_octant);
+//     var curr_node_index = 1u; // 0u is our page header.
+//     var curr_node_data = this.load_node(curr_node_index);
+//     var curr_height = 0;
+//     var should_push = true;
+//     ESVOStackItem stack[8];
+// 
+//     for (uint i = 0; i < 1028; i++) {
+//       if (curr_height >= 8) {
+//         // Break early so we don't overwrite the bounds of our stack.
+//         return RayModelTest.hit(float3(1.0, 0.0, 0.0), 1.0);
+//       }
+//       let octant_hit_info = ray_aabb_test(ray, curr_aabb);
+// 
+//       let value_mask = (curr_node_data >> 8) & 0xFF;
+//       let is_octant_present = (value_mask & (0x1u << curr_octant)) > 0;
+//       if (should_push && is_octant_present) {
+//         let is_leaf = (curr_node_data & (0x1u << curr_octant)) > 0;
+//         if (is_leaf) { 
+//                         
+//           let depth_t = octant_hit_info.t_enter;
+//           // More vibrant.
+//           return RayModelTest.hit(color::srgb_to_lsrgb(float3((i * 12.0) / 1028.0, log((i * 16.0) / 1028.0), (i * 8.0) / 1028.0)), depth_t);
+//           //return RayModelTest.hit(float3(i / 1028.0), depth_t);
+//         }
+// 
+//         let children_offset = curr_node_data >> 17;
+//         let child_offset = countbits(((1 << curr_octant) - 1) & value_mask);
+// 
+//         stack[curr_height] = ESVOStackItem(curr_node_index, curr_octant);
+// 
+//         curr_octant = ESVO.next_octant_morton(ray, curr_aabb.center, octant_hit_info.t_enter);
+//         curr_aabb = ESVO.next_octant_aabb(curr_aabb, curr_octant);
+//         curr_node_index = curr_node_index + children_offset + child_offset;
+//         curr_node_data = this.load_node(curr_node_index);
+//         curr_height += 1;
+// 
+//         continue;
+//       }
+// 
+//       let exit_axis: bool3 = octant_hit_info.t_exit == octant_hit_info.t_max;
+//       let exit_morton = (uint) exit_axis.x | (((uint) exit_axis.y) << 1)
+//                                            | (((uint) exit_axis.z) << 2);
+//       let advance_morton = curr_octant ^ exit_morton;
+//       should_push = !ESVO.should_pop(ray, curr_octant, advance_morton);
+//       if (!should_push) {
+//         if (curr_height == 0) {
+//           break;
+//         }
+// 
+//         curr_height -= 1;
+//         let item = stack[curr_height];
+// 
+//         curr_aabb = ESVO.next_octant_parent_aabb(curr_aabb, curr_octant);
+//         curr_octant = item.octant;
+//         curr_node_index = item.node_index;
+//         curr_node_data = this.load_node(curr_node_index);
+//       } else {
+//         let advance_sign = (float3) exit_axis * sign(ray.dir);
+//         curr_aabb.center = curr_aabb.center + curr_aabb.side_length() * advance_sign;
+//         curr_octant = advance_morton;
+//       }
+//     }
+// 
+//     var color = float3(0.0);
+//     if ((curr_octant & 1) > 0) {
+//       color.r = 1.0;
+//     }
+//     if ((curr_octant & 2) > 0) {
+//       color.g = 1.0;
+//     }
+//     if ((curr_octant & 4) > 0) {
+//       color.b = 1.0;
+//     }
+// 
+//     return RayModelTest.miss();
+//   }
+// 
+//   private uint load_node(uint node_index) {
+//     return u_frame.voxel.model_voxel_data.Load<uint>(
+//       (this.node_data_ptr + node_index) << 2
+//     );
+//   }
+// }
 
 public static bool testglobal = false;
 
 public struct THC {
-  uint voxel_model_ptr;
+  // Pointer to the voxel_model_info region.
+  uint voxel_model_ptr; 
   // Side length in voxels.
   uint side_length;
   uint quarter_side_length;
@@ -533,7 +534,7 @@ public struct THC {
   // height of 2 but this height represents the jumps of nodes
   // we must traverse before we reach the pre-leaf nodes.
   uint height;
-  uint node_data_ptr;
+  VoxelDataRange node_data_ptr;
 
   public __init(uint in_voxel_model_ptr) {
     let info_data = u_frame.voxel.model_info_data;
@@ -543,7 +544,7 @@ public struct THC {
     quarter_side_length = side_length >> 2;
     // `firstbitlow()` is equivalent to rust `u32::trailing_zeros()`.
     height = (firstbitlow(side_length) / 2) - 1;
-    node_data_ptr = info_data.Load<uint>((voxel_model_ptr + 2) << 2);
+    node_data_ptr = VoxelDataRange(info_data.Load<uint>((voxel_model_ptr + 2) << 2));
   }
 
   public bool in_bounds(int3 global_grid) {
@@ -725,12 +726,10 @@ public struct THC {
   }
 
   private uint load_node(uint node_index) {
-    return u_frame.voxel.model_voxel_data.Load<uint>(
-      (this.node_data_ptr + node_index) << 2
-    );
+    return this.node_data_ptr.load(node_index);
   }
 
-  private Optional<Tuple<uint, uint>> load_attachment_ptrs(uint attachment_index) {
+  private Optional<Tuple<VoxelDataRange, VoxelDataRange>> load_attachment_ptrs(uint attachment_index) {
     let info_data = u_frame.voxel.model_info_data;
     let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 3 + attachment_index) << 2);
     if (attachment_presence_ptr == 0xFFFFFFFF) {
@@ -744,10 +743,12 @@ public struct THC {
       return none;
     }
 
-    return makeTuple(attachment_presence_ptr, attachment_raw_ptr);
+    return makeTuple(
+        VoxelDataRange(attachment_presence_ptr), 
+        VoxelDataRange(attachment_raw_ptr));
   }
 
-  private Optional<uint> load_voxel_attachment(uint attachment_index, THCVoxelAddr voxel_addr) {
+  private Optional<VoxelDataRange> load_voxel_attachment(uint attachment_index, THCVoxelAddr voxel_addr) {
     let attachment_ptr_pair = load_attachment_ptrs(attachment_index);
     if (attachment_ptr_pair == none) {
       return none;
@@ -770,36 +771,36 @@ public struct THC {
       load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index);
     var child_offset = countbits(attachment_mask[voxel_addr.morton_half] & (voxel_addr.child_bit - 1));
     child_offset += voxel_addr.morton_half == 0 ? 0 : countbits(attachment_mask[0]);
-    return attachment_raw_ptr + node_attachment_data_ptr + child_offset;
+    return attachment_raw_ptr.with_offset(node_attachment_data_ptr + child_offset);
   }
 
-  private uint load_voxel_attachment_offset_unchecked(uint presence_attachment_index, 
+  private VoxelDataRange load_voxel_attachment_data(uint presence_attachment_index, 
                                                       uint data_attachment_index, 
                                                       THCVoxelAddr voxel_addr) {
     let info_data = u_frame.voxel.model_info_data;
-    let attachment_presence_ptr = info_data.Load<uint>((this.voxel_model_ptr + 3 + presence_attachment_index) << 2);
-    let attachment_raw_ptr = info_data.Load<uint>(
-      (voxel_model_ptr + 3 + consts::VOXEL_ATTACHMENT_COUNT + data_attachment_index) << 2
-    );
+    let attachment_presence_data = VoxelDataRange(info_data.Load<uint>((
+        this.voxel_model_ptr + 3 + presence_attachment_index) << 2));
+    let attachment_raw_data = VoxelDataRange(info_data.Load<uint>(
+        (voxel_model_ptr + 3 + consts::VOXEL_ATTACHMENT_COUNT + data_attachment_index) << 2));
 
     uint attachment_mask[2] = {
-      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 1),
-      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index + 2)
+      load_attachment_lookup_node(attachment_presence_data, voxel_addr.node_index + 1),
+      load_attachment_lookup_node(attachment_presence_data, voxel_addr.node_index + 2)
     };
 
     // Offset into the raw attachment data where the current 
     // nodes children attachment data starts.
     let node_attachment_data_ptr = 
-      load_attachment_lookup_node(attachment_presence_ptr, voxel_addr.node_index);
+      load_attachment_lookup_node(attachment_presence_data, voxel_addr.node_index);
     var child_offset = countbits(attachment_mask[voxel_addr.morton_half] & (voxel_addr.child_bit - 1));
     child_offset += voxel_addr.morton_half == 0 ? 0 : countbits(attachment_mask[0]);
-    return attachment_raw_ptr + node_attachment_data_ptr + child_offset;
+    return VoxelDataRange(
+        attachment_raw_data.buffer_index, 
+        attachment_raw_data.offset + node_attachment_data_ptr + child_offset);
   }
 
-  private uint load_attachment_lookup_node(uint attachment_lookup_ptr, uint node_index) {
-    return u_frame.voxel.model_voxel_data.Load<uint>(
-      (attachment_lookup_ptr + node_index) << 2
-    );
+  private uint load_attachment_lookup_node(VoxelDataRange attachment_lookup_data, uint node_index) {
+    return attachment_lookup_data.load(node_index);
   }
 
   private Optional<float3> load_ptmaterial(THCVoxelAddr voxel_addr) {
@@ -808,26 +809,26 @@ public struct THC {
       return none;
     }
     let ptmaterial_data_ptr = ptmaterial_data_ptr_opt.value;
-    let compressed_ptmaterial = u_frame.voxel.model_voxel_data.Load<uint>(ptmaterial_data_ptr << 2);
+    let compressed_ptmaterial = ptmaterial_data_ptr.load(0);
     return ptmaterial_decode(compressed_ptmaterial);
   }
 
   private Optional<float3> load_normal(THCVoxelAddr voxel_addr) {
-    let normal_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 1, voxel_addr);
-    let compressed_normal = u_frame.voxel.model_voxel_data.Load<uint>(normal_data_ptr << 2);
+    let normal_data = this.load_voxel_attachment_data(0, 1, voxel_addr);
+    let compressed_normal = normal_data.load(0);
     return normal_decode(compressed_normal);
   }
 
   public void set_normal(THCVoxelAddr voxel_addr, float3 normal) {
-    let normal_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 1, voxel_addr);
+    let normal_data = this.load_voxel_attachment_data(0, 1, voxel_addr);
     let compressed_normal = normal_encode(normal);
-    u_frame.voxel.rw_model_voxel_data.Store<uint>((normal_data_ptr) << 2, compressed_normal);
+    normal_data.store(0, compressed_normal);
   }
 
   public void set_ptmaterial(THCVoxelAddr voxel_addr, float3 color) {
-    let ptmaterial_data_ptr = this.load_voxel_attachment_offset_unchecked(0, 0, voxel_addr);
+    let ptmaterial_data = this.load_voxel_attachment_data(0, 0, voxel_addr);
     let compressed_ptmaterial = ptmaterial_encode(color);
-    u_frame.voxel.rw_model_voxel_data.Store<uint>((ptmaterial_data_ptr) << 2, compressed_ptmaterial);
+    ptmaterial_data.store(0, compressed_ptmaterial);
   }
 }
 

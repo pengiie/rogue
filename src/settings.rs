@@ -10,12 +10,9 @@ use nalgebra::{Vector2, Vector3};
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    common::set::{AttributeSet, AttributeSetImpl},
-    engine::{
-        asset::repr::settings::SettingsAsset,
-        graphics::{backend::GfxPresentMode, renderer::Antialiasing},
-    },
+use crate::engine::{
+    asset::repr::settings::SettingsAsset,
+    graphics::{backend::GfxPresentMode, renderer::Antialiasing},
 };
 
 /// Called/recieved whenever a graphics setting is changed.

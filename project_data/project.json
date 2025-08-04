@@ -2,15 +2,15 @@
   "editor_camera_transform": {
     "transform": {
       "position": [
-        0.21436788,
-        0.5786599,
-        4.2926025
+        1.7107449,
+        -0.890954,
+        19.837662
       ],
       "rotation": [
-        -0.0006667623,
-        -0.9985465,
-        -0.052372623,
-        0.012712618
+        0.0072823246,
+        -0.9682976,
+        0.24807003,
+        0.02842527
       ],
       "scale": [
         1.0,
@@ -27,15 +27,15 @@
     }
   },
   "rotation_anchor": [
-    0.10387825,
-    1.0351743,
-    -0.04601477
+    1.0350935,
+    -7.207059,
+    8.339663
   ],
-  "terrain_asset_path": null,
+  "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/terrain/physics_test",
   "game_camera": "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
   "game_entities": [
     {
-      "name": "new_entity",
+      "name": "ground_plane",
       "uuid": "b5e456b1-c69f-4637-9079-91e5eea112ae",
       "parent": null,
       "children": [],
@@ -44,7 +44,7 @@
           "Transform": {
             "position": [
               -0.23699921,
-              0.6345575,
+              -7.965456,
               -0.30953833
             ],
             "rotation": [
@@ -71,15 +71,15 @@
         {
           "Transform": {
             "position": [
-              0.73,
-              3.06,
-              -3.15
+              4.73,
+              6.0,
+              -8.55
             ],
             "rotation": [
-              0.1769227,
-              -0.04207194,
-              0.007569927,
-              0.983296
+              0.15102473,
+              -0.055179216,
+              0.008443591,
+              0.9869526
             ],
             "scale": [
               1.0,
@@ -91,6 +91,54 @@
         {
           "Camera": {
             "fov": 1.5707964
+          }
+        }
+      ]
+    },
+    {
+      "name": "player",
+      "uuid": "10857122-7467-4700-b661-d6c0d2d954e3",
+      "parent": null,
+      "children": [
+        "efc1972d-3265-4c87-86e6-9f806c84a522",
+        "7c5659dc-4740-4447-86de-1cadd45a4be9",
+        "b595d7f1-d402-4c03-ac20-247a464b6244",
+        "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
+        "31841ea3-b0bd-4e41-9ac9-16c291460915",
+        "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
+        "ef50abac-9c19-49e5-b1ec-66b28ba62aec"
+      ],
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              0.0,
+              7.450581e-9,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              -0.0043628486,
+              0.99998444
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        {
+          "ScriptableEntity": {
+            "script_asset_paths": [
+              "scripts::test::lua"
+            ]
+          }
+        },
+        {
+          "RigidBody": {
+            "mass": 35.0
           }
         }
       ]
@@ -289,49 +337,6 @@
         {
           "RenderableVoxelEntity": {
             "model_asset_path": "models::player::player_arm::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": "player",
-      "uuid": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "parent": null,
-      "children": [
-        "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
-        "31841ea3-b0bd-4e41-9ac9-16c291460915",
-        "efc1972d-3265-4c87-86e6-9f806c84a522",
-        "b595d7f1-d402-4c03-ac20-247a464b6244",
-        "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
-        "7c5659dc-4740-4447-86de-1cadd45a4be9",
-        "ef50abac-9c19-49e5-b1ec-66b28ba62aec"
-      ],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.0,
-              7.450581e-9,
-              0.0
-            ],
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              0.5,
-              0.5,
-              0.5
-            ]
-          }
-        },
-        {
-          "ScriptableEntity": {
-            "script_asset_paths": [
-              "scripts::test::lua"
-            ]
           }
         }
       ]

@@ -23,12 +23,12 @@ use crate::{
 
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
-    esvo::{VoxelModelESVO, VoxelModelESVONode},
     thc::VoxelModelTHCCompressed,
     voxel::{
         VoxelData, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
+    voxel_world::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -374,258 +374,258 @@ impl<'a> VoxelModelFlatVoxelAccessMut<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct FlatESVONode {
-    child_ptr: u32,
-    info: u32,
-}
-
-impl FlatESVONode {
-    pub fn zero() -> Self {
-        FlatESVONode {
-            child_ptr: u32::MAX,
-            info: 0,
-        }
-    }
-
-    pub fn into_esvo_node(&self, child_ptr: u32, far: bool) -> VoxelModelESVONode {
-        VoxelModelESVONode::encode_node(child_ptr, far, self.valid_mask(), self.leaf_mask())
-    }
-
-    pub fn empty() -> Self {
-        FlatESVONode {
-            child_ptr: u32::MAX,
-            info: 0x8000_0000,
-        }
-    }
-
-    pub fn set_empty(&mut self, empty: bool) {
-        if empty {
-            self.info |= 0x8000_0000;
-        } else {
-            self.info &= 0x7FFF_FFFF;
-        }
-    }
-
-    pub fn child_node_count(&self) -> u32 {
-        self.valid_mask().count_ones() - self.leaf_mask().count_ones()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        (self.info >> 31) > 0
-    }
-
-    pub fn set_leaf_mask(&mut self, leaf_mask: u32) {
-        self.info &= 0xFFFF_FF00;
-        self.info |= leaf_mask;
-    }
-
-    pub fn leaf_mask(&self) -> u32 {
-        self.info & 0xFF
-    }
-
-    pub fn valid_mask(&self) -> u32 {
-        (self.info >> 8) & 0xFF
-    }
-
-    pub fn node_mask(&self) -> u32 {
-        self.valid_mask() & !self.leaf_mask()
-    }
-
-    pub fn set_valid_mask(&mut self, valid_mask: u32) {
-        self.info &= 0xFFFF_00FF;
-        self.info |= valid_mask << 8;
-    }
-}
-
-impl From<VoxelModelFlat> for VoxelModelESVO {
-    fn from(flat: VoxelModelFlat) -> Self {
-        From::from(&flat)
-    }
-}
-
-impl From<&VoxelModelFlat> for VoxelModelESVO {
-    fn from(flat: &VoxelModelFlat) -> Self {
-        let length = flat
-            .side_length()
-            .map(|x| x.next_power_of_two())
-            .max()
-            .max(2);
-        let mut esvo = VoxelModelESVO::empty(length, true);
-        esvo.attachment_map = flat.attachment_map.clone();
-
-        // With just the root node being a height of 1, since log2(2) == 1.
-        let height = length.trailing_zeros() as usize;
-        let mut levels = (0..=height)
-            .map(|_| Vec::new())
-            .collect::<Vec<Vec<FlatESVONode>>>();
-        let mut node_list: Vec<FlatESVONode> = Vec::new();
-
-        for i in 0..esvo.volume() {
-            let pos = morton_decode(i as u64);
-
-            if flat.in_bounds(pos) {
-                let flat_voxel = flat.get_voxel(pos);
-
-                if flat_voxel.exists() {
-                    levels[height as usize].push(FlatESVONode::zero())
-                } else {
-                    levels[height as usize].push(FlatESVONode::empty())
-                }
-
-                // Try and pop a level if it is full recursively.
-                for h in (1..=height).rev() {
-                    if levels[h as usize].len() != 8 {
-                        break;
-                    }
-                    let mut child_mask = 0;
-                    let mut child_ptr = u32::MAX;
-                    for octant in 0..8usize {
-                        if levels[h][octant].is_empty() {
-                            continue;
-                        }
-                        child_mask |= 1 << octant;
-                        if h == height {
-                            continue;
-                        }
-                        if child_ptr == u32::MAX {
-                            child_ptr = node_list.len() as u32;
-                        }
-                        node_list.push(levels[h][octant].clone());
-                    }
-                    levels[h].clear();
-
-                    if child_mask == 0 {
-                        levels[h - 1].push(FlatESVONode::empty());
-                        continue;
-                    }
-                    //debug!("STACKING OUT LEVEL {}", h);
-
-                    // Since we are on the leaf layer, we don't have any nodes to push.
-                    let mut meta_node = FlatESVONode::zero();
-                    meta_node.set_valid_mask(child_mask);
-                    if h < height {
-                        meta_node.child_ptr = child_ptr;
-                    } else {
-                        meta_node.set_leaf_mask(child_mask);
-                    }
-                    //debug!("height: {}, pushed: {}", h, child_mask);
-                    levels[h - 1].push(meta_node);
-                }
-            }
-        }
-
-        node_list.push(levels[0][0].clone());
-
-        let mut to_process = Vec::new();
-        //debug!("ROOT node index is {}", node_list.len() - 1);
-        let root_node = node_list.last().unwrap();
-        to_process.push((root_node, 1, 0));
-
-        let mut attachment_info: HashMap<
-            AttachmentId,
-            (u32, u32), /* (attachment_mask, raw_attachment_ptr) */
-        > = HashMap::new();
-        while !to_process.is_empty() {
-            let (curr_flat_node, curr_esvo_node_index, traversal) = to_process.pop().unwrap();
-
-            // We can override the entire node data since we allocate the children right after.
-            let curr_esvo_node = esvo.get_node_mut(curr_esvo_node_index);
-            curr_esvo_node.0 = curr_flat_node.info & 0xFFFF;
-            //debug!(
-            //    "Addressing current esvo index {} with traversal {}",
-            //    curr_esvo_node_index, traversal
-            //);
-
-            let children_allocation_esvo_ptr = if curr_flat_node.child_ptr == u32::MAX {
-                0
-            } else {
-                let child_count = curr_flat_node.child_node_count();
-                assert!(
-                    child_count != 0,
-                    "Child count should not be 0 here, leaf count: {}",
-                    curr_flat_node.leaf_mask().count_ones()
-                );
-                esvo.allocate_node_children(curr_esvo_node_index, curr_flat_node.child_node_count())
-            };
-
-            attachment_info.clear();
-            for octant in 0..8 {
-                let octant_bit = 1 << octant;
-                if (curr_flat_node.valid_mask() & octant_bit) == 0 {
-                    continue;
-                }
-
-                let octant_traversal = (traversal << 3) | octant;
-                // Skip leaf voxels since we don't spawn nodes for them.
-                if (curr_flat_node.leaf_mask() & octant_bit) > 0 {
-                    // Parse as a child node, collect the attachment data from flat and translate
-                    // into esvo.
-                    let position = morton_decode(octant_traversal);
-                    assert!(flat.in_bounds(position));
-
-                    let flat_voxel = flat.get_voxel(position);
-                    for (attachment_id, attachment_data) in flat_voxel.get_attachment_data() {
-                        let (attachment_mask, attachment_ptr) = attachment_info
-                            .entry(attachment_id)
-                            .or_insert((0, u32::MAX));
-
-                        *attachment_mask |= octant_bit;
-                        if *attachment_ptr == u32::MAX {
-                            *attachment_ptr = esvo.allocate_raw_attachment_data(attachment_id, 8);
-                        }
-
-                        let attachment_offset =
-                            (*attachment_mask as u32 & (octant_bit - 1)).count_ones();
-                        let attachment = flat.attachment_map.get_unchecked(attachment_id);
-                        let child_attachment_ptr =
-                            *attachment_ptr + attachment_offset * attachment.size();
-                        let esvo_raw_attachment_range = child_attachment_ptr as usize
-                            ..(child_attachment_ptr + attachment.size()) as usize;
-                        esvo.attachment_raw_data.get_mut(&attachment_id).unwrap()
-                            [esvo_raw_attachment_range]
-                            .copy_from_slice(attachment_data);
-                    }
-                } else {
-                    // Parse as another esvo node.
-                    let child_offset =
-                        ((curr_flat_node.node_mask()) & (octant_bit - 1)).count_ones();
-                    let child_flat_node =
-                        &node_list[(curr_flat_node.child_ptr + child_offset) as usize];
-                    //debug!(
-                    //    "pushing child index base {}  with res {} {} {}",
-                    //    children_allocation_esvo_ptr,
-                    //    children_allocation_esvo_ptr + child_offset as u32,
-                    //    child_offset,
-                    //    curr_flat_node.node_mask()
-                    //);
-                    //debug!(
-                    //    "Current flat node child ptr is {}",
-                    //    curr_flat_node.child_ptr
-                    //);
-                    to_process.push((
-                        child_flat_node,
-                        children_allocation_esvo_ptr + child_offset as u32,
-                        octant_traversal,
-                    ));
-                }
-            }
-
-            for (attachment_id, (attachment_mask, attachment_ptr)) in &attachment_info {
-                let lookup_node =
-                    esvo.get_attachment_lookup_node_mut(*attachment_id, curr_esvo_node_index);
-                lookup_node.set_attachment_mask(*attachment_mask);
-                lookup_node.set_raw_index(*attachment_ptr);
-                let attachment = flat.attachment_map.get_unchecked(*attachment_id);
-                let used_raw_size = attachment_mask.count_ones() * attachment.size();
-                esvo.resize_raw_attachment_data(*attachment_id, attachment_ptr + used_raw_size);
-            }
-        }
-        //debug!("FLAT to ESVO finale: {:?}", esvo);
-
-        esvo
-    }
-}
+//#[derive(Clone, PartialEq, Eq)]
+//struct FlatESVONode {
+//    child_ptr: u32,
+//    info: u32,
+//}
+//
+//impl FlatESVONode {
+//    pub fn zero() -> Self {
+//        FlatESVONode {
+//            child_ptr: u32::MAX,
+//            info: 0,
+//        }
+//    }
+//
+//    pub fn into_esvo_node(&self, child_ptr: u32, far: bool) -> VoxelModelESVONode {
+//        VoxelModelESVONode::encode_node(child_ptr, far, self.valid_mask(), self.leaf_mask())
+//    }
+//
+//    pub fn empty() -> Self {
+//        FlatESVONode {
+//            child_ptr: u32::MAX,
+//            info: 0x8000_0000,
+//        }
+//    }
+//
+//    pub fn set_empty(&mut self, empty: bool) {
+//        if empty {
+//            self.info |= 0x8000_0000;
+//        } else {
+//            self.info &= 0x7FFF_FFFF;
+//        }
+//    }
+//
+//    pub fn child_node_count(&self) -> u32 {
+//        self.valid_mask().count_ones() - self.leaf_mask().count_ones()
+//    }
+//
+//    pub fn is_empty(&self) -> bool {
+//        (self.info >> 31) > 0
+//    }
+//
+//    pub fn set_leaf_mask(&mut self, leaf_mask: u32) {
+//        self.info &= 0xFFFF_FF00;
+//        self.info |= leaf_mask;
+//    }
+//
+//    pub fn leaf_mask(&self) -> u32 {
+//        self.info & 0xFF
+//    }
+//
+//    pub fn valid_mask(&self) -> u32 {
+//        (self.info >> 8) & 0xFF
+//    }
+//
+//    pub fn node_mask(&self) -> u32 {
+//        self.valid_mask() & !self.leaf_mask()
+//    }
+//
+//    pub fn set_valid_mask(&mut self, valid_mask: u32) {
+//        self.info &= 0xFFFF_00FF;
+//        self.info |= valid_mask << 8;
+//    }
+//}
+//
+//impl From<VoxelModelFlat> for VoxelModelESVO {
+//    fn from(flat: VoxelModelFlat) -> Self {
+//        From::from(&flat)
+//    }
+//}
+//
+//impl From<&VoxelModelFlat> for VoxelModelESVO {
+//    fn from(flat: &VoxelModelFlat) -> Self {
+//        let length = flat
+//            .side_length()
+//            .map(|x| x.next_power_of_two())
+//            .max()
+//            .max(2);
+//        let mut esvo = VoxelModelESVO::empty(length, true);
+//        esvo.attachment_map = flat.attachment_map.clone();
+//
+//        // With just the root node being a height of 1, since log2(2) == 1.
+//        let height = length.trailing_zeros() as usize;
+//        let mut levels = (0..=height)
+//            .map(|_| Vec::new())
+//            .collect::<Vec<Vec<FlatESVONode>>>();
+//        let mut node_list: Vec<FlatESVONode> = Vec::new();
+//
+//        for i in 0..esvo.volume() {
+//            let pos = morton_decode(i as u64);
+//
+//            if flat.in_bounds(pos) {
+//                let flat_voxel = flat.get_voxel(pos);
+//
+//                if flat_voxel.exists() {
+//                    levels[height as usize].push(FlatESVONode::zero())
+//                } else {
+//                    levels[height as usize].push(FlatESVONode::empty())
+//                }
+//
+//                // Try and pop a level if it is full recursively.
+//                for h in (1..=height).rev() {
+//                    if levels[h as usize].len() != 8 {
+//                        break;
+//                    }
+//                    let mut child_mask = 0;
+//                    let mut child_ptr = u32::MAX;
+//                    for octant in 0..8usize {
+//                        if levels[h][octant].is_empty() {
+//                            continue;
+//                        }
+//                        child_mask |= 1 << octant;
+//                        if h == height {
+//                            continue;
+//                        }
+//                        if child_ptr == u32::MAX {
+//                            child_ptr = node_list.len() as u32;
+//                        }
+//                        node_list.push(levels[h][octant].clone());
+//                    }
+//                    levels[h].clear();
+//
+//                    if child_mask == 0 {
+//                        levels[h - 1].push(FlatESVONode::empty());
+//                        continue;
+//                    }
+//                    //debug!("STACKING OUT LEVEL {}", h);
+//
+//                    // Since we are on the leaf layer, we don't have any nodes to push.
+//                    let mut meta_node = FlatESVONode::zero();
+//                    meta_node.set_valid_mask(child_mask);
+//                    if h < height {
+//                        meta_node.child_ptr = child_ptr;
+//                    } else {
+//                        meta_node.set_leaf_mask(child_mask);
+//                    }
+//                    //debug!("height: {}, pushed: {}", h, child_mask);
+//                    levels[h - 1].push(meta_node);
+//                }
+//            }
+//        }
+//
+//        node_list.push(levels[0][0].clone());
+//
+//        let mut to_process = Vec::new();
+//        //debug!("ROOT node index is {}", node_list.len() - 1);
+//        let root_node = node_list.last().unwrap();
+//        to_process.push((root_node, 1, 0));
+//
+//        let mut attachment_info: HashMap<
+//            AttachmentId,
+//            (u32, u32), /* (attachment_mask, raw_attachment_ptr) */
+//        > = HashMap::new();
+//        while !to_process.is_empty() {
+//            let (curr_flat_node, curr_esvo_node_index, traversal) = to_process.pop().unwrap();
+//
+//            // We can override the entire node data since we allocate the children right after.
+//            let curr_esvo_node = esvo.get_node_mut(curr_esvo_node_index);
+//            curr_esvo_node.0 = curr_flat_node.info & 0xFFFF;
+//            //debug!(
+//            //    "Addressing current esvo index {} with traversal {}",
+//            //    curr_esvo_node_index, traversal
+//            //);
+//
+//            let children_allocation_esvo_ptr = if curr_flat_node.child_ptr == u32::MAX {
+//                0
+//            } else {
+//                let child_count = curr_flat_node.child_node_count();
+//                assert!(
+//                    child_count != 0,
+//                    "Child count should not be 0 here, leaf count: {}",
+//                    curr_flat_node.leaf_mask().count_ones()
+//                );
+//                esvo.allocate_node_children(curr_esvo_node_index, curr_flat_node.child_node_count())
+//            };
+//
+//            attachment_info.clear();
+//            for octant in 0..8 {
+//                let octant_bit = 1 << octant;
+//                if (curr_flat_node.valid_mask() & octant_bit) == 0 {
+//                    continue;
+//                }
+//
+//                let octant_traversal = (traversal << 3) | octant;
+//                // Skip leaf voxels since we don't spawn nodes for them.
+//                if (curr_flat_node.leaf_mask() & octant_bit) > 0 {
+//                    // Parse as a child node, collect the attachment data from flat and translate
+//                    // into esvo.
+//                    let position = morton_decode(octant_traversal);
+//                    assert!(flat.in_bounds(position));
+//
+//                    let flat_voxel = flat.get_voxel(position);
+//                    for (attachment_id, attachment_data) in flat_voxel.get_attachment_data() {
+//                        let (attachment_mask, attachment_ptr) = attachment_info
+//                            .entry(attachment_id)
+//                            .or_insert((0, u32::MAX));
+//
+//                        *attachment_mask |= octant_bit;
+//                        if *attachment_ptr == u32::MAX {
+//                            *attachment_ptr = esvo.allocate_raw_attachment_data(attachment_id, 8);
+//                        }
+//
+//                        let attachment_offset =
+//                            (*attachment_mask as u32 & (octant_bit - 1)).count_ones();
+//                        let attachment = flat.attachment_map.get_unchecked(attachment_id);
+//                        let child_attachment_ptr =
+//                            *attachment_ptr + attachment_offset * attachment.size();
+//                        let esvo_raw_attachment_range = child_attachment_ptr as usize
+//                            ..(child_attachment_ptr + attachment.size()) as usize;
+//                        esvo.attachment_raw_data.get_mut(&attachment_id).unwrap()
+//                            [esvo_raw_attachment_range]
+//                            .copy_from_slice(attachment_data);
+//                    }
+//                } else {
+//                    // Parse as another esvo node.
+//                    let child_offset =
+//                        ((curr_flat_node.node_mask()) & (octant_bit - 1)).count_ones();
+//                    let child_flat_node =
+//                        &node_list[(curr_flat_node.child_ptr + child_offset) as usize];
+//                    //debug!(
+//                    //    "pushing child index base {}  with res {} {} {}",
+//                    //    children_allocation_esvo_ptr,
+//                    //    children_allocation_esvo_ptr + child_offset as u32,
+//                    //    child_offset,
+//                    //    curr_flat_node.node_mask()
+//                    //);
+//                    //debug!(
+//                    //    "Current flat node child ptr is {}",
+//                    //    curr_flat_node.child_ptr
+//                    //);
+//                    to_process.push((
+//                        child_flat_node,
+//                        children_allocation_esvo_ptr + child_offset as u32,
+//                        octant_traversal,
+//                    ));
+//                }
+//            }
+//
+//            for (attachment_id, (attachment_mask, attachment_ptr)) in &attachment_info {
+//                let lookup_node =
+//                    esvo.get_attachment_lookup_node_mut(*attachment_id, curr_esvo_node_index);
+//                lookup_node.set_attachment_mask(*attachment_mask);
+//                lookup_node.set_raw_index(*attachment_ptr);
+//                let attachment = flat.attachment_map.get_unchecked(*attachment_id);
+//                let used_raw_size = attachment_mask.count_ones() * attachment.size();
+//                esvo.resize_raw_attachment_data(*attachment_id, attachment_ptr + used_raw_size);
+//            }
+//        }
+//        //debug!("FLAT to ESVO finale: {:?}", esvo);
+//
+//        esvo
+//    }
+//}
 
 impl VoxelModelImplConcrete for VoxelModelFlat {
     type Gpu = VoxelModelFlatGpu;
@@ -727,9 +727,9 @@ impl VoxelModelImpl for VoxelModelFlat {
 
 pub struct VoxelModelFlatGpu {
     flat_length: Vector3<u32>,
-    voxel_presence_allocation: Option<Allocation>,
-    voxel_attachment_presence_allocations: HashMap<AttachmentId, Allocation>,
-    voxel_attachment_data_allocations: HashMap<AttachmentId, Allocation>,
+    voxel_presence_allocation: Option<VoxelDataAllocation>,
+    voxel_attachment_presence_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
+    voxel_attachment_data_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
 
     initialized_data: bool,
     update_tracker: u32,
@@ -777,8 +777,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 continue;
             }
 
-            attachment_presence_indices[*attachment as usize] =
-                allocation.start_index_stride_dword() as u32
+            attachment_presence_indices[*attachment as usize] = allocation.ptr_gpu();
         }
 
         let mut attachment_data_indices =
@@ -788,8 +787,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                 continue;
             }
 
-            attachment_data_indices[*attachment as usize] =
-                allocation.start_index_stride_dword() as u32;
+            attachment_data_indices[*attachment as usize] = allocation.ptr_gpu();
         }
 
         let mut info = vec![
@@ -798,7 +796,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             self.flat_length.y,
             self.flat_length.z,
             // World data ptr (divide by 4 since 4 bytes in a u32)
-            voxel_presence_allocation.start_index_stride_dword() as u32,
+            voxel_presence_allocation.ptr_gpu(),
         ];
         info.append(&mut attachment_presence_indices);
         info.append(&mut attachment_data_indices);
@@ -808,7 +806,8 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
 
     fn update_gpu_objects(
         &mut self,
-        allocator: &mut GpuBufferAllocator,
+        device: &mut GfxDevice,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) -> bool {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();
@@ -818,7 +817,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             let presence_allocation_size = model.presence_data.data().len() * 4;
             self.voxel_presence_allocation = Some(
                 allocator
-                    .allocate(presence_allocation_size as u64)
+                    .allocate(device, presence_allocation_size as u64)
                     .expect("Failed to allocate flat voxel presence data."),
             );
             did_allocate = true;
@@ -835,7 +834,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         let old_allocation = e.get();
                         if old_allocation.length_bytes() < req_presence_allocation_size {
                             let new_allocation = allocator
-                                .reallocate(e.get(), req_presence_allocation_size)
+                                .reallocate(device, e.get(), req_presence_allocation_size)
                                 .expect("Failed to reallocate flat attachment presence data.");
 
                             // If we reallocate we may keep the same pointer, so we need to
@@ -851,7 +850,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     std::collections::hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(
                             allocator
-                                .allocate(req_presence_allocation_size as u64)
+                                .allocate(device, req_presence_allocation_size as u64)
                                 .expect("Failed to allocate flat attachment presence data."),
                         );
                         did_allocate = true;
@@ -866,7 +865,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         let old_allocation = e.get();
                         if old_allocation.length_bytes() < req_data_allocation_size {
                             let new_allocation = allocator
-                                .reallocate(e.get(), req_data_allocation_size)
+                                .reallocate(device, e.get(), req_data_allocation_size)
                                 .expect("Failed to reallocate flat attachment raw data.");
 
                             if old_allocation.start_index_stride_bytes()
@@ -880,7 +879,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     std::collections::hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(
                             allocator
-                                .allocate(req_data_allocation_size as u64)
+                                .allocate(device, req_data_allocation_size as u64)
                                 .expect("Failed to allocate flat attachment raw data."),
                         );
                         did_allocate = true;
@@ -910,7 +909,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         let old_allocation = e.get();
                         if old_allocation.length_bytes() < req_presence_allocation_size {
                             let new_allocation = allocator
-                                .reallocate(e.get(), req_presence_allocation_size)
+                                .reallocate(device, e.get(), req_presence_allocation_size)
                                 .expect("Failed to reallocate flat attachment presence data.");
 
                             // If we reallocate we may keep the same pointer, so we need to
@@ -926,7 +925,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     std::collections::hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(
                             allocator
-                                .allocate(req_presence_allocation_size as u64)
+                                .allocate(device, req_presence_allocation_size as u64)
                                 .expect("Failed to allocate flat attachment presence data."),
                         );
                         did_allocate = true;
@@ -943,7 +942,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                         let old_allocation = e.get();
                         if old_allocation.length_bytes() < req_data_allocation_size {
                             let new_allocation = allocator
-                                .reallocate(e.get(), req_data_allocation_size)
+                                .reallocate(device, e.get(), req_data_allocation_size)
                                 .expect("Failed to reallocate flat attachment raw data.");
 
                             if old_allocation.start_index_stride_bytes()
@@ -957,7 +956,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
                     std::collections::hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(
                             allocator
-                                .allocate(req_data_allocation_size as u64)
+                                .allocate(device, req_data_allocation_size as u64)
                                 .expect("Failed to allocate flat attachment raw data."),
                         );
                         did_allocate = true;
@@ -972,7 +971,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
     fn write_gpu_updates(
         &mut self,
         device: &mut GfxDevice,
-        allocator: &mut GpuBufferAllocator,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelFlat>().unwrap();

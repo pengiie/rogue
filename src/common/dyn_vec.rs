@@ -48,10 +48,12 @@ impl DynVec {
     pub fn get<T: 'static>(&self, index: usize) -> &T {
         let type_info = TypeInfo::new::<T>();
         assert_eq!(self.type_info, type_info);
+        assert!(self.size > index, "Index is out of bounds.");
 
         let bytes = self.get_unchecked(index).as_ptr() as *const T;
         unsafe { bytes.as_ref().unwrap() }
     }
+
     pub fn get_unchecked(&self, index: usize) -> &[u8] {
         todo!()
     }
@@ -90,6 +92,10 @@ impl DynVec {
 
         self.data = new_data_ptr;
         self.capacity = new_capacity;
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
     }
 }
 

@@ -19,6 +19,14 @@ struct Ring {
   float4 color;
 }
 
+struct Plane {
+  float3 center;
+  uint flags;
+  float3 normal;
+  float4 color;
+  float2 size;
+}
+
 struct Uniforms {
   [format("rgba8")]
   RWTexture2D<float4> backbuffer;
@@ -28,6 +36,8 @@ struct Uniforms {
   uint line_count;
   StructuredBuffer<Ring> rings;
   uint ring_count;
+  StructuredBuffer<Plane> planes;
+  uint plane_count;
 }
 
 extern ParameterBlock<Uniforms> u_shader;
@@ -99,6 +109,36 @@ void main(uint3 id: SV_DispatchThreadID) {
           }
           color = float4(l * ri.color.rgb, ri.color.a);
           flags = ri.flags;
+          min_distance = advanced - i * 0.001;
+        }
+        break;
+      }
+      curr_ray.advance(d);
+      advanced += d;
+    }
+  }
+
+  for (uint i = 0; i < u_shader.plane_count; i++) {
+    let plane = u_shader.planes.Load(i);
+    let do_shading = (plane.flags & 2) > 0;
+
+    var advanced = 0.0;
+    var curr_ray = ray.clone();
+    for (uint k = 0; k < 100 && advanced < far_plane; k++) {
+      //printf("center %f %f %f, normal %f %f %f\n",ri.center.x,ri.center.y,ri.center.z,ri.normal.x,ri.normal.y,ri.normal.z);
+      let d = sdf_plane(curr_ray.origin, plane.center, plane.normal, plane.size);
+      if (d < 0.001) {
+        let needs_depth_check = ((plane.flags & 1) ^ (flags & 1)) == 0;
+        let is_behind = (plane.flags & 1) < (flags & 1);
+        if (!is_behind && 
+            (!needs_depth_check || advanced < min_distance)) {
+          let normal = sdf_plane_normal(curr_ray.origin, plane.center, plane.normal);
+          var l = 0.0;
+          if (do_shading) {
+            l = pow(dot(normalize(float3(1)), normal) * 0.5 + 0.55, 0.6);
+          }
+          color = float4(l * plane.color.rgb, plane.color.a);
+          flags = plane.flags;
           min_distance = advanced - i * 0.001;
         }
         break;

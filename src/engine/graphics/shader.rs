@@ -167,6 +167,7 @@ pub enum ShaderBindingType {
     StorageImage,
     UniformBuffer,
     StorageBuffer,
+    StorageBufferArray { size: u32 },
 }
 
 #[derive(Debug)]
@@ -446,6 +447,7 @@ impl ShaderCompiler {
             mut parent_var_name: String,
             mut binding_offset: u32,
             mut uniform_offset: u32,
+            descriptor_array_size: Option<u32>,
         ) {
             let ty_layout = var_layout.type_layout();
             // debug!(
@@ -515,7 +517,13 @@ impl ShaderCompiler {
                         slang::ResourceShape::SlangTextureCube => todo!(),
                         slang::ResourceShape::SlangByteAddressBuffer
                         | slang::ResourceShape::SlangStructuredBuffer => {
-                            ShaderBindingType::StorageBuffer
+                            if let Some(descriptor_array_size) = descriptor_array_size {
+                                ShaderBindingType::StorageBufferArray {
+                                    size: descriptor_array_size,
+                                }
+                            } else {
+                                ShaderBindingType::StorageBuffer
+                            }
                         }
                         _ => todo!(),
                     };
@@ -551,6 +559,7 @@ impl ShaderCompiler {
                             var_name.clone(),
                             binding_offset,
                             uniform_offset,
+                            None,
                         );
                     }
                 }
@@ -666,6 +675,35 @@ impl ShaderCompiler {
                         ),
                     );
                 }
+                slang::TypeKind::Array => {
+                    let array_size = ty_layout.element_count();
+
+                    let element_ty_layout = ty_layout.element_type_layout();
+                    match element_ty_layout.kind() {
+                        slang::TypeKind::Resource => {
+                            let binding_type = match element_ty_layout.resource_shape() {
+                                slang::ResourceShape::SlangByteAddressBuffer
+                                | slang::ResourceShape::SlangStructuredBuffer => {
+                                    ShaderBindingType::StorageBufferArray {
+                                        size: array_size as u32,
+                                    }
+                                }
+                                _ => todo!(),
+                            };
+                            set.bindings.insert(
+                                var_name,
+                                (
+                                    ShaderBinding::Slot {
+                                        binding_index: binding_offset,
+                                        binding_type,
+                                    },
+                                    is_used_binding,
+                                ),
+                            );
+                        }
+                        kind => todo!("Implement kind {:?}", kind),
+                    }
+                }
                 kind => {
                     warn!("Ignoring type with {:?}", kind);
                 }
@@ -761,6 +799,7 @@ impl ShaderCompiler {
                             String::new(),
                             slot_offset,
                             uniform_offset,
+                            None,
                         );
                     }
                 }

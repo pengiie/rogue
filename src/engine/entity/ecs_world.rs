@@ -6,7 +6,7 @@ use rogue_macros::Resource;
 use crate::{
     engine::{
         graphics::camera::{Camera, MainCamera},
-        physics::transform::Transform,
+        physics::{physics_world::Colliders, rigid_body::RigidBody, transform::Transform},
         system::SystemParam,
         voxel::voxel::{VoxelModel, VoxelModelImpl},
     },
@@ -33,17 +33,30 @@ impl ECSWorld {
 
     pub fn clone_game_entities(&mut self) -> ECSWorld {
         let mut new = ECSWorld::new();
-        for (entity, (game_entity, transform, parent, children, renderable, camera, scriptable)) in
-            self.query_mut::<(
-                &GameEntity,
-                &Transform,
-                Option<&EntityParent>,
-                Option<&EntityChildren>,
-                Option<&RenderableVoxelEntity>,
-                Option<&Camera>,
-                Option<&ScriptableEntity>,
-            )>()
-        {
+        for (
+            entity,
+            (
+                game_entity,
+                transform,
+                parent,
+                children,
+                renderable,
+                camera,
+                scriptable,
+                rigid_body,
+                colliders,
+            ),
+        ) in self.query_mut::<(
+            &GameEntity,
+            &Transform,
+            Option<&EntityParent>,
+            Option<&EntityChildren>,
+            Option<&RenderableVoxelEntity>,
+            Option<&Camera>,
+            Option<&ScriptableEntity>,
+            Option<&RigidBody>,
+            Option<&Colliders>,
+        )>() {
             // Must use spawn_at so EntityParent and EntityChildren stay correct.
             new.spawn_at(entity, (game_entity.clone(), transform.clone()));
             if let Some(parent) = parent {
@@ -60,6 +73,12 @@ impl ECSWorld {
             }
             if let Some(scriptable) = scriptable {
                 new.insert_one(entity, scriptable.clone());
+            }
+            if let Some(rigid_body) = rigid_body {
+                new.insert_one(entity, rigid_body.clone());
+            }
+            if let Some(colliders) = colliders {
+                new.insert_one(entity, colliders.clone());
             }
         }
 

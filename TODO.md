@@ -20,8 +20,8 @@
 - Figure out cuts for dynamic meshes (possible?)
 - Add an explosion effect
 - Make a rocket launcher
-- Add way to save world state
-- Add way to load world state
++ Add way to save world state
++ Add way to load world state
 
 am i cooked?
 or will i do them all?

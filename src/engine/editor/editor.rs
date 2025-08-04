@@ -18,7 +18,9 @@ use crate::{
             asset::{AssetPath, Assets},
             repr::editor_settings::EditorSessionAsset,
         },
-        debug::{DebugFlags, DebugLine, DebugOBB, DebugRenderer, DebugRing},
+        debug::{
+            DebugCapsule, DebugFlags, DebugLine, DebugOBB, DebugPlane, DebugRenderer, DebugRing,
+        },
         editor::ui::init_editor_ui_textures,
         entity::{
             ecs_world::{ECSWorld, Entity},
@@ -29,7 +31,7 @@ use crate::{
             keyboard::{self, Key, Modifier},
             mouse, Input,
         },
-        physics::transform::Transform,
+        physics::{capsule_collider, physics_world::Colliders, transform::Transform},
         resource::{Res, ResMut},
         ui::UI,
         voxel::{
@@ -436,6 +438,42 @@ impl Editor {
                 if has_valid_double_click {
                     editor.double_clicker_buffer.fill(None);
                 }
+            }
+        }
+
+        'collider_draw: {
+            if let Some(selected_entity) = editor.selected_entity {
+                let Ok(mut selected_entity_query) =
+                    ecs_world.query_one::<(&Transform, &Colliders)>(selected_entity)
+                else {
+                    break 'collider_draw;
+                };
+                let Some((model_local_transform, colliders)) = selected_entity_query.get() else {
+                    break 'collider_draw;
+                };
+                let model_world_transform =
+                    ecs_world.get_world_transform(selected_entity, model_local_transform);
+                //for capsule_collider in &colliders.capsule_colliders {
+                //    debug_renderer.draw_ellipsoid(DebugEllipsoid {
+                //        center: capsule_collider.center + model_world_transform.position,
+                //        orientation: capsule_collider.orientation * model_world_transform.rotation,
+                //        radius: capsule_collider.radius,
+                //        height: capsule_collider.height,
+                //        color: Color::new_srgb(0.7, 0.1, 0.3),
+                //        alpha: 0.3,
+                //        flags: DebugFlags::SHADING,
+                //    });
+                //}
+                //for plane_collider in &colliders.plane_colliders {
+                //    debug_renderer.draw_plane(DebugPlane {
+                //        center: plane_collider.center + model_world_transform.position,
+                //        normal: model_world_transform.rotation * plane_collider.normal,
+                //        size: plane_collider.size,
+                //        color: Color::new_srgb(0.7, 0.1, 0.3),
+                //        alpha: 0.3,
+                //        flags: DebugFlags::SHADING,
+                //    });
+                //}
             }
         }
 

@@ -1,4 +1,4 @@
-use nalgebra::{Vector2, Vector3};
+use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
@@ -24,6 +24,7 @@ pub struct DebugGizmo {}
 pub struct DebugRenderer {
     debug_lines: Vec<DebugLine>,
     debug_rings: Vec<DebugRing>,
+    debug_planes: Vec<DebugPlane>,
     show_debug: bool,
 }
 
@@ -41,6 +42,26 @@ pub struct DebugRing {
     pub normal: Vector3<f32>,
     pub stretch: Vector2<f32>,
     pub thickness: f32,
+    pub color: Color<ColorSpaceSrgb>,
+    pub alpha: f32,
+    pub flags: DebugFlags,
+}
+
+pub struct DebugCapsule {
+    pub center: Vector3<f32>,
+    /// Identity orientation is oriented with height along on the Y axis.
+    pub orientation: UnitQuaternion<f32>,
+    pub radius: f32,
+    pub height: f32,
+    pub color: Color<ColorSpaceSrgb>,
+    pub alpha: f32,
+    pub flags: DebugFlags,
+}
+
+pub struct DebugPlane {
+    pub center: Vector3<f32>,
+    pub normal: Vector3<f32>,
+    pub size: Vector2<f32>,
     pub color: Color<ColorSpaceSrgb>,
     pub alpha: f32,
     pub flags: DebugFlags,
@@ -67,6 +88,7 @@ impl DebugRenderer {
         Self {
             debug_lines: Vec::new(),
             debug_rings: Vec::new(),
+            debug_planes: Vec::new(),
             show_debug: true,
         }
     }
@@ -83,6 +105,28 @@ impl DebugRenderer {
             return;
         }
         self.debug_rings.push(ring);
+    }
+
+    pub fn draw_plane(&mut self, plane: DebugPlane) {
+        if !self.show_debug {
+            return;
+        }
+        self.debug_planes.push(plane);
+    }
+
+    /// Alias for draw line, but a different spec.
+    pub fn draw_capsule(&mut self, ellipsoid: DebugCapsule) {
+        let start =
+            ellipsoid.center + ellipsoid.orientation * Vector3::y() * ellipsoid.height * 0.5;
+        let end = ellipsoid.center + ellipsoid.orientation * Vector3::y() * -ellipsoid.height * 0.5;
+        self.draw_line(DebugLine {
+            start,
+            end,
+            thickness: ellipsoid.radius,
+            color: ellipsoid.color,
+            alpha: ellipsoid.alpha,
+            flags: ellipsoid.flags,
+        });
     }
 
     pub fn draw_obb(&mut self, debug_obb: DebugOBB) {
@@ -188,6 +232,36 @@ impl DebugRenderer {
                 .write_buffer_slice(Renderer::GRAPH.debug_3d.buffer_rings, &[0u8; 16]);
         }
 
+        let plane_count = debug.debug_planes.len();
+        if plane_count > 0 {
+            let planes_byte_size = plane_count * 16 * 4;
+            let planes_buffer_ref = renderer.frame_graph_executor.write_buffer(
+                Renderer::GRAPH.debug_3d.buffer_planes,
+                planes_byte_size as u64,
+            );
+            for (i, plane) in debug.debug_planes.drain(..).enumerate() {
+                let i = i * 16 * 4;
+
+                planes_buffer_ref[i..(i + 12)].copy_from_slice(bytemuck::bytes_of(&plane.center));
+                planes_buffer_ref[(i + 12)..(i + 16)]
+                    .copy_from_slice(&plane.flags.bits().to_le_bytes());
+
+                planes_buffer_ref[(i + 16)..(i + 28)]
+                    .copy_from_slice(bytemuck::bytes_of(&plane.normal));
+
+                planes_buffer_ref[(i + 32)..(i + 44)]
+                    .copy_from_slice(bytemuck::bytes_of(&plane.color.rgb_vec()));
+                planes_buffer_ref[(i + 44)..(i + 48)].copy_from_slice(&plane.alpha.to_le_bytes());
+                planes_buffer_ref[(i + 48)..(i + 56)]
+                    .copy_from_slice(bytemuck::bytes_of(&plane.size));
+            }
+        } else {
+            // Dummy bytes so the descriptor is bound to a valid buffer.
+            renderer
+                .frame_graph_executor
+                .write_buffer_slice(Renderer::GRAPH.debug_3d.buffer_planes, &[0u8; 16]);
+        }
+
         renderer.frame_graph_executor.supply_pass_ref(
             Renderer::GRAPH.debug_3d.pass_debug,
             &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>| {
@@ -197,6 +271,7 @@ impl DebugRenderer {
                 let rt_image_depth = ctx.get_image(Renderer::GRAPH.rt.image_depth);
                 let lines_buffer = ctx.get_buffer(Renderer::GRAPH.debug_3d.buffer_lines);
                 let rings_buffer = ctx.get_buffer(Renderer::GRAPH.debug_3d.buffer_rings);
+                let planes_buffer = ctx.get_buffer(Renderer::GRAPH.debug_3d.buffer_planes);
 
                 let mut shapes_pass = recorder.begin_compute_pass(
                     ctx.get_compute_pipeline(Renderer::GRAPH.debug_3d.pipeline_compute_shapes),
@@ -210,6 +285,8 @@ impl DebugRenderer {
                     writer.write_uniform("u_shader.line_count", line_count as u32);
                     writer.write_binding("u_shader.rings", rings_buffer);
                     writer.write_uniform("u_shader.ring_count", ring_count as u32);
+                    writer.write_binding("u_shader.planes", planes_buffer);
+                    writer.write_uniform("u_shader.plane_count", plane_count as u32);
                 });
 
                 let wg_size = shapes_pass.workgroup_size();

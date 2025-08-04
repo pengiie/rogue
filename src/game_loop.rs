@@ -87,7 +87,9 @@ pub fn game_loop(app: &App) {
             app.run_system(Scripts::run_on_update);
             app.run_system(Scripts::update_script_events);
 
-            let physics_updates = 0;
+            let physics_updates = app
+                .get_resource_mut::<PhysicsWorld>()
+                .physics_update_count();
             for _ in 0..physics_updates {
                 // -------- PHYSICS ----------
                 app.run_system(Scripts::run_on_physics_update);

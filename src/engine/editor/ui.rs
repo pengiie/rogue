@@ -1,4 +1,5 @@
 use std::{
+    f32,
     fs::{metadata, Metadata},
     ops::Deref,
     path::{Path, PathBuf},
@@ -11,7 +12,7 @@ use egui::Color32;
 use egui_dock::DockState;
 use egui_plot::{Plot, PlotPoints};
 use hecs::With;
-use nalgebra::{SimdValue, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{Quaternion, SimdValue, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use crate::{
     common::color::Color,
@@ -30,7 +31,13 @@ use crate::{
             EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
         graphics::camera::Camera,
-        physics::transform::Transform,
+        physics::{
+            capsule_collider::{self, CapsuleCollider},
+            physics_world::{ColliderType, Colliders},
+            plane_collider::PlaneCollider,
+            rigid_body::RigidBody,
+            transform::Transform,
+        },
         ui::{
             gui::Egui, EditorAssetBrowserState, EditorNewProjectDialog, EditorNewVoxelModelDialog,
             EditorTab, EditorUIState, UI,
@@ -715,98 +722,99 @@ fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUI
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui: &mut egui::Ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Asset Browser").size(18.0));
-                ui.label(egui::RichText::new("|").size(16.0));
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}/",
-                        state.asset_browser.sub_path.to_string_lossy()
-                    ))
-                    .size(14.0),
-                );
-            });
-            ui.horizontal(|ui| {
-                let is_at_root = state.asset_browser.sub_path.to_string_lossy() != "./";
-                if ui
-                    .add_enabled(is_at_root, egui::Button::new("Back"))
-                    .clicked()
-                {
-                    state.asset_browser.sub_path.pop();
-                    state.asset_browser.needs_reload = true;
-                }
-                if ui.button("Reload").clicked() {
-                    state.asset_browser.needs_reload = true;
-                }
-            });
+            // TODO: Redo asset browser.
+            //ui.horizontal(|ui| {
+            //    ui.label(egui::RichText::new("Asset Browser").size(18.0));
+            //    ui.label(egui::RichText::new("|").size(16.0));
+            //    ui.label(
+            //        egui::RichText::new(format!(
+            //            "{}/",
+            //            state.asset_browser.sub_path.to_string_lossy()
+            //        ))
+            //        .size(14.0),
+            //    );
+            //});
+            //ui.horizontal(|ui| {
+            //    let is_at_root = state.asset_browser.sub_path.to_string_lossy() != "./";
+            //    if ui
+            //        .add_enabled(is_at_root, egui::Button::new("Back"))
+            //        .clicked()
+            //    {
+            //        state.asset_browser.sub_path.pop();
+            //        state.asset_browser.needs_reload = true;
+            //    }
+            //    if ui.button("Reload").clicked() {
+            //        state.asset_browser.needs_reload = true;
+            //    }
+            //});
 
-            egui::Grid::new("asset_grid").show(ui, |ui| {
-                for asset in &state.asset_browser.contents {
-                    let item_id = egui::Id::new(format!(
-                        "asset_browser_{}_label",
-                        asset.file_sub_path.to_string_lossy()
-                    ));
-                    let is_hovering = ui.data(|w| w.get_temp(item_id).unwrap_or(false));
+            //egui::Grid::new("asset_grid").show(ui, |ui| {
+            //    for asset in &state.asset_browser.contents {
+            //        let item_id = egui::Id::new(format!(
+            //            "asset_browser_{}_label",
+            //            asset.file_sub_path.to_string_lossy()
+            //        ));
+            //        let is_hovering = ui.data(|w| w.get_temp(item_id).unwrap_or(false));
 
-                    let file_image_icon = if asset.is_dir {
-                        consts::egui::icons::FOLDER
-                    } else {
-                        let Some(ext) = asset.file_sub_path.extension() else {
-                            return;
-                        };
+            //        let file_image_icon = if asset.is_dir {
+            //            consts::egui::icons::FOLDER
+            //        } else {
+            //            let Some(ext) = asset.file_sub_path.extension() else {
+            //                return;
+            //            };
 
-                        match ext.to_string_lossy().to_string().as_str() {
-                            "lua" => consts::egui::icons::LUA_FILE,
-                            "txt" => consts::egui::icons::TEXT_FILE,
-                            "rvox" => consts::egui::icons::VOXEL_MODEL_FILE,
-                            _ => consts::egui::icons::UNKNOWN,
-                        }
-                    };
+            //            match ext.to_string_lossy().to_string().as_str() {
+            //                "lua" => consts::egui::icons::LUA_FILE,
+            //                "txt" => consts::egui::icons::TEXT_FILE,
+            //                "rvox" => consts::egui::icons::VOXEL_MODEL_FILE,
+            //                _ => consts::egui::icons::UNKNOWN,
+            //            }
+            //        };
 
-                    let mut frame = egui::Frame::new().inner_margin(egui::Margin {
-                        left: 0,
-                        right: 0,
-                        top: 0,
-                        bottom: 4,
-                    });
-                    if is_hovering {
-                        frame = frame.fill(egui::Color32::from_white_alpha(2))
-                    }
-                    let res = ui.scope_builder(
-                        egui::UiBuilder::new().sense(egui::Sense::click()),
-                        |ui| {
-                            frame.show(ui, |ui| {
-                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                    ui.image(
-                                        state.get_image(file_image_icon, egui::vec2(96.0, 96.0)),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(
-                                            asset
-                                                .file_sub_path
-                                                .file_name()
-                                                .unwrap()
-                                                .to_string_lossy(),
-                                        )
-                                        .size(16.0),
-                                    );
-                                });
-                            });
-                        },
-                    );
+            //        let mut frame = egui::Frame::new().inner_margin(egui::Margin {
+            //            left: 0,
+            //            right: 0,
+            //            top: 0,
+            //            bottom: 4,
+            //        });
+            //        if is_hovering {
+            //            frame = frame.fill(egui::Color32::from_white_alpha(2))
+            //        }
+            //        let res = ui.scope_builder(
+            //            egui::UiBuilder::new().sense(egui::Sense::click()),
+            //            |ui| {
+            //                frame.show(ui, |ui| {
+            //                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+            //                        ui.image(
+            //                            state.get_image(file_image_icon, egui::vec2(96.0, 96.0)),
+            //                        );
+            //                        ui.label(
+            //                            egui::RichText::new(
+            //                                asset
+            //                                    .file_sub_path
+            //                                    .file_name()
+            //                                    .unwrap()
+            //                                    .to_string_lossy(),
+            //                            )
+            //                            .size(16.0),
+            //                        );
+            //                    });
+            //                });
+            //            },
+            //        );
 
-                    ui.data_mut(|w| w.insert_temp(item_id, res.response.hovered()));
-                    if res.response.clicked() {
-                        if asset.is_dir {
-                            state.asset_browser.sub_path = asset.file_sub_path.clone();
-                            state.asset_browser.needs_reload = true;
-                        }
-                    }
-                }
-            });
+            //        ui.data_mut(|w| w.insert_temp(item_id, res.response.hovered()));
+            //        if res.response.clicked() {
+            //            if asset.is_dir {
+            //                state.asset_browser.sub_path = asset.file_sub_path.clone();
+            //                state.asset_browser.needs_reload = true;
+            //            }
+            //        }
+            //    }
+            //});
 
-            // Console
-            ui.separator();
+            //// Console
+            //ui.separator();
 
             ui.label(egui::RichText::new(&state.message));
         });
@@ -940,6 +948,14 @@ fn entity_properties_pane(
                     ecs_world.insert_one(*selected_entity, ScriptableEntity::new());
                     ui.close_menu();
                 }
+                if ui.button("Rigidbody").clicked() {
+                    ecs_world.insert_one(*selected_entity, RigidBody::default());
+                    ui.close_menu();
+                }
+                if ui.button("Colliders").clicked() {
+                    ecs_world.insert_one(*selected_entity, Colliders::new());
+                    ui.close_menu();
+                }
             });
         }
     });
@@ -953,6 +969,7 @@ fn entity_properties_pane(
                 );
                 return;
             };
+            drop(game_entity);
 
             fn component_widget<R>(
                 ui: &mut egui::Ui,
@@ -987,15 +1004,19 @@ fn entity_properties_pane(
 
             ui.style_mut().spacing.item_spacing.y = 8.0;
             component_widget(ui, "General", None, |ui| {
+                let mut game_entity = ecs_world.get::<&mut GameEntity>(*selected_entity).unwrap();
                 ui.horizontal(|ui| {
                     ui.label("Name: ");
                     ui.text_edit_singleline(&mut game_entity.name);
                 });
                 ui.label(format!("UUID: {}", game_entity.uuid));
+                drop(game_entity);
+
                 ui.horizontal(|ui| {
                     ui.label("Parent: ");
 
                     let parent = ecs_world.get::<&EntityParent>(*selected_entity).ok();
+                    let parent_entity = parent.as_ref().map(|parent| parent.parent);
                     let parent_name = parent.as_ref().map_or_else(
                         || "None".to_owned(),
                         |parent| {
@@ -1007,15 +1028,28 @@ fn entity_properties_pane(
                     );
                     drop(parent);
                     ui.menu_button(parent_name, |ui| {
+                        // TODO: Transform entities transform so it stays the same in world space.
                         ui.label("Set parent:");
                         if ui.button("Select parent entity").clicked() {
                             ui_state.selecting_new_parent = Some(*selected_entity);
                             ui.close_menu();
                         }
+                        if ui
+                            .add_enabled(parent_entity.is_some(), egui::Button::new("Remove"))
+                            .clicked()
+                        {
+                            let mut parent_children = ecs_world
+                                .get::<&mut EntityChildren>(parent_entity.unwrap())
+                                .expect("Parent should have a children component");
+                            parent_children.children.remove(selected_entity);
+                            drop(parent_children);
+                            ecs_world.remove_one::<EntityParent>(*selected_entity);
+                            ui.close_menu();
+                        }
                     });
                 });
             });
-            drop(game_entity); // End GameEntity
+            // End GameEntity
 
             if let Ok(mut transform) = ecs_world.get::<&mut Transform>(*selected_entity) {
                 component_widget(ui, "Transform", None, |ui| {
@@ -1360,12 +1394,308 @@ fn entity_properties_pane(
                     }
                 });
             }
-            if remove_camera {
-                ecs_world.remove_one::<Camera>(*selected_entity);
-                if Some(*selected_entity) == session.game_camera {
-                    session.game_camera = None;
-                }
-            } // End Camera
+            if remove_scripts {
+                ecs_world.remove_one::<ScriptableEntity>(*selected_entity);
+            } // End scripts
+
+            let mut remove_rigid_body = false;
+            if let Ok(mut rigid_body) = ecs_world.get::<&mut RigidBody>(*selected_entity) {
+                component_widget(ui, "Rigid body", Some(&mut remove_rigid_body), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Mass");
+                        let mut mass = rigid_body.mass();
+                        ui.add(egui::DragValue::new(&mut mass).range(0.1..=100.0));
+                        rigid_body.set_mass(mass);
+                    });
+                });
+            }
+            if remove_scripts {
+                ecs_world.remove_one::<ScriptableEntity>(*selected_entity);
+            } // End rigid body
+
+        //let mut remove_colliders = false;
+        //if let Ok(mut colliders) = ecs_world.get::<&mut Colliders>(*selected_entity) {
+        //    component_widget(ui, "Colliders", Some(&mut remove_colliders), |ui| {
+        //        ui.menu_button("Add collider", |ui| {
+        //            if ui.button("Capsule collider").clicked() {
+        //                colliders.capsule_colliders.push(CapsuleCollider::new());
+        //                ui.close_menu();
+        //            }
+        //            if ui.button("Plane collider").clicked() {
+        //                colliders.plane_colliders.push(PlaneCollider::default());
+        //                ui.close_menu();
+        //            }
+        //        });
+
+        //        egui::ScrollArea::vertical()
+        //            .auto_shrink([false, true])
+        //            .show(ui, |ui| {
+        //                for (i, capsule) in colliders.capsule_colliders.iter().enumerate() {
+        //                    let mut text =
+        //                        egui::RichText::new(format!("Capsule collider #{}", i));
+        //                    if let Some((ColliderType::Capsule, selected_index)) =
+        //                        ui_state.selected_collider
+        //                    {
+        //                        if i as u32 == selected_index {
+        //                            text = text
+        //                                .background_color(egui::Color32::from_white_alpha(2));
+        //                        }
+        //                    }
+        //                    if ui.label(text).clicked() {
+        //                        ui_state.selected_collider =
+        //                            Some((ColliderType::Capsule, i as u32));
+        //                    }
+        //                }
+        //                for (i, plane) in colliders.plane_colliders.iter().enumerate() {
+        //                    let mut text =
+        //                        egui::RichText::new(format!("Plane collider #{}", i));
+        //                    if let Some((ColliderType::Plane, selected_index)) =
+        //                        ui_state.selected_collider
+        //                    {
+        //                        if i as u32 == selected_index {
+        //                            text = text
+        //                                .background_color(egui::Color32::from_white_alpha(2));
+        //                        }
+        //                    }
+        //                    if ui.label(text).clicked() {
+        //                        ui_state.selected_collider =
+        //                            Some((ColliderType::Plane, i as u32));
+        //                    }
+        //                }
+        //            });
+        //        ui.separator();
+        //        ui.label("Currently selected collider:");
+        //        match ui_state.selected_collider {
+        //            Some((ColliderType::Capsule, index)) => {
+        //                if let Some(collider) =
+        //                    colliders.capsule_colliders.get_mut(index as usize)
+        //                {
+        //                    ui.label(format!("Capsule collider #{}", index));
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Position:");
+        //                        ui.label("X");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.x)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Y");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.y)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Z");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.z)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                    });
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Rotation:");
+        //                        ui.label("X");
+        //                        let (mut roll, mut pitch, mut yaw) =
+        //                            collider.orientation.euler_angles();
+        //                        let original =
+        //                            Vector3::new(roll, pitch, yaw).map(|x| x.to_degrees());
+        //                        let mut edit = original.clone();
+        //                        // nalgebra uses positive rotation for clockwise but intuitively
+        //                        // counter-clockwise makes more sense since math.
+        //                        edit.x *= -1.0;
+        //                        edit.z *= -1.0;
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.x)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Y");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.y)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Z");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.z)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        edit.x *= -1.0;
+        //                        edit.z *= -1.0;
+        //                        let diff = edit - original;
+        //                        if diff.x != 0.0 {
+        //                            collider.orientation = UnitQuaternion::from_euler_angles(
+        //                                edit.x.to_radians(),
+        //                                pitch,
+        //                                yaw,
+        //                            );
+        //                        }
+        //                        if diff.y != 0.0 {
+        //                            collider.orientation = UnitQuaternion::from_euler_angles(
+        //                                roll,
+        //                                edit.y.to_radians(),
+        //                                yaw,
+        //                            );
+        //                        }
+        //                        if diff.z != 0.0 {
+        //                            collider.orientation = UnitQuaternion::from_euler_angles(
+        //                                roll,
+        //                                pitch,
+        //                                edit.z.to_radians(),
+        //                            );
+        //                        }
+        //                    });
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Radius:");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.radius)
+        //                                .suffix(" m")
+        //                                .speed(0.005)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                    });
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Height:");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.height)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                    });
+        //                }
+        //            }
+        //            Some((ColliderType::Plane, index)) => {
+        //                if let Some(collider) =
+        //                    colliders.plane_colliders.get_mut(index as usize)
+        //                {
+        //                    ui.label(format!("Plane collider #{}", index));
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Position:");
+        //                        ui.label("X");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.x)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Y");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.y)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Z");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.center.z)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                    });
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Rotation:");
+        //                        ui.label("X");
+        //                        let mut orientation = UnitQuaternion::rotation_between(
+        //                            &Vector3::z(),
+        //                            &collider.normal,
+        //                        )
+        //                        .unwrap_or(UnitQuaternion::from_axis_angle(
+        //                            &Vector3::y_axis(),
+        //                            f32::consts::PI,
+        //                        ));
+        //                        let (mut roll, mut pitch, mut yaw) = orientation.euler_angles();
+        //                        let original =
+        //                            Vector3::new(roll, pitch, yaw).map(|x| x.to_degrees());
+        //                        let mut edit = original.clone();
+        //                        // nalgebra uses positive rotation for clockwise but intuitively
+        //                        // counter-clockwise makes more sense since math.
+        //                        edit.x *= -1.0;
+        //                        edit.z *= -1.0;
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.x)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Y");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.y)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Z");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut edit.z)
+        //                                .suffix("°")
+        //                                .speed(0.05)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        edit.x *= -1.0;
+        //                        edit.z *= -1.0;
+        //                        let diff = edit - original;
+        //                        if diff.x != 0.0 {
+        //                            orientation = UnitQuaternion::from_euler_angles(
+        //                                edit.x.to_radians(),
+        //                                pitch,
+        //                                yaw,
+        //                            );
+        //                        }
+        //                        if diff.y != 0.0 {
+        //                            orientation = UnitQuaternion::from_euler_angles(
+        //                                roll,
+        //                                edit.y.to_radians(),
+        //                                yaw,
+        //                            );
+        //                        }
+        //                        if diff.z != 0.0 {
+        //                            orientation = UnitQuaternion::from_euler_angles(
+        //                                roll,
+        //                                pitch,
+        //                                edit.z.to_radians(),
+        //                            );
+        //                        }
+
+        //                        collider.normal = orientation * Vector3::z();
+        //                    });
+        //                    ui.horizontal(|ui| {
+        //                        ui.label("Size:");
+        //                        ui.label("X");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.size.x)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                        ui.label("Y");
+        //                        ui.add(
+        //                            egui::DragValue::new(&mut collider.size.y)
+        //                                .suffix(" m")
+        //                                .speed(0.01)
+        //                                .fixed_decimals(2),
+        //                        );
+        //                    });
+        //                }
+        //            }
+        //            None => {
+        //                ui.label("None selected");
+        //            }
+        //            _ => {}
+        //        }
+        //    });
+        //}
+        //if remove_colliders {
+        //    ecs_world.remove_one::<Colliders>(*selected_entity);
+        //} // End colliders
         } else {
             ui.label("No entity selected.");
         }
@@ -1502,7 +1832,7 @@ fn world_pane(
             ui.horizontal(|ui| {
                 ui.label("Generation radius:");
                 ui.add(
-                    egui::Slider::new(&mut editor.terrain_generation.generation_radius, 0..=4)
+                    egui::Slider::new(&mut editor.terrain_generation.generation_radius, 0..=16)
                         .step_by(1.0),
                 );
             });

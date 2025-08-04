@@ -35,14 +35,18 @@ impl GpuBufferAllocator {
         }
     }
 
+    pub fn free_bytes(&self) -> u64 {
+        self.allocations.size - self.total_allocated_size
+    }
+
     pub fn allocate(&mut self, bytes: u64) -> Option<Allocation> {
-        assert!(
-            bytes.next_power_of_two() <= self.allocations.size,
-            "Tried to allocate {} bytes but allocator can only hold {}",
-            bytes.next_power_of_two(),
-            self.allocations.size
-        );
         let allocation_size = bytes.next_power_of_two();
+        // Early exit so we don't waste time searching the tree for an empty space.
+        if allocation_size > self.free_bytes() {
+            return None;
+        }
+
+        let allocation = self.allocations.allocate(allocation_size, 4);
         self.total_allocated_size += allocation_size;
         log::info!(
             "Allocator {} allocated just allocated {} bytes, {}/{} remaining",
@@ -51,7 +55,6 @@ impl GpuBufferAllocator {
             self.allocations.size - self.total_allocated_size,
             self.allocations.size
         );
-        let allocation = self.allocations.allocate(allocation_size, 4);
 
         allocation
     }
@@ -99,8 +102,8 @@ impl GpuBufferAllocator {
 #[derive(Clone)]
 pub struct Allocation {
     /// Currently, used as a unique identifier hash for an allocation.
-    traversal: u64,
-    range: std::ops::Range<u64>,
+    pub traversal: u64,
+    pub range: std::ops::Range<u64>,
 }
 
 impl Allocation {

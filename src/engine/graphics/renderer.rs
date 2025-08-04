@@ -62,6 +62,7 @@ pub struct GraphConstantsEditorUI {
 pub struct GraphConstantsDebug3D {
     pub buffer_lines: &'static str,
     pub buffer_rings: &'static str,
+    pub buffer_planes: &'static str,
 
     pub pipeline_compute_shapes: &'static str,
     pub pipeline_compute_shapes_info: FrameGraphComputeInfo<'static>,
@@ -161,6 +162,7 @@ impl Renderer {
         debug_3d: GraphConstantsDebug3D {
             buffer_lines: "debug_3d_buffer_lines",
             buffer_rings: "debug_3d_buffer_rings",
+            buffer_planes: "debug_3d_buffer_planes",
 
             pipeline_compute_shapes: "debug_3d_compute_shapes",
             pipeline_compute_shapes_info: FrameGraphComputeInfo {
@@ -339,6 +341,7 @@ impl Renderer {
         {
             builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_lines);
             builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_rings);
+            builder.create_frame_buffer(Self::GRAPH.debug_3d.buffer_planes);
 
             builder.create_compute_pipeline(
                 &Self::GRAPH.debug_3d.pipeline_compute_shapes,
@@ -351,6 +354,7 @@ impl Renderer {
                     &Self::GRAPH.rt.image_depth,
                     &Self::GRAPH.debug_3d.buffer_lines,
                     &Self::GRAPH.debug_3d.buffer_rings,
+                    &Self::GRAPH.debug_3d.buffer_planes,
                 ],
                 &[&Self::GRAPH.image_backbuffer],
             );
@@ -510,13 +514,13 @@ impl Renderer {
                     "u_frame.voxel.model_info_data",
                     *voxel_world_gpu.world_voxel_model_info_buffer(),
                 );
-                writer.write_binding(
-                    "u_frame.voxel.model_voxel_data",
-                    *voxel_world_gpu.world_data_buffer().unwrap(),
+                writer.write_binding_array(
+                    "u_frame.voxel.model_voxel_data.model_voxel_data",
+                    &voxel_world_gpu.world_data_buffers(),
                 );
-                writer.write_binding(
-                    "u_frame.voxel.rw_model_voxel_data",
-                    *voxel_world_gpu.world_data_buffer().unwrap(),
+                writer.write_binding_array(
+                    "u_frame.voxel.model_voxel_data.model_voxel_data_rw",
+                    &voxel_world_gpu.world_data_buffers(),
                 );
 
                 writer.write_binding(

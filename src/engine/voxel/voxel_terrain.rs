@@ -32,7 +32,6 @@ use crate::{
         resource::{Res, ResMut},
         voxel::{
             attachment::{Attachment, PTMaterial},
-            esvo::VoxelModelESVO,
             flat::VoxelModelFlat,
             voxel::VoxelModel,
         },

@@ -427,25 +427,78 @@ impl<'a> ShaderWriter<'a> {
         }
     }
 
-    pub fn write_binding<T: 'static>(
+    /// Writes a the binding array at the full Slang uniform path, do not include the index or any
+    /// brackets [], since the whole array is being written.
+    pub fn write_binding_array<T: 'static>(
         &mut self,
         full_uniform_name: impl ToString,
-        binding_resource: ResourceId<T>,
+        binding_resources: &[ResourceId<T>],
     ) {
         let full_uniform_name = full_uniform_name.to_string();
         let (set_name, param_path) = Self::parse_uniform_name(&full_uniform_name);
 
         let (set_index, binding_index, expected_type) = {
-            let set_info = self
-                .shader_set_bindings
-                .iter()
-                .find(|set| set.name == set_name)
-                .expect(&format!(
-                    "No set with the name `{}` exists for the submitted uniform `{}`",
-                    set_name, full_uniform_name,
-                ));
+            let set_info = self.get_shader_set_by_name(set_name, &full_uniform_name);
 
-            let Some((binding_index, expected_type)) = set_info
+            let Some((binding_index, expected_type)) =
+                self.get_shader_set_binding(set_info, param_path, &full_uniform_name)
+            else {
+                warn!(
+                    "No uniform binding with the path `{}` exists for the submitted uniform `{}`",
+                    param_path, full_uniform_name
+                );
+                return;
+            };
+
+            (set_info.set_index, binding_index, expected_type)
+        };
+
+        let binding = match expected_type {
+            ShaderBindingType::StorageBufferArray { size } => {
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Buffer>()
+                );
+                Binding::StorageBufferArray {
+                    buffers: binding_resources
+                        .into_iter()
+                        .map(|id| ResourceId::new(id.id()))
+                        .collect::<Vec<_>>(),
+                }
+            }
+            _ => panic!("Type not supported for arrays"),
+        };
+
+        let mut set = self
+            .set_bindings
+            .entry(set_index)
+            .or_insert(ShaderSetData::new());
+        if set.is_using_cache() {
+            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+        }
+        set.bindings_mut().insert(binding_index, binding);
+    }
+
+    fn get_shader_set_by_name(&self, set_name: &str, full_uniform_name: &str) -> &ShaderSetBinding {
+        self.shader_set_bindings
+            .iter()
+            .find(|set| set.name == set_name)
+            .expect(&format!(
+                "No set with the name `{}` exists for the submitted uniform `{}`",
+                set_name, full_uniform_name,
+            ))
+    }
+
+    fn get_shader_set_binding(
+        &self,
+        set_info: &ShaderSetBinding,
+        param_path: &str,
+        full_uniform_name: &str,
+    ) -> Option<(
+        /*binding_index*/ u32,
+        /*binding_type*/ ShaderBindingType,
+    )> {
+        set_info
                 .bindings
                 .iter()
                 .find_map(|(path, (binding, is_used))| {
@@ -460,7 +513,7 @@ impl<'a> ShaderWriter<'a> {
                                 binding_index,
                                 binding_type,
                             } => {
-                                return Some((binding_index, binding_type));
+                                return Some((*binding_index, *binding_type));
                             },
                             ShaderBinding::Uniform {
                                 ..
@@ -469,15 +522,34 @@ impl<'a> ShaderWriter<'a> {
                     }
 
                     None
-                }) else {
-                    warn!(
-                        "No uniform binding with the path `{}` exists for the submitted uniform `{}`",
-                        param_path, full_uniform_name
-                    );
-                    return;
-                };
+                })
+    }
 
-            (set_info.set_index, *binding_index, *expected_type)
+    /// Writes a binding at the full Slang uniform path, the graphics backend will use reflection
+    /// to automatically write the required shader bindings. In the backend, descriptor sets are
+    /// cached and reused when the same shaders are used.
+    pub fn write_binding<T: 'static>(
+        &mut self,
+        full_uniform_name: impl ToString,
+        binding_resource: ResourceId<T>,
+    ) {
+        let full_uniform_name = full_uniform_name.to_string();
+        let (set_name, param_path) = Self::parse_uniform_name(&full_uniform_name);
+
+        let (set_index, binding_index, expected_type) = {
+            let set_info = self.get_shader_set_by_name(set_name, &full_uniform_name);
+
+            let Some((binding_index, expected_type)) =
+                self.get_shader_set_binding(set_info, param_path, &full_uniform_name)
+            else {
+                warn!(
+                    "No uniform binding with the path `{}` exists for the submitted uniform `{}`",
+                    param_path, full_uniform_name
+                );
+                return;
+            };
+
+            (set_info.set_index, binding_index, expected_type)
         };
 
         let binding = match expected_type {
@@ -529,6 +601,8 @@ impl<'a> ShaderWriter<'a> {
                     buffer: ResourceId::new(binding_resource.id()),
                 }
             }
+            // Unexpected type should be handled earlier but can handle here too.
+            _ => panic!("For arrays, use write_binding_arry."),
         };
 
         let mut set = self
@@ -855,6 +929,7 @@ pub enum Binding {
     Sampler { sampler: ResourceId<Sampler> },
     UniformBuffer { buffer: ResourceId<Buffer> },
     StorageBuffer { buffer: ResourceId<Buffer> },
+    StorageBufferArray { buffers: Vec<ResourceId<Buffer>> },
 }
 
 pub struct GfxComputePipelineCreateInfo<'a> {

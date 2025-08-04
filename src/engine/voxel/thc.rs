@@ -35,6 +35,7 @@ use super::{
         VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
         VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
+    voxel_world::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
 #[derive(Clone)]
@@ -610,7 +611,8 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
 
     fn update_gpu_objects(
         &mut self,
-        allocator: &mut GpuBufferAllocator,
+        device: &mut GfxDevice,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) -> bool {
         let model = model.downcast_ref::<VoxelModelTHC>().unwrap();
@@ -629,9 +631,9 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
         }
 
         if let Some(compressed_model) = &self.compressed_model {
-            did_allocate = self
-                .compressed_model_gpu
-                .update_gpu_objects(allocator, compressed_model);
+            did_allocate =
+                self.compressed_model_gpu
+                    .update_gpu_objects(device, allocator, compressed_model);
         }
 
         return did_allocate;
@@ -640,7 +642,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
     fn write_gpu_updates(
         &mut self,
         device: &mut GfxDevice,
-        allocator: &mut GpuBufferAllocator,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         if let Some(compressed_model) = &self.compressed_model {
@@ -915,9 +917,9 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
 pub struct VoxelModelTHCCompressedGpu {
     // Model side length in voxels.
     side_length: u32,
-    nodes_allocation: Option<Allocation>,
-    attachment_lookup_allocations: HashMap<AttachmentId, Allocation>,
-    attachment_raw_allocations: HashMap<AttachmentId, Allocation>,
+    nodes_allocation: Option<VoxelDataAllocation>,
+    attachment_lookup_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
+    attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
 
     initialized_model_data: bool,
 }
@@ -936,7 +938,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {
 }
 
 impl VoxelModelTHCCompressedGpu {
-    pub fn dealloc(&mut self, allocator: &mut GpuBufferAllocator) {
+    pub fn dealloc(&mut self, allocator: &mut VoxelDataAllocator) {
         if let Some(nodes_alloc) = self.nodes_allocation.take() {
             allocator.free(&nodes_alloc);
         }
@@ -972,8 +974,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
                 continue;
             }
 
-            attachment_lookup_indices[*attachment as usize] =
-                lookup_allocation.start_index_stride_dword() as u32
+            attachment_lookup_indices[*attachment as usize] = lookup_allocation.ptr_gpu();
         }
         let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
         for (attachment, raw_allocation) in &self.attachment_raw_allocations {
@@ -985,14 +986,13 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
             //     "Uploading indices {}",
             //     raw_allocation.start_index_stride_dword() as u32
             // );
-            attachment_raw_indices[*attachment as usize] =
-                raw_allocation.start_index_stride_dword() as u32;
+            attachment_raw_indices[*attachment as usize] = raw_allocation.ptr_gpu();
         }
 
         let mut info = vec![
             self.side_length,
             // Node ptr (divide by 4 since 4 bytes in a u32)
-            data_allocation.start_index_stride_dword() as u32,
+            data_allocation.ptr_gpu(),
         ];
         info.append(&mut attachment_lookup_indices);
         info.append(&mut attachment_raw_indices);
@@ -1002,7 +1002,8 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
 
     fn update_gpu_objects(
         &mut self,
-        allocator: &mut crate::engine::graphics::gpu_allocator::GpuBufferAllocator,
+        device: &mut GfxDevice,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) -> bool {
         let model = model.downcast_ref::<VoxelModelTHCCompressed>().unwrap();
@@ -1012,7 +1013,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
             let nodes_allocation_size = model.node_data.len() as u64 * 12;
             self.nodes_allocation = Some(
                 allocator
-                    .allocate(nodes_allocation_size)
+                    .allocate(device, nodes_allocation_size)
                     .expect("Failed to allocate THC node data."),
             );
             did_allocate = true;
@@ -1024,7 +1025,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
                 self.attachment_lookup_allocations.insert(
                     attachment.clone(),
                     allocator
-                        .allocate(lookup_data_allocation_size)
+                        .allocate(device, lookup_data_allocation_size)
                         .expect("Failed to allocate THC attachment lookup data."),
                 );
                 did_allocate = true;
@@ -1037,7 +1038,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
                 self.attachment_raw_allocations.insert(
                     attachment.clone(),
                     allocator
-                        .allocate(raw_data_allocation_size)
+                        .allocate(device, raw_data_allocation_size)
                         .expect("Failed to allocate THC attachment raw data."),
                 );
                 did_allocate = true;
@@ -1071,7 +1072,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
                     let old_allocation = e.get();
                     if old_allocation.length_bytes() < req_data_allocation_size {
                         let new_allocation = allocator
-                            .reallocate(e.get(), req_data_allocation_size)
+                            .reallocate(device, e.get(), req_data_allocation_size)
                             .expect("Failed to reallocate thc attachment raw data.");
 
                         if old_allocation.start_index_stride_bytes()
@@ -1085,7 +1086,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
                 std::collections::hash_map::Entry::Vacant(vacant) => {
                     vacant.insert(
                         allocator
-                            .allocate(req_data_allocation_size as u64)
+                            .allocate(device, req_data_allocation_size as u64)
                             .expect("Failed to allocate thc attachment raw data."),
                     );
                     did_allocate = true;
@@ -1106,7 +1107,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
     fn write_gpu_updates(
         &mut self,
         device: &mut GfxDevice,
-        allocator: &mut GpuBufferAllocator,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelTHCCompressed>().unwrap();

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, f32, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, f32, ops::Deref, path::PathBuf, str::FromStr};
 
 use hecs::With;
 use nalgebra::{Translation3, UnitQuaternion, Vector3};
@@ -13,7 +13,10 @@ use crate::{
             EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
         graphics::camera::Camera,
-        physics::transform::Transform,
+        physics::{
+            capsule_collider::CapsuleCollider, physics_world::Colliders,
+            plane_collider::PlaneCollider, rigid_body::RigidBody, transform::Transform,
+        },
         voxel::{
             voxel::VoxelModelImpl, voxel_registry::VoxelModelRegistry, voxel_world::VoxelWorld,
         },
@@ -130,6 +133,10 @@ pub enum EditorGameComponentAsset {
     ScriptableEntity {
         script_asset_paths: Vec<String>,
     },
+    RigidBody {
+        mass: f32,
+    },
+    Colliders(#[serde(default)] Colliders),
 }
 
 impl EditorGameEntityAsset {
@@ -206,7 +213,19 @@ impl EditorGameEntityAsset {
                         .iter()
                         .map(|asset_path| asset_path.asset_path.clone().unwrap())
                         .collect::<Vec<_>>(),
-                })
+                });
+        }
+
+        if let Ok(rigid_body) = ecs_world.get::<&RigidBody>(entity_id) {
+            s.components.push(EditorGameComponentAsset::RigidBody {
+                mass: rigid_body.mass(),
+            });
+        }
+
+        if let Ok(colliders) = ecs_world.get::<&Colliders>(entity_id) {
+            s.components.push(EditorGameComponentAsset::Colliders(
+                colliders.deref().clone(),
+            ));
         }
 
         return s;
@@ -268,6 +287,12 @@ impl EditorGameEntityAsset {
                             scripts: asset_paths,
                         },
                     );
+                }
+                EditorGameComponentAsset::RigidBody { mass } => {
+                    ecs_world.insert_one(id, RigidBody::new(*mass));
+                }
+                EditorGameComponentAsset::Colliders(colliders) => {
+                    ecs_world.insert_one(id, colliders.clone());
                 }
             }
         }

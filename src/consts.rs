@@ -99,3 +99,7 @@ pub mod editor {
     pub const ENTITY_OUTLINE_THICKNESS: f32 = 0.03;
     pub const DOUBLE_CLICK_TIME_SECS: f32 = 0.5;
 }
+
+pub mod physics {
+    pub const VELOCITY_MAX: f32 = 100.0; // m/s
+}

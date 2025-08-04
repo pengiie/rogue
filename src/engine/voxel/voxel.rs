@@ -29,11 +29,10 @@ use crate::{
 
 use super::{
     attachment::{Attachment, AttachmentId, PTMaterial},
-    esvo::VoxelModelESVO,
     flat::VoxelModelFlat,
     voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
-    voxel_world::VoxelModelFlatEdit,
+    voxel_world::{VoxelDataAllocator, VoxelModelFlatEdit},
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -112,14 +111,15 @@ pub trait VoxelModelGpuImpl: Send + Sync + Any {
     /// model info needs to be re-registered, i.e. model allocation pointers have changed.
     fn update_gpu_objects(
         &mut self,
-        allocator: &mut GpuBufferAllocator,
+        device: &mut GfxDevice,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) -> bool;
 
     fn write_gpu_updates(
         &mut self,
         device: &mut GfxDevice,
-        allocator: &mut GpuBufferAllocator,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     );
 }
@@ -295,17 +295,18 @@ pub struct VoxelMaterialSet {
 }
 
 impl VoxelMaterialSet {
-    /// material_byte_size must be a multiple of 32.
+    /// material_byte_size must be a multiple of 4.
     pub fn new(material_byte_size: u32) -> Self {
         assert_eq!(
-            material_byte_size % 32,
+            material_byte_size % 4,
             0,
-            "material_byte_size must be a multiple of 32"
+            "material_byte_size must be a multiple of 4"
         );
+        assert!(material_byte_size > 0,);
         Self {
             data: Vec::new(),
             name_map: HashMap::new(),
-            material_size: material_byte_size / 32,
+            material_size: material_byte_size / 4,
         }
     }
 

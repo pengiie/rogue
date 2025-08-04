@@ -27,6 +27,7 @@ use super::{
         VoxelData, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace,
     },
+    voxel_world::VoxelDataAllocator,
 };
 
 #[derive(Clone)]
@@ -1036,7 +1037,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
     fn write_gpu_updates(
         &mut self,
         device: &mut GfxDevice,
-        allocator: &mut GpuBufferAllocator,
+        allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     ) {
         let model = model.downcast_ref::<VoxelModelESVO>().unwrap();

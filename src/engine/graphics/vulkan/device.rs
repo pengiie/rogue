@@ -2109,15 +2109,19 @@ impl VulkanResourceManager {
                         ShaderBindingType::SampledImage => ash::vk::DescriptorType::SAMPLED_IMAGE,
                         ShaderBindingType::StorageImage => ash::vk::DescriptorType::STORAGE_IMAGE,
                         ShaderBindingType::UniformBuffer => ash::vk::DescriptorType::UNIFORM_BUFFER,
-                        ShaderBindingType::StorageBuffer => ash::vk::DescriptorType::STORAGE_BUFFER,
+                        ShaderBindingType::StorageBuffer | ShaderBindingType::StorageBufferArray { .. } => ash::vk::DescriptorType::STORAGE_BUFFER,
                     },
                     None => {
                         break 'map None;
                     }
                 };
+                let descriptor_count = match binding.binding_slot_type().unwrap() {
+                    ShaderBindingType::StorageBufferArray { size } => size,
+                    _ => 1,
+                };
                 let vk_binding = ash::vk::DescriptorSetLayoutBinding::default()
                     .binding(binding.binding_index(set_binding))
-                    .descriptor_count(1)
+                    .descriptor_count(descriptor_count)
                     .descriptor_type(vk_binding_type)
                     .stage_flags(ash::vk::ShaderStageFlags::ALL);
 
@@ -2550,6 +2554,34 @@ impl VulkanResourceManager {
                     debug!("Creating descriptor set for set `{}`.", set_binding.name);
 
                     for (binding_idx, binding) in bindings.bindings.iter() {
+                        match binding {
+                            Binding::StorageBufferArray { buffers } => {
+                                for (i, buffer) in buffers.iter().enumerate() {
+                                    let vk_buffer_info = self.get_buffer_info(buffer);
+                                    vk_buffer_infos.push(
+                                        ash::vk::DescriptorBufferInfo::default()
+                                            .buffer(vk_buffer_info.buffer)
+                                            .offset(0)
+                                            .range(ash::vk::WHOLE_SIZE),
+                                    );
+                                    let write = ash::vk::WriteDescriptorSet::default()
+                                        .dst_set(new_set)
+                                        .dst_binding(*binding_idx)
+                                        .dst_array_element(i as u32)
+                                        .descriptor_count(1)
+                                        .descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER);
+                                    let set_index = VulkanSetWriteIndex::BufferInfo(
+                                        vk_buffer_infos.len() - 1,
+                                    );
+                                    vk_descriptor_set_writes.push((write, set_index));
+                                }
+                                // Since the array does its own writes, we skip the default code
+                                // path of a single write.
+                                continue;
+                            }
+                            _ => {}
+                        }
+
                         let mut write = ash::vk::WriteDescriptorSet::default()
                             .dst_set(new_set)
                             .descriptor_count(1)
@@ -2634,6 +2666,7 @@ impl VulkanResourceManager {
                                 write =
                                     write.descriptor_type(ash::vk::DescriptorType::STORAGE_BUFFER);
                             }
+                            Binding::StorageBufferArray { .. } => unreachable!()
                         }
 
                         vk_descriptor_set_writes.push((write, info.unwrap()));

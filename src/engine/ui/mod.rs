@@ -31,7 +31,7 @@ use super::{
     },
     graphics::renderer::Renderer,
     input::Input,
-    physics::transform::Transform,
+    physics::{physics_world::ColliderType, transform::Transform},
     resource::{Res, ResMut},
     voxel::{
         attachment::{Attachment, PTMaterial},
@@ -80,6 +80,7 @@ pub struct EditorUIState {
     pub stats: EditorUIStatistics,
 
     pub right_pane_state: EditorTab,
+    pub selected_collider: Option<(ColliderType, u32)>,
 }
 
 pub struct EditorUIStatistics {
@@ -231,6 +232,7 @@ impl EditorUIState {
                 cpu_frame_time_samples_max: Duration::ZERO,
                 cpu_frame_time_samples: VecDeque::new(),
             },
+            selected_collider: None,
         }
     }
 
@@ -344,19 +346,19 @@ impl UI {
 
         let pixels_per_point = egui.pixels_per_point();
         egui.resolve_ui(&mut window, |ctx, window| {
-            let mut total_allocation_str;
-            let al = voxel_world_gpu
-                .voxel_allocator()
-                .map_or(0, |alloc| alloc.total_allocated_size());
-            if al >= 2u64.pow(30) {
-                total_allocation_str = format!("{:.3}GiB", al as f32 / 2f32.powf(30.0));
-            } else if al >= 2u64.pow(20) {
-                total_allocation_str = format!("{:.3}MiB", al as f32 / 2f32.powf(20.0));
-            } else if al >= 2u64.pow(10) {
-                total_allocation_str = format!("{:.3}KiB", al as f32 / 2f32.powf(10.0));
-            } else {
-                total_allocation_str = format!("{:.3}B", al);
-            }
+            let mut total_allocation_str = String::new();
+            //let al = voxel_world_gpu
+            //    .voxel_allocator()
+            //    .map_or(0, |alloc| alloc.total_allocated_size());
+            //if al >= 2u64.pow(30) {
+            //    total_allocation_str = format!("{:.3}GiB", al as f32 / 2f32.powf(30.0));
+            //} else if al >= 2u64.pow(20) {
+            //    total_allocation_str = format!("{:.3}MiB", al as f32 / 2f32.powf(20.0));
+            //} else if al >= 2u64.pow(10) {
+            //    total_allocation_str = format!("{:.3}KiB", al as f32 / 2f32.powf(10.0));
+            //} else {
+            //    total_allocation_str = format!("{:.3}B", al);
+            //}
 
             ui.content_padding = Vector4::zeros();
             if editor.is_active {

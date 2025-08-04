@@ -19,8 +19,7 @@ namespace uniforms {
     public voxel::Terrain terrain;
     public voxel::EntityData entity_data;
     public ByteAddressBuffer model_info_data;
-    public ByteAddressBuffer model_voxel_data;
-    public RWByteAddressBuffer rw_model_voxel_data;
+    public voxel::VoxelDataBuffer model_voxel_data;
   };
 
 

@@ -26,7 +26,10 @@ use crate::{
             RenderableVoxelEntity,
         },
         graphics::camera::{Camera, MainCamera},
-        physics::transform::Transform,
+        physics::{
+            physics_world::{self, PhysicsWorld},
+            transform::Transform,
+        },
         resource::{Res, ResMut},
         ui::UI,
         voxel::{
@@ -207,6 +210,7 @@ impl Session {
         mut editor: ResMut<Editor>,
         mut scripts: ResMut<Scripts>,
         mut ui: ResMut<UI>,
+        mut physics_world: ResMut<PhysicsWorld>,
     ) {
         let session: &mut Session = &mut session;
 
@@ -261,6 +265,7 @@ impl Session {
             main_camera.set_camera(session.game_camera.as_ref().unwrap().clone(), "game_camera");
             session.editor_ecs_world = Some(ecs_world.clone_game_entities());
             scripts.run_setup(&mut ecs_world, &assets, &mut ui);
+            physics_world.reset_last_timestep();
         }
 
         if session.should_stop_game {

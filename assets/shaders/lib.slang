@@ -10,4 +10,5 @@ __include "lib/uniforms.slang";
 __include "lib/world.slang";
 
 __include "lib/voxel/common.slang";
+__include "lib/voxel/allocator.slang";
 
