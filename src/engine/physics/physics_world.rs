@@ -16,6 +16,7 @@ use crate::{
             EntityChildren, EntityParent,
         },
         resource::ResMut,
+        voxel::voxel_terrain::VoxelChunks,
         window::time::Instant,
     },
 };
@@ -51,6 +52,10 @@ pub struct CollisionInfo {
     pub penetration_depth: Vector3<f32>,
 }
 
+pub trait ColliderConcrete {
+    fn concrete_collider_type() -> ColliderType;
+}
+
 pub trait Collider: downcast::Any {
     fn test_collision(&self, other: &dyn Collider) -> Option<CollisionInfo>;
     fn aabb(&self, world_transform: &Transform) -> AABB;
@@ -59,10 +64,9 @@ pub trait Collider: downcast::Any {
 
 downcast::downcast!(dyn Collider);
 
-/// An octree where the leaves are bins of colliders.
-/// TODO: Dynamically resize leaves to optimize collision checks.
+// Spatial hashmap binning colliders per region.
 pub struct ColliderRegistry {
-    bins: HashMap</*region_pos*/ Vector3<i32>, Vec<ColliderId>>,
+    bins: HashMap</*region_pos*/ Vector3<i32>, Vec<(Entity, ColliderId)>>,
     colliders: HashMap<ColliderType, DynVec>,
     collider_vtables: HashMap<ColliderType, *const ()>,
 }
@@ -76,11 +80,7 @@ impl ColliderRegistry {
         }
     }
 
-    pub fn register_collider<C: Collider + 'static>(
-        &mut self,
-        entity: Entity,
-        collider: C,
-    ) -> ColliderId {
+    pub fn register_collider<C: Collider + 'static>(&mut self, collider: C) -> ColliderId {
         let collider_type = collider.collider_type();
 
         let collider_vtable_ptr = {
@@ -102,7 +102,7 @@ impl ColliderRegistry {
         assert!(
             self.collider_vtables
                 .insert(collider_type, collider_vtable_ptr)
-                .is_none(),
+                .map_or(true, |vtable| vtable == collider_vtable_ptr),
             "Two different implementations for same collider type."
         );
         return ColliderId {
@@ -112,6 +112,10 @@ impl ColliderRegistry {
     }
 
     pub fn update_entity_collider_positions(&mut self, ecs_world: &mut ECSWorld) {
+        // Clear all the bins and then populate each one with the colliders.
+        // This is trading off so we do O(2n) here so we don't do O(n^2) during collision
+        // detection. TODO: Benchmark and also don't clear entire bin each time and figure out how
+        // to selectively modify colliders.
         self.bins.clear();
         for (entity, (transform, colliders)) in ecs_world
             .query_mut::<Without<(&Transform, &Colliders), &EntityParent>>()
@@ -119,8 +123,18 @@ impl ColliderRegistry {
         {
             for collider_id in &colliders.colliders {
                 let aabb = self.get_collider_dyn(collider_id).aabb(transform);
-
-                //self.bins.entry().or_insert(Vec::new())
+                let region_min = VoxelChunks::position_to_region_pos(&aabb.min);
+                let region_max = VoxelChunks::position_to_region_pos(&aabb.max);
+                for region_x in region_min.x..=region_max.x {
+                    for region_y in region_min.y..=region_max.y {
+                        for region_z in region_min.z..=region_max.z {
+                            self.bins
+                                .entry(Vector3::new(region_x, region_y, region_z))
+                                .or_default()
+                                .push((entity, collider_id.clone()));
+                        }
+                    }
+                }
             }
         }
     }
@@ -146,9 +160,37 @@ impl ColliderRegistry {
         };
         dyn_ref
     }
+
+    pub fn get_collider<T: Collider + ColliderConcrete + 'static>(
+        &self,
+        collider_id: &ColliderId,
+    ) -> &T {
+        let collider = self
+            .colliders
+            .get(&collider_id.collider_type)
+            .unwrap()
+            .get_unchecked(collider_id.index)
+            .as_ptr() as *const T;
+        assert_eq!(collider_id.collider_type, T::concrete_collider_type());
+        return unsafe { &*collider };
+    }
+
+    pub fn get_collider_mut<T: Collider + ColliderConcrete + 'static>(
+        &mut self,
+        collider_id: &ColliderId,
+    ) -> &mut T {
+        let collider = self
+            .colliders
+            .get(&collider_id.collider_type)
+            .unwrap()
+            .get_unchecked(collider_id.index)
+            .as_ptr() as *mut T;
+        assert_eq!(collider_id.collider_type, T::concrete_collider_type());
+        return unsafe { &mut *collider };
+    }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
 pub struct ColliderId {
     pub collider_type: ColliderType,
     pub index: usize,
@@ -172,7 +214,7 @@ pub struct PhysicsWorld {
     last_timestep: Instant,
     update_time: Instant,
     settings: PhysicsSettings,
-    colliders: ColliderRegistry,
+    pub colliders: ColliderRegistry,
 }
 
 impl PhysicsWorld {
@@ -226,17 +268,47 @@ impl PhysicsWorld {
             rigid_body.update(timestep, transform);
         }
 
-        for (entity, (transform, rigid_body, colliders)) in ecs_world
-            .query::<Without<(&mut Transform, &mut RigidBody, &Colliders), &EntityParent>>()
-            .into_iter()
-        {
-            // Apply gravity.
-            rigid_body.apply_force(
-                ForceType::Force,
-                rigid_body.mass() * physics_world.settings.gravity,
-            );
+        physics_world
+            .colliders
+            .update_entity_collider_positions(&mut ecs_world);
 
-            rigid_body.update(timestep, transform);
+        for (_, bin) in physics_world.colliders.bins.iter() {
+            for (entity_a, collider_id_a) in bin {
+                for (entity_b, collider_id_b) in bin {
+                    if *entity_a == *entity_b {
+                        continue;
+                    }
+
+                    // TODO: Do collider triggers that don't require a rigid body.
+                    let Ok(mut rigid_body_a) = ecs_world.get::<&mut RigidBody>(*entity_a) else {
+                        continue;
+                    };
+                    let Ok(mut rigid_body_b) = ecs_world.get::<&mut RigidBody>(*entity_b) else {
+                        continue;
+                    };
+
+                    let collider_a = physics_world.colliders.get_collider_dyn(collider_id_a);
+                    let collider_b = physics_world.colliders.get_collider_dyn(collider_id_b);
+                    let Some(collision_info) = collider_a.test_collision(collider_b) else {
+                        continue;
+                    };
+
+                    // Momentum (p) = mass * velocity
+                    // COM applies here so:
+                    // m1*vi1 + m2*vi2 = m1*vf1 + m2*vf2
+                    // vf1 = m1*vi1 + m2*vi2 -
+                    let new_v1 =
+                        rigid_body_a.inv_mass() * rigid_body_b.mass() * rigid_body_b.velocity;
+                    let new_v2 =
+                        rigid_body_b.inv_mass() * rigid_body_a.mass() * rigid_body_a.velocity;
+                    rigid_body_a.velocity = new_v1;
+                    rigid_body_b.velocity = new_v2;
+
+                    // Depending on restitution, COE also applies.
+                    // KE = 1/2 * mass * velocity^2
+                    // 1/2*m1*vi1^2 + 1/2*m2*vi2^2 =  q
+                }
+            }
         }
 
         physics_world.last_timestep = physics_world.last_timestep + timestep;
@@ -262,7 +334,7 @@ impl Colliders {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash, serde::Serialize, serde::Deserialize, Debug)]
 pub enum ColliderType {
     Null,
     Capsule,

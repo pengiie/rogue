@@ -1,8 +1,11 @@
-use nalgebra::{Quaternion, Vector2, Vector3};
+use nalgebra::{Quaternion, Rotation3, UnitQuaternion, Vector2, Vector3};
 
 use crate::{
-    common::color::Color,
-    engine::debug::{DebugFlags, DebugPlane, DebugRenderer},
+    common::{aabb::AABB, color::Color},
+    engine::{
+        debug::{DebugFlags, DebugPlane, DebugRenderer},
+        physics::physics_world::ColliderConcrete,
+    },
 };
 
 use super::{
@@ -31,6 +34,12 @@ impl Default for PlaneCollider {
 
 impl PlaneCollider {}
 
+impl ColliderConcrete for PlaneCollider {
+    fn concrete_collider_type() -> ColliderType {
+        ColliderType::Plane
+    }
+}
+
 impl Collider for PlaneCollider {
     fn test_collision(&self, other: &dyn Collider) -> Option<CollisionInfo> {
         match other.collider_type() {
@@ -45,11 +54,18 @@ impl Collider for PlaneCollider {
         }
     }
 
-    fn aabb(&self, world_transform: &Transform) -> crate::common::aabb::AABB {
-        todo!()
+    fn aabb(&self, world_transform: &Transform) -> AABB {
+        let rot = UnitQuaternion::from_rotation_matrix(
+            &Rotation3::rotation_between(&Vector3::y(), &self.normal)
+                .unwrap_or(Rotation3::identity()),
+        );
+        let size_3 = Vector3::new(self.size.x, 0.0, self.size.y);
+        let min = self.center + rot * -size_3;
+        let max = self.center + rot * size_3;
+        return AABB::new_two_point(min, max);
     }
 
     fn collider_type(&self) -> super::physics_world::ColliderType {
-        todo!()
+        ColliderType::Plane
     }
 }

@@ -16,7 +16,7 @@ use crate::{
             asset::{AssetHandle, AssetPath, Assets},
             repr::{
                 editor_settings::{EditorProjectAsset, EditorSessionAsset, EditorSettingsAsset},
-                world::voxel::VoxelModelAnyAsset,
+                voxel::any::VoxelModelAnyAsset,
             },
         },
         editor::editor::Editor,

@@ -12,6 +12,8 @@ public static const uint VOXEL_MODEL_SCHEMA_FLAT = 2;
 // Relates to consts::voxel::MODEL_THC_COMPRESSED_SCHEMA.
 public static const uint VOXEL_MODEL_SCHEMA_THC = 3;
 public static const uint VOXEL_MODEL_SCHEMA_THC_COMPRESSED = 4;
+public static const uint VOXEL_MODEL_SCHEMA_SFT = 5;
+public static const uint VOXEL_MODEL_SCHEMA_SFT_COMPRESSED = 6;
 
 public static const uint VOXEL_ATTACHMENT_MAX_ID = 3;
 public static const uint VOXEL_ATTACHMENT_COUNT = VOXEL_ATTACHMENT_MAX_ID + 1;

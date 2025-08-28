@@ -347,6 +347,8 @@ pub struct VulkanSwapchain {
     ctx_ref: Arc<VulkanContextInner>,
     pub swapchain: ash::vk::SwapchainKHR,
     pub create_info: ash::vk::SwapchainCreateInfoKHR<'static>,
+    // TODO: Store sempahore per image here instead of being based on frames in flight, so an image
+    // being presented in signaled twice before its done. Vulkan validation tells us this.
     swapchain_images: Vec<ResourceId<Image>>,
 }
 
@@ -544,7 +546,7 @@ impl VulkanDevice {
             );
 
             // Takes the highest scored device.
-            let (_high_score, picked_device_index) = scored_devices.first().unwrap();
+            let (picked_device_index, _high_score) = scored_devices.first().unwrap();
             devices.swap_remove(*picked_device_index)
         };
 

@@ -1,8 +1,11 @@
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
 use crate::{
-    common::color::Color,
-    engine::debug::{DebugCapsule, DebugFlags, DebugRenderer},
+    common::{aabb::AABB, color::Color},
+    engine::{
+        debug::{DebugCapsule, DebugFlags, DebugRenderer},
+        physics::physics_world::{Collider, ColliderConcrete, ColliderType},
+    },
 };
 
 use super::transform::Transform;
@@ -36,5 +39,30 @@ impl CapsuleCollider {
             alpha: 0.3,
             flags: DebugFlags::SHADING,
         });
+    }
+}
+
+impl ColliderConcrete for CapsuleCollider {
+    fn concrete_collider_type() -> ColliderType {
+        ColliderType::Capsule
+    }
+}
+
+impl Collider for CapsuleCollider {
+    fn test_collision(&self, other: &dyn Collider) -> Option<super::physics_world::CollisionInfo> {
+        todo!()
+    }
+
+    fn aabb(&self, world_transform: &Transform) -> crate::common::aabb::AABB {
+        let up = Vector3::y() * self.height;
+        let forward = Vector3::z() * self.radius;
+        let right = Vector3::x() * self.radius;
+        let min = self.center + self.orientation * (-up - forward - right);
+        let max = self.center + self.orientation * (up + forward + right);
+        return AABB::new_two_point(min, max);
+    }
+
+    fn collider_type(&self) -> super::physics_world::ColliderType {
+        ColliderType::Capsule
     }
 }

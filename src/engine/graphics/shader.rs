@@ -16,7 +16,6 @@ use nalgebra::{Vector, Vector3};
 use pollster::FutureExt;
 use rogue_macros::Resource;
 use slang::{Downcast, OptionsBuilder, SessionDescBuilder, TargetDescBuilder};
-use wgpu::ErrorFilter;
 
 use crate::{
     consts,
@@ -296,7 +295,11 @@ impl ShaderCompiler {
                 Ok(e.into_mut())
             }
             Entry::Vacant(e) => {
-                let search_path = std::ffi::CString::new("assets/shaders").unwrap();
+                let search_paths = [std::ffi::CString::new("assets/shaders").unwrap()];
+                let search_path_ptrs = search_paths
+                    .iter()
+                    .map(|path| path.as_ptr())
+                    .collect::<Vec<_>>();
 
                 let targets = [*TargetDescBuilder::new().format(options.target.into())];
 
@@ -318,7 +321,7 @@ impl ShaderCompiler {
                     .create_session(
                         &SessionDescBuilder::new()
                             .targets(&targets)
-                            .search_paths(&[search_path.as_ptr()])
+                            .search_paths(&search_path_ptrs)
                             .options(&slang_opts),
                     )
                     .expect("Failed to create slang session");
@@ -853,7 +856,12 @@ impl ShaderCompiler {
                     set_bindings.push(bindings);
                 }
             }
-            _ => unreachable!(),
+            slang::TypeKind::ConstantBuffer => panic!("New code must have accidentally introducted a global non-opque variant such as a uint, maybe meant to add \"static\"?"),
+            type_kind => unreachable!(
+                "Somehow got {:?} with name {:?}",
+                type_kind,
+                global_var_layout.semantic_name().unwrap_or("unknown")
+            ),
         }
 
         set_bindings

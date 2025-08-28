@@ -30,9 +30,10 @@ use crate::{
 use super::{
     attachment::{Attachment, AttachmentId, PTMaterial},
     flat::VoxelModelFlat,
+    voxel_allocator::VoxelDataAllocator,
     voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
-    voxel_world::{VoxelDataAllocator, VoxelModelFlatEdit},
+    voxel_world::VoxelModelFlatEdit,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -40,6 +41,8 @@ pub enum VoxelModelType {
     Flat,
     THC,
     THCCompressed,
+    SFT,
+    SFTCompressed,
 }
 
 impl AsRef<str> for VoxelModelType {
@@ -48,6 +51,8 @@ impl AsRef<str> for VoxelModelType {
             VoxelModelType::Flat => "Flat",
             VoxelModelType::THC => "THC",
             VoxelModelType::THCCompressed => "THC (Compressed)",
+            VoxelModelType::SFT => "SFT",
+            VoxelModelType::SFTCompressed => "SFT (Compressed)",
         }
     }
 }

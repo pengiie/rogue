@@ -15,6 +15,7 @@ use crate::{
         color::Color,
         morton::{
             self, morton_decode, morton_encode, morton_traversal_octree, morton_traversal_thc,
+            next_power_of_4,
         },
         ray::Ray,
     },
@@ -35,7 +36,7 @@ use super::{
         VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
         VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
-    voxel_world::{VoxelDataAllocation, VoxelDataAllocator},
+    voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
 #[derive(Clone)]
@@ -736,14 +737,6 @@ impl THCAttachmentLookupNodeCompressed {
     }
 }
 
-pub fn next_power_of_4(x: u32) -> u32 {
-    let x = x.next_power_of_two();
-    if (x.trailing_zeros() % 2 == 0) {
-        return x;
-    }
-    return x << 1;
-}
-
 impl VoxelModelTHCCompressed {
     pub fn new_empty(length: u32) -> Self {
         assert_eq!(
@@ -968,7 +961,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
         }
 
         let mut attachment_lookup_indices =
-            vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+            vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT as usize];
         for (attachment, lookup_allocation) in &self.attachment_lookup_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;
@@ -976,7 +969,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
 
             attachment_lookup_indices[*attachment as usize] = lookup_allocation.ptr_gpu();
         }
-        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT as usize];
         for (attachment, raw_allocation) in &self.attachment_raw_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;

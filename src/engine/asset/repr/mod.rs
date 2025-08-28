@@ -4,6 +4,7 @@ pub mod components;
 pub mod editor_settings;
 pub mod image;
 pub mod settings;
+pub mod voxel;
 pub mod world;
 
 pub struct TextAsset {

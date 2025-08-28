@@ -16,7 +16,10 @@ use rogue_macros::Resource;
 use crate::{
     common::color::Color,
     consts,
-    engine::asset::{asset::AssetPath, repr::settings::SettingsAsset},
+    engine::{
+        asset::{asset::AssetPath, repr::settings::SettingsAsset},
+        physics::physics_world::{ColliderId, PhysicsWorld},
+    },
     session::Session,
     settings::Settings,
 };
@@ -80,7 +83,7 @@ pub struct EditorUIState {
     pub stats: EditorUIStatistics,
 
     pub right_pane_state: EditorTab,
-    pub selected_collider: Option<(ColliderType, u32)>,
+    pub selected_collider: Option<ColliderId>,
 }
 
 pub struct EditorUIStatistics {
@@ -329,8 +332,9 @@ impl UI {
         mut egui: ResMut<Egui>,
         mut ui: ResMut<UI>,
         mut voxel_world: ResMut<VoxelWorld>,
-        voxel_world_gpu: Res<VoxelWorldGpu>,
+        mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
+        mut physics_world: ResMut<PhysicsWorld>,
         settings: Res<Settings>,
         mut ecs_world: ResMut<ECSWorld>,
         mut editor: ResMut<Editor>,
@@ -346,26 +350,14 @@ impl UI {
 
         let pixels_per_point = egui.pixels_per_point();
         egui.resolve_ui(&mut window, |ctx, window| {
-            let mut total_allocation_str = String::new();
-            //let al = voxel_world_gpu
-            //    .voxel_allocator()
-            //    .map_or(0, |alloc| alloc.total_allocated_size());
-            //if al >= 2u64.pow(30) {
-            //    total_allocation_str = format!("{:.3}GiB", al as f32 / 2f32.powf(30.0));
-            //} else if al >= 2u64.pow(20) {
-            //    total_allocation_str = format!("{:.3}MiB", al as f32 / 2f32.powf(20.0));
-            //} else if al >= 2u64.pow(10) {
-            //    total_allocation_str = format!("{:.3}KiB", al as f32 / 2f32.powf(10.0));
-            //} else {
-            //    total_allocation_str = format!("{:.3}B", al);
-            //}
-
             ui.content_padding = Vector4::zeros();
             if editor.is_active {
                 ui.content_padding = editor::ui::egui_editor_ui(
                     ctx,
                     &mut ecs_world,
                     voxel_world,
+                    &mut voxel_world_gpu,
+                    &mut physics_world,
                     &mut editor,
                     editor_ui_state,
                     &mut session,
@@ -384,7 +376,6 @@ impl UI {
                         ui.label(egui::RichText::new("Performance:").size(16.0));
                         ui.label(format!("FPS: {}", debug_state.fps));
                         ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
-                        ui.label(format!("Voxel data allocation: {}", total_allocation_str));
                     });
             }
         });

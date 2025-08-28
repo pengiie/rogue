@@ -9,11 +9,15 @@ use crate::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
     },
-    engine::asset::{asset::AssetPath, repr::world::voxel::VoxelModelAnyAsset},
+    engine::asset::{asset::AssetPath, repr::voxel::any::VoxelModelAnyAsset},
 };
 
 use super::{
     flat::{VoxelModelFlat, VoxelModelFlatGpu},
+    sft::VoxelModelSFT,
+    sft_compressed::VoxelModelSFTCompressed,
+    sft_compressed_gpu::VoxelModelSFTCompressedGpu,
+    sft_gpu::VoxelModelSFTGpu,
     thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
     voxel::{
         VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
@@ -96,6 +100,7 @@ impl VoxelModelRegistry {
         self.voxel_model_info[voxel_model_id.id as usize].asset_path = asset_path;
     }
 
+    // TODO: Add more methods to the Impl so we don't have like 50 match statements.
     pub fn register_renderable_voxel_model_any(
         &mut self,
         name: impl ToString,
@@ -105,16 +110,22 @@ impl VoxelModelRegistry {
             VoxelModelType::Flat => Box::new(VoxelModelFlatGpu::new()),
             VoxelModelType::THC => Box::new(VoxelModelTHCGpu::new()),
             VoxelModelType::THCCompressed => Box::new(VoxelModelTHCCompressedGpu::new()),
+            VoxelModelType::SFT => Box::new(VoxelModelSFTGpu::new()),
+            VoxelModelType::SFTCompressed => Box::new(VoxelModelSFTCompressedGpu::new()),
         };
         let model_type_info = match voxel_model_any.model_type {
             VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlat>(),
             VoxelModelType::THC => TypeInfo::new::<VoxelModelTHC>(),
             VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressed>(),
+            VoxelModelType::SFT => TypeInfo::new::<VoxelModelSFT>(),
+            VoxelModelType::SFTCompressed => TypeInfo::new::<VoxelModelSFTCompressed>(),
         };
         let gpu_type_info = match voxel_model_any.model_type {
             VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlatGpu>(),
             VoxelModelType::THC => TypeInfo::new::<VoxelModelTHCGpu>(),
             VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressedGpu>(),
+            VoxelModelType::SFT => TypeInfo::new::<VoxelModelSFTGpu>(),
+            VoxelModelType::SFTCompressed => TypeInfo::new::<VoxelModelSFTCompressedGpu>(),
         };
         let id = self.next_id();
 
@@ -172,6 +183,25 @@ impl VoxelModelRegistry {
                         .unwrap(),
                     *voxel_model_gpu
                         .downcast::<VoxelModelTHCCompressedGpu>()
+                        .unwrap(),
+                ),
+            ),
+            VoxelModelType::SFT => archetype.insert(
+                id.id,
+                (
+                    *voxel_model_any.model.downcast::<VoxelModelSFT>().unwrap(),
+                    *voxel_model_gpu.downcast::<VoxelModelSFTGpu>().unwrap(),
+                ),
+            ),
+            VoxelModelType::SFTCompressed => archetype.insert(
+                id.id,
+                (
+                    *voxel_model_any
+                        .model
+                        .downcast::<VoxelModelSFTCompressed>()
+                        .unwrap(),
+                    *voxel_model_gpu
+                        .downcast::<VoxelModelSFTCompressedGpu>()
                         .unwrap(),
                 ),
             ),

@@ -49,6 +49,14 @@ pub fn morton_traversal_thc(mut morton: u64, height: u32) -> u64 {
     reverse
 }
 
+pub fn next_power_of_4(x: u32) -> u32 {
+    let x = x.next_power_of_two();
+    if (x.trailing_zeros() % 2 == 0) {
+        return x;
+    }
+    return x << 1;
+}
+
 mod tests {
     use crate::common::morton::morton_traversal_octree;
 

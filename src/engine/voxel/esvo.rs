@@ -958,7 +958,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
         }
 
         let mut attachment_lookup_indices =
-            vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+            vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT as usize];
         for (attachment, lookup_allocation) in &self.attachment_lookup_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;
@@ -967,7 +967,7 @@ impl VoxelModelGpuImpl for VoxelModelESVOGpu {
             attachment_lookup_indices[*attachment as usize] =
                 lookup_allocation.start_index_stride_dword() as u32
         }
-        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+        let mut attachment_raw_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT];
         for (attachment, raw_allocation) in &self.attachment_raw_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;

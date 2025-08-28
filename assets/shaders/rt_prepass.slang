@@ -23,22 +23,6 @@ void main(uint3 id: SV_DispatchThreadID) {
   }
   random::init(uint3(coord.xy, u_frame.frame_info.time_ms));
 
-  let center = (float2) dimensions / 2.0;
-  var over = false;
-  if (abs(coord.x - center.x) <= 1 && abs(coord.y - center.y) <= 10) {
-    voxel::testglobal = true;
-    over = true;
-  }
-  if (abs(coord.x - center.x) <= 10 && abs(coord.y - center.y) <= 1) {
-    voxel::testglobal = true;
-    over = true;
-  }
-  if (over) {
-    u_shader.backbuffer_depth.Store(coord.xy, 0.0);
-    u_shader.backbuffer.Store(coord.xy, float4(float3(0.2, 0.2, 0.2), 1.0));
-    return;
-  }
-
   let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
   var out_color = sample_sky(ray);
   var depth = u_frame.world_info.camera.far_plane;
@@ -49,6 +33,8 @@ void main(uint3 id: SV_DispatchThreadID) {
     out_color = ray_terrain.color;
   }
 
+  // If the hit entity is closer than the hit terrain, use the
+  // entities hit.
   let ray_entity = voxel::EntityData.trace(ray);
   if (ray_entity.did_hit) {
     if (ray_entity.depth_t < depth) {

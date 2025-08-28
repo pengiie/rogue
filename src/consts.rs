@@ -21,6 +21,8 @@ pub mod voxel {
     pub const MODEL_FLAT_SCHEMA: VoxelModelSchema = 2;
     pub const MODEL_THC_SCHEMA: VoxelModelSchema = 3;
     pub const MODEL_THC_COMPRESSED_SCHEMA: VoxelModelSchema = 4;
+    pub const MODEL_SFT_SCHEMA: VoxelModelSchema = 5;
+    pub const MODEL_SFT_COMPRESSED_SCHEMA: VoxelModelSchema = 6;
 
     pub mod attachment {
         use crate::engine::voxel::attachment::AttachmentId;
@@ -42,7 +44,11 @@ pub mod gfx {
 pub mod io {
     pub const EDITOR_SETTINGS_FILE: &str = "editor::editor_settings::json";
     pub const SETTINGS_FILE: &str = "settings::json";
+
     pub const REGION_FILE_HEADER: &str = "vcr ";
+    pub mod header {
+        pub const SFT: &str = "SFT ";
+    }
 }
 
 pub mod actions {

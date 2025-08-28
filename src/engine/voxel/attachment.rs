@@ -23,6 +23,7 @@ impl Attachment {
     pub const EMMISIVE_ID: AttachmentId = 2;
     pub const BMAT_ID: AttachmentId = 3;
     pub const MAX_ATTACHMENT_ID: AttachmentId = 3;
+    pub const MAX_ATTACHMENT_COUNT: AttachmentId = Self::MAX_ATTACHMENT_ID + 1;
 
     pub const PTMATERIAL: Attachment =
         Attachment::new(Attachment::PTMATERIAL_ID, "pathtracing_material", 1);
@@ -48,6 +49,10 @@ impl Attachment {
 
     pub fn size(&self) -> u32 {
         self.size
+    }
+
+    pub fn byte_size(&self) -> u32 {
+        self.size * 4
     }
 
     pub fn id(&self) -> AttachmentId {
@@ -191,13 +196,13 @@ impl AttachmentInfoMap {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AttachmentMap<T> {
-    map: [Option<T>; Attachment::MAX_ATTACHMENT_ID as usize],
+    map: [Option<T>; Attachment::MAX_ATTACHMENT_COUNT as usize],
 }
 
 impl<T> AttachmentMap<T> {
     pub fn new() -> Self {
         Self {
-            map: [const { None }; Attachment::MAX_ATTACHMENT_ID as usize],
+            map: [const { None }; Attachment::MAX_ATTACHMENT_COUNT as usize],
         }
     }
 
@@ -236,6 +241,17 @@ impl<T> AttachmentMap<T> {
     // pub fn name(&self, id: AttachmentId) -> &str {
     //     self.get_attachment(id).name()
     // }
+    //
+    pub fn count(&self) -> usize {
+        self.map.iter().filter(|a| a.is_some()).count()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (AttachmentId, T)> {
+        self.map
+            .into_iter()
+            .enumerate()
+            .filter_map(|(id, a)| a.map(|a| (id as AttachmentId, a)))
+    }
 
     pub fn iter(&self) -> impl Iterator<Item = (AttachmentId, &T)> {
         self.map

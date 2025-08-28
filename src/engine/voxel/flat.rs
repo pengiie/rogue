@@ -28,7 +28,7 @@ use super::{
         VoxelData, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
-    voxel_world::{VoxelDataAllocation, VoxelDataAllocator},
+    voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -771,7 +771,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
         }
 
         let mut attachment_presence_indices =
-            vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+            vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT as usize];
         for (attachment, allocation) in &self.voxel_attachment_presence_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;
@@ -780,8 +780,7 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             attachment_presence_indices[*attachment as usize] = allocation.ptr_gpu();
         }
 
-        let mut attachment_data_indices =
-            vec![u32::MAX; Attachment::MAX_ATTACHMENT_ID as usize + 1];
+        let mut attachment_data_indices = vec![u32::MAX; Attachment::MAX_ATTACHMENT_COUNT as usize];
         for (attachment, allocation) in &self.voxel_attachment_data_allocations {
             if *attachment > Attachment::MAX_ATTACHMENT_ID {
                 continue;

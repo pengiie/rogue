@@ -26,7 +26,7 @@ use crate::{
 
 use super::{
     components::{CameraAsset, TransformAsset},
-    world::voxel::VoxelModelAnyAsset,
+    voxel::any::VoxelModelAnyAsset,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]

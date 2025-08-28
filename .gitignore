@@ -1,9 +1,13 @@
 **/target
 /dist
 /.idea
+/.vscode
 /.cargo
 
+.project_data_copy/
 /rogue_user_data
 
+# Random profiling things
 *.zst
+profile.json.gz
 profile.json

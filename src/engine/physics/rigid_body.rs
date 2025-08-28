@@ -26,6 +26,8 @@ pub struct RigidBody {
 
     mass: f32,
     inv_mass: f32,
+    // Where 1 is fully elastic and 0 is non-elastic.
+    restitution: f32,
 }
 
 impl Default for RigidBody {
@@ -44,6 +46,7 @@ impl RigidBody {
 
             mass,
             inv_mass: 1.0 / mass,
+            restitution: 0.0,
         }
     }
 
@@ -54,6 +57,10 @@ impl RigidBody {
 
     pub fn mass(&self) -> f32 {
         self.mass
+    }
+
+    pub fn inv_mass(&self) -> f32 {
+        self.inv_mass
     }
 
     pub fn apply_force(&mut self, force_type: ForceType, force: Vector3<f32>) {
