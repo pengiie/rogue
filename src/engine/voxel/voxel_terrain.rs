@@ -294,7 +294,7 @@ impl VoxelChunks {
             edited_chunks: HashSet::new(),
             waiting_save_handles: HashSet::new(),
 
-            queue_timer: Timer::new(Duration::from_millis(5)),
+            queue_timer: Timer::new(Duration::from_millis(1)),
             waiting_io_regions: HashMap::new(),
             waiting_io_region_chunks: HashMap::new(),
             waiting_io_chunks: HashMap::new(),
@@ -748,8 +748,10 @@ impl VoxelChunks {
 
         // Try enqueue any not visited chunks if the current queue isn't full.
         if self.queue_timer.try_complete() {
-            if let Some(next_chunk) = self.chunk_load_iter.next_chunk() {
-                self.ensure_chunk_loaded(next_chunk, assets, session);
+            for _ in 0..32 {
+                if let Some(next_chunk) = self.chunk_load_iter.next_chunk() {
+                    self.ensure_chunk_loaded(next_chunk, assets, session);
+                }
             }
         }
 
@@ -806,6 +808,24 @@ impl ChunkLoadIter {
         if self.max_radius < self.curr_radius {
             self.curr_radius = self.max_radius;
         }
+    }
+
+    pub fn max_radius(&self) -> u32 {
+        self.max_radius
+    }
+
+    pub fn curr_radius(&self) -> u32 {
+        self.curr_radius
+    }
+
+    pub fn curr_index(&self) -> u32 {
+        self.curr_index
+    }
+
+    pub fn max_index(&self) -> u32 {
+        let curr_diameter = (self.curr_radius + 1) * 2;
+        let curr_area = curr_diameter.pow(2);
+        return curr_area * 6;
     }
 
     pub fn update_anchor(&mut self, new_chunk_anchor: Vector3<i32>) {

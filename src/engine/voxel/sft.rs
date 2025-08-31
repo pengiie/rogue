@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, u64};
 
 use nalgebra::Vector3;
 
@@ -9,7 +9,7 @@ use crate::{
         ray::Ray,
     },
     consts,
-    engine::graphics::device::GfxDevice,
+    engine::{graphics::device::GfxDevice, voxel::attachment::BuiltInMaterial},
 };
 
 use super::{
@@ -30,7 +30,7 @@ pub struct VoxelModelSFTNode {
     pub child_mask: u64,
     pub leaf_mask: u64,
     // Any internal children nodes.
-    pub children: Vec<VoxelModelSFTNode>,
+    pub children: Vec<Box<VoxelModelSFTNode>>,
     // AttachmentMap doesn't lazily allcoate so handle that here.
     pub attachment_data: Option<
         Box<
@@ -49,6 +49,17 @@ impl VoxelModelSFTNode {
             leaf_mask: 0,
             children: Vec::new(),
             attachment_data: None,
+        }
+    }
+
+    pub fn new_filled(bmat_compressed: u32) -> Self {
+        let mut attachment_data = AttachmentMap::new();
+        attachment_data.insert(Attachment::BMAT_ID, (u64::MAX, vec![bmat_compressed; 64]));
+        Self {
+            child_mask: u64::MAX,
+            leaf_mask: u64::MAX,
+            children: Vec::new(),
+            attachment_data: Some(Box::new(attachment_data)),
         }
     }
 
@@ -82,9 +93,9 @@ impl VoxelModelSFTNode {
         }
 
         for i in 0..attachment_size {
-            attachment_data.insert(child_offset, data[i]);
+            attachment_data.insert(child_offset + i, data[i]);
         }
-        *attachment_mask |= (1 << child_idx);
+        *attachment_mask |= child_bit;
     }
 }
 
@@ -198,21 +209,8 @@ impl VoxelModelImpl for VoxelModelSFT {
             } else {
                 let child_index = morton::morton_encode(curr_local_grid.map(|x| x as u32));
                 let node_size = quarter_sl >> (curr_height * 2);
-
-                if let Some(child) = &curr_node.children.get(child_index as usize) {
-                    stack.push(curr_node);
-                    curr_node = child;
-                    curr_height += 1;
-                    curr_anchor =
-                        curr_anchor.zip_map(&curr_local_grid, |x, y| x + y as u32 * node_size);
-
-                    let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
-                        (x.floor() as u32).clamp(y, y + node_size - 1)
-                    });
-                    curr_local_grid = global_grid_pos
-                        .map(|x| ((x >> ((height - curr_height) * 2)) & 0b11) as i32);
-                    continue;
-                } else {
+                let is_child_present = (curr_node.child_mask & (1 << child_index)) > 0;
+                if is_child_present {
                     let is_leaf_present = (curr_node.leaf_mask & (1 << child_index)) > 0;
                     if is_leaf_present {
                         curr_anchor =
@@ -228,6 +226,25 @@ impl VoxelModelImpl for VoxelModelSFT {
                             local_position: global_grid_pos,
                             depth_t,
                         });
+                    } else {
+                        let child_offset = ((curr_node.child_mask & !curr_node.leaf_mask)
+                            & ((1 << child_index) - 1))
+                            .count_ones();
+                        let Some(child) = curr_node.children.get(child_offset as usize) else {
+                            panic!();
+                        };
+                        stack.push(curr_node);
+                        curr_node = child;
+                        curr_height += 1;
+                        curr_anchor =
+                            curr_anchor.zip_map(&curr_local_grid, |x, y| x + y as u32 * node_size);
+
+                        let global_grid_pos = curr_ray.origin.zip_map(&curr_anchor, |x, y| {
+                            (x.floor() as u32).clamp(y, y + node_size - 1)
+                        });
+                        curr_local_grid = global_grid_pos
+                            .map(|x| ((x >> ((height - curr_height) * 2)) & 0b11) as i32);
+                        continue;
                     }
                 }
             }
@@ -278,18 +295,39 @@ impl VoxelModelImpl for VoxelModelSFT {
                         let child_bit = 1 << child_index;
                         let exists_as_leaf = (child_bit & curr_node.leaf_mask) > 0;
                         if exists_as_leaf {
-                            todo!("Restructure into a node and then set all attachments as what this leaf was previously, could be better to keep track of these while editing then resolve so we don't do it unnecessarily.");
+                            // Remove leaf attachment and restructure into a child of this node.
+                            let (attachment_mask, attachment_data) = curr_node
+                                .attachment_data
+                                .as_mut()
+                                .unwrap()
+                                .get_mut(Attachment::BMAT_ID)
+                                .unwrap();
+                            let data_offset =
+                                (*attachment_mask & (child_bit - 1)).count_ones() as usize;
+                            let bmat_compressed = attachment_data.remove(data_offset);
+                            let mut new_node = VoxelModelSFTNode::new_filled(bmat_compressed);
+
+                            curr_node.leaf_mask &= !child_bit;
+                            *attachment_mask &= !child_bit;
+
+                            let non_leaf_child_mask = curr_node.child_mask & !curr_node.leaf_mask;
+                            let child_offset =
+                                ((child_bit - 1) & non_leaf_child_mask).count_ones() as usize;
+                            curr_node.children.insert(child_offset, Box::new(new_node));
+                            curr_node = &mut curr_node.children[child_offset];
                             continue;
                         }
 
                         let exists_as_internal = (child_bit & curr_node.child_mask) > 0;
                         // Offset into the children array where this child resides.
+                        let non_leaf_child_mask = curr_node.child_mask & !curr_node.leaf_mask;
                         let child_offset =
-                            ((child_bit - 1) & curr_node.child_mask).count_ones() as usize;
+                            ((child_bit - 1) & non_leaf_child_mask).count_ones() as usize;
                         if !exists_as_internal {
+                            curr_node.child_mask |= child_bit;
                             curr_node
                                 .children
-                                .insert(child_offset, VoxelModelSFTNode::new_empty());
+                                .insert(child_offset, Box::new(VoxelModelSFTNode::new_empty()));
                         }
                         curr_node = &mut curr_node.children[child_offset];
                     }
@@ -318,9 +356,21 @@ impl VoxelModelImpl for VoxelModelSFT {
             // If voxel exists but there is no attachment data, remove the voxel.
             let dst_child_bit = 1 << dst_child_index;
             if count == 0 {
+                // We need to actually remove the attachment data as well
+                dst_node.child_mask &= !dst_child_bit;
                 dst_node.leaf_mask &= !dst_child_bit;
+                if let Some(attachment_data) = &mut dst_node.attachment_data {
+                    for (attachment_id, (attachment_mask, data)) in attachment_data.iter_mut() {
+                        if (*attachment_mask & dst_child_bit) > 0 {
+                            let data_offset = (*attachment_mask & (dst_child_bit - 1)).count_ones();
+                            *attachment_mask &= !dst_child_bit;
+                            data.remove(data_offset as usize);
+                        }
+                    }
+                }
             } else {
-                dst_node.leaf_mask |= (1 << dst_child_index);
+                dst_node.child_mask |= dst_child_bit;
+                dst_node.leaf_mask |= dst_child_bit;
             }
         }
     }
@@ -360,27 +410,33 @@ impl From<&VoxelModelSFTCompressed> for VoxelModelSFT {
                 curr_sft_node.attachment_data =
                     Some(sft_compressed.collect_attachment_data(curr_node_index));
             }
-            let child_node_mask = curr_sft_node.child_mask & !curr_sft_node.leaf_mask;
+            let non_leaf_child_mask = curr_sft_node.child_mask & !curr_sft_node.leaf_mask;
             curr_sft_node
                 .children
-                .reserve_exact(child_node_mask.count_ones() as usize);
+                .reserve_exact(non_leaf_child_mask.count_ones() as usize);
 
             for i in 0..64 {
                 let child_bit = 1 << i;
-                let is_child = (child_bit & child_node_mask) > 0;
-                if !is_child {
+                let is_non_leaf_child = (child_bit & non_leaf_child_mask) > 0;
+                if !is_non_leaf_child {
                     continue;
                 }
 
-                let child_offset = ((child_bit - 1) & child_node_mask).count_ones() as usize;
+                let child_offset = ((child_bit - 1) & non_leaf_child_mask).count_ones() as usize;
                 let child_ptr = compressed_node.child_ptr as usize + child_offset;
 
-                curr_sft_node.children.push(VoxelModelSFTNode::new_empty());
+                curr_sft_node
+                    .children
+                    .push(Box::new(VoxelModelSFTNode::new_empty()));
                 to_process.push((
                     child_ptr,
                     std::ptr::from_mut(&mut curr_sft_node.children.last_mut().unwrap()),
                 ));
             }
+            assert_eq!(
+                curr_sft_node.children.len(),
+                non_leaf_child_mask.count_ones() as usize
+            );
         }
 
         if sft.attachment_map.contains(Attachment::BMAT_ID) {

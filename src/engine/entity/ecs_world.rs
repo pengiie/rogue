@@ -145,8 +145,10 @@ impl ECSWorld {
             let Ok(parent_transform) = self.world.get::<&Transform>(parent.parent) else {
                 break;
             };
-            curr_transform.position =
-                parent_transform.rotation * curr_transform.position + parent_transform.position;
+            curr_transform.position = parent_transform
+                .scale
+                .component_mul(&(parent_transform.rotation * curr_transform.position))
+                + parent_transform.position;
             curr_transform.rotation = parent_transform.rotation * curr_transform.rotation;
             curr_transform.scale = curr_transform.scale.component_mul(&parent_transform.scale);
             curr_parent = self.world.get::<&EntityParent>(parent.parent);

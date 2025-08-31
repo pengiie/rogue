@@ -226,8 +226,10 @@ impl VoxelWorld {
             todo!("Check for chunk load then process edit.");
         }
 
+        // Check if the thread pool for chunk voxel edits has a thread available.
         if self.chunk_edit_handler_count < self.chunk_edit_handler_pool.current_num_threads() as u32
         {
+            // Get the next async edit we need to perform.
             if let Some(next_async_edit) = self.async_edit_queue.pop_front() {
                 let finish_sender = self.finished_chunk_edit_send.clone();
                 self.chunk_edit_handler_count += 1;
@@ -436,6 +438,7 @@ impl VoxelWorld {
         chunk_edit: VoxelModelEdit,
     ) {
         let chunk = chunks.get_chunk_node(world_chunk_pos);
+        // Check if the chunk is loaded already.
         let Some(chunk) = chunk else {
             edit_queue.push_back(QueuedVoxelEdit {
                 chunk_pos: world_chunk_pos,
@@ -449,11 +452,7 @@ impl VoxelWorld {
                 let mut node = chunks
                     .get_or_create_chunk_node_mut(world_chunk_pos)
                     .expect("Region should be loaded by now");
-                let spans_chunk = chunk_edit
-                    .data
-                    .side_length()
-                    .iter()
-                    .all(|x| *x == consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
+
                 let mut new_flat = VoxelModelFlat::new_empty(Vector3::new(
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,

@@ -9,12 +9,12 @@ pub mod voxel {
     pub const TERRAIN_REGION_TREE_HEIGHT: u32 = TERRAIN_REGION_CHUNK_LENGTH.trailing_zeros();
 
     // This MUST be a multiple of 4 to be best compatible with all voxel models
-    pub const TERRAIN_CHUNK_METER_LENGTH: f32 = 4.0;
+    pub const TERRAIN_CHUNK_METER_LENGTH: f32 = 8.0;
     pub const TERRAIN_CHUNK_VOXEL_LENGTH: u32 =
         (TERRAIN_CHUNK_METER_LENGTH * VOXELS_PER_METER as f32) as u32;
     pub const TERRAIN_CHUNK_VOXEL_VOLUME: u32 = TERRAIN_CHUNK_VOXEL_LENGTH.pow(3);
 
-    pub const VOXELS_PER_METER: u32 = 16;
+    pub const VOXELS_PER_METER: u32 = 8;
     pub const VOXEL_METER_LENGTH: f32 = 1.0 / VOXELS_PER_METER as f32;
 
     pub const MODEL_ESVO_SCHEMA: VoxelModelSchema = 1;
@@ -28,6 +28,11 @@ pub mod voxel {
         use crate::engine::voxel::attachment::AttachmentId;
 
         pub const MAX_ID: AttachmentId = 2;
+
+        pub mod bt {
+            pub const GRASS_ID: u16 = 0;
+            pub const DIRT_ID: u16 = 1;
+        }
     }
 }
 

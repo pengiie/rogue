@@ -10,6 +10,7 @@ use crate::{
         self,
         voxel::{VOXELS_PER_METER, VOXEL_METER_LENGTH},
     },
+    engine::voxel::attachment::BuiltInMaterial,
 };
 
 use super::{
@@ -33,14 +34,16 @@ impl ChunkGenerator {
 
     pub fn generate_chunk(&self, voxel_world: &mut VoxelWorld, chunk_position: Vector3<i32>) {
         let mut used_attachments = AttachmentMap::new();
-        used_attachments.insert(Attachment::PTMATERIAL_ID, Attachment::PTMATERIAL);
+        used_attachments.insert(Attachment::BMAT_ID, Attachment::BMAT);
 
         let color_noise = noise::Fbm::<noise::Perlin>::new(0).set_octaves(3);
+        let height_freq = 1.0 / (32.0 * consts::voxel::VOXELS_PER_METER as f64);
         let ground_height_noise = noise::Fbm::<noise::Perlin>::new(0)
             .set_octaves(4)
-            .set_frequency(VOXEL_METER_LENGTH as f64 / 16.0);
+            .set_frequency(height_freq);
+        let structure_freq = 1.0 / (128.0 * consts::voxel::VOXELS_PER_METER as f64);
         let structure_nosie = noise::Fbm::<noise::Perlin>::new(0)
-            .set_frequency(VOXEL_METER_LENGTH as f64 / 24.0)
+            .set_frequency(structure_freq)
             .set_octaves(4)
             .set_persistence(0.8);
         let perlin = self.perlin.clone();
@@ -56,20 +59,19 @@ impl ChunkGenerator {
                 attachment_map: used_attachments,
             },
             move |mut voxel, world_pos, local_pos| {
-                let freq = 24.0;
-                let x = world_pos.x as f64;
-                let y = world_pos.y as f64;
-                let z = world_pos.z as f64;
-                let nx = world_pos.x as f64 / freq;
-                let ny = world_pos.y as f64 / freq;
-                let nz = world_pos.z as f64 / freq;
+                let x = (world_pos.x - world_pos.x.rem_euclid(1)) as f64;
+                let y = (world_pos.y - world_pos.y.rem_euclid(1)) as f64;
+                let z = (world_pos.z - world_pos.z.rem_euclid(1)) as f64;
 
                 let mut density = structure_nosie.get([x, y, z]);
 
                 let height_noise = ground_height_noise.get([x, z]);
                 let height_range = 8.0 * VOXELS_PER_METER as f64;
+                let structure_noise = ground_height_noise.get([x, z]) * 0.5 + 0.3;
+                let structure_range = 40.0 * VOXELS_PER_METER as f64;
                 let base_ground = 0.0;
-                let ground_height = base_ground + height_noise * height_range;
+                let ground_height =
+                    base_ground + height_noise * height_range + structure_noise * structure_range;
                 let ground_bias = ((ground_height - y) / height_range);
                 density += ground_bias;
 
@@ -77,16 +79,13 @@ impl ChunkGenerator {
                     let r_var = color_noise.get([x / 7.0, y / 7.0, z / 7.0]) as f32;
                     let dirting = ((density - 0.1) * 2.0).clamp(0.0, 1.0) as f32;
 
-                    let grass = Color::new_srgb(0.5 + 0.2 * r_var, 0.9, 0.05);
-                    let dirt = Color::new_srgb(0.17, 0.05 + r_var * 0.03, 0.01 + r_var * 0.02);
+                    let material = BuiltInMaterial::new(if dirting < 0.5 {
+                        consts::voxel::attachment::bt::GRASS_ID
+                    } else {
+                        consts::voxel::attachment::bt::DIRT_ID
+                    });
 
-                    let color = grass.mix(&dirt, dirting);
-                    voxel.set_attachment(
-                        Attachment::PTMATERIAL_ID,
-                        &[Attachment::encode_ptmaterial(&PTMaterial::diffuse(
-                            color.into(),
-                        ))],
-                    )
+                    voxel.set_attachment(Attachment::BMAT_ID, &[material.encode()])
                 } else {
                     voxel.set_removed();
                 }

@@ -18,4 +18,11 @@ public static const uint VOXEL_MODEL_SCHEMA_SFT_COMPRESSED = 6;
 public static const uint VOXEL_ATTACHMENT_MAX_ID = 3;
 public static const uint VOXEL_ATTACHMENT_COUNT = VOXEL_ATTACHMENT_MAX_ID + 1;
 
+namespace bmat {
+
+public static const uint GRASS = 0;
+public static const uint DIRT = 1;
+
+} // namespace bmat
+
 } // namespace consts

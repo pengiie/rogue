@@ -96,11 +96,17 @@ impl Attachment {
     }
 }
 
-pub struct CBMaterial(u32);
+/// First 16 most signifigant bits are reserved for the octahedral encoded normal.
+/// Next 16 bits are for the built in material index.
+pub struct BuiltInMaterial(u32);
 
-impl CBMaterial {
+impl BuiltInMaterial {
     pub fn new(material_id: u16) -> Self {
         Self(material_id as u32)
+    }
+
+    pub fn decode(data: u32) -> Self {
+        Self(data)
     }
 
     pub fn encode(&self) -> u32 {

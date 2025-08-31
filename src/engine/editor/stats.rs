@@ -93,6 +93,14 @@ pub fn stats_pane(
             "Total allocated GPU voxel data: {}",
             format_bytes(voxel_world_gpu.voxel_allocator().total_allocation_size())
         ));
+        let chunk_load_iter = &voxel_world.chunks.chunk_load_iter;
+        ui.label(format!(
+            "Current chunk_iter radius: {}/{}, index: {}/{}",
+            chunk_load_iter.curr_radius(),
+            chunk_load_iter.max_radius(),
+            chunk_load_iter.curr_index(),
+            chunk_load_iter.max_index()
+        ));
     };
 
     egui::ScrollArea::vertical()

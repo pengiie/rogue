@@ -194,7 +194,7 @@ impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
             );
         }
 
-        // Add implicit normal attachment.
+        // Add implicit normal attachment if the model is using a ptmaterial.
         if !model.attachment_raw_data.contains(Attachment::NORMAL_ID)
             && model
                 .attachment_lookup_data

@@ -400,11 +400,18 @@ impl VulkanDevice {
                 );
             }
 
-            let enabled_layers = Self::get_required_layer_names()
-                .into_iter()
-                .filter(|str| available_layer_names.contains(&str))
-                .collect::<Vec<_>>();
-            debug!("enabled layers {:?}", &enabled_layers);
+            const VALIDATION_LAYER_NAME: &'static str = "VK_LAYER_KHRONOS_validation";
+            let mut enabled_layers = Vec::new();
+            if enable_debug {
+                let validation_layer_cstring = std::ffi::CString::new(VALIDATION_LAYER_NAME).unwrap();
+                if available_layer_names.contains(&validation_layer_cstring) {
+                    enabled_layers.push(validation_layer_cstring);
+                } else {
+                    log::warn!("Couldn't enable vulkan validation layers since they exist.");
+                }
+            }
+
+            debug!("Enabled vulkan layers {:?}", &enabled_layers);
             let enabled_layers_ptrs = enabled_layers
                 .iter()
                 .map(|cstr| cstr.as_ptr())
@@ -805,7 +812,6 @@ impl VulkanDevice {
 
     fn get_required_layer_names() -> Vec<CString> {
         vec![
-            #[cfg(debug_assertions)]
             std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap(),
             //std::ffi::CString::new("VK_LAYER_LUNARG_api_dump").unwrap(),
         ]

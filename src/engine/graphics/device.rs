@@ -64,13 +64,14 @@ impl DeviceResource {
         let device = if cfg!(target_arch = "wasm32") {
             unimplemented!("Wasm target not supported yet (if ever).");
         } else {
+            let enable_debug = std::env::var("ROGUE_DEBUG").is_ok();
             VulkanDevice::init(VulkanCreateInfo {
                 window,
                 swapchain_info: GfxSwapchainInfo {
                     present_mode: settings.present_mode,
                     triple_buffering: settings.triple_buffering,
                 },
-                enable_debug: true,
+                enable_debug,
             })
             .expect("Failed to create Vulkan device.")
         };
