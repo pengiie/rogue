@@ -16,7 +16,7 @@ public struct RayTerrainTest {
   }
 }
 
-static const uint AIR_PTR = 0xFFFFFFFE;
+public static const uint AIR_PTR = 0xFFFFFFFE;
 
 public struct Terrain {
   public uint side_length;

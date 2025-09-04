@@ -170,7 +170,7 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
       }
     }
   } else if (leaf_info.leaf_side_length == 16) {
-    let base_voxel_pos = world_chunk_pos & 0xFFFFFFFC;
+    let base_voxel_pos = world_chunk_pos & 0xFFFFFFF0;
     for (int x = -2; x <= 17; x++) {
       for (int y = -2; y <= 17; y++) {
         for (int z = -2; z <= 17; z++) {
@@ -202,7 +202,7 @@ bool world_voxel_exists(int3 world_voxel_pos) {
   uint3 terrain_local_chunk_pos = (uint3) (world_chunk_pos - terrain.anchor);
 
   uint chunk_model_ptr = voxel::Terrain.get_chunk_ptr(terrain_local_chunk_pos); 
-  if (chunk_model_ptr == voxel::INVALID_PTR) {
+  if (chunk_model_ptr == voxel::INVALID_PTR || chunk_model_ptr == voxel::AIR_PTR) {
     return false;
   }
 
