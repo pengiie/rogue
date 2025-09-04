@@ -125,20 +125,7 @@ public struct SFT {
             let distance_to_voxel = distance(in_ray.origin, hit_position);
 
             let voxel_addr = SFTVoxelAddr(curr_node_idx, morton_half, child_bit);
-            if (let material = this.load_bmat(voxel_addr)) {
-              let hit_voxel_position = (int3) floor(hit_position / consts::METERS_PER_VOXEL);
-              var color = color::srgb_to_lsrgb(material.calculate_color(hit_voxel_position));
-
-              let normal = material.normal;
-              let face_normal = (int3(last_mask) * 2 - 1) * float3(0.8, 0.5, 0.2);
-              let rot_normal = mul(rotation, normal);
-              let rot_face_normal = mul(rotation, face_normal);
-              let l = dot(rot_normal, normalize(-float3(0.7,-1,-0.2)));
-              let l_face = dot(rot_face_normal, normalize(-float3(0.7,-1,-0.2)));
-              color *= max(l + l_face * 0.3, 0.05);
-
-              return RayModelTest.hit(color, distance_to_voxel);
-            } else if (let pt_material = this.load_ptmaterial(voxel_addr)) {
+            if (let pt_material = this.load_ptmaterial(voxel_addr)) {
               var color = pt_material;
 
               let normal = this.load_normal(voxel_addr);
@@ -147,10 +134,23 @@ public struct SFT {
               color *= max(l, 0.05);
 
               return RayModelTest.hit(color, distance_to_voxel);
+            } else if (let material = this.load_bmat(voxel_addr)) {
+              let hit_voxel_position = (int3) floor(hit_position / consts::METERS_PER_VOXEL);
+              var color = color::srgb_to_lsrgb(material.calculate_color(hit_voxel_position));
+
+              let normal = material.normal;
+              let face_normal = (int3(last_mask) * 2 - 1) * float3(0.5, 0.4, 0.3);
+              let rot_normal = mul(rotation, normal);
+              let rot_face_normal = mul(rotation, face_normal);
+              let l = dot(rot_normal, normalize(-float3(0.7,-1,-0.2)));
+              let l_face = dot(rot_face_normal, normalize(-float3(0.7,-1,-0.2)));
+              color *= max(l_face * l * 0.03 + l, 0.05);
+
+              return RayModelTest.hit(color, distance_to_voxel);
             }
+
             return RayModelTest.hit(float3(1.0, 0.0, 0.0), distance_to_voxel);
           }
-
           let curr_node_size = this.quarter_side_length >> (curr_height * 2);
           curr_node_stack[curr_height] = curr_node_idx;
           curr_node_idx = (child_ptr_raw + child_offset) * SFT_NODE_SIZE;

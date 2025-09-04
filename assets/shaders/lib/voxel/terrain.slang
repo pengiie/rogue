@@ -16,6 +16,7 @@ public struct RayTerrainTest {
   }
 }
 
+static const uint AIR_PTR = 0xFFFFFFFE;
 
 public struct Terrain {
   public uint side_length;
@@ -68,7 +69,10 @@ public struct Terrain {
                        curr_grid_pos.z * (terrain.side_length * terrain.side_length);
 
       let chunk_model_ptr = terrain.data.Load<uint>(curr_index << 2);
-      if (chunk_model_ptr != INVALID_PTR) {
+      if (chunk_model_ptr != AIR_PTR /*Treat as air for now*/ && chunk_model_ptr != INVALID_PTR) {
+        if (chunk_model_ptr == INVALID_PTR) {
+          // TODO: Request chunk from cpu.
+        }
         let chunk_offset = consts::TERRAIN_CHUNK_METER_LENGTH * ((float3) dda.curr_grid_pos() + 0.5);
         let chunk_center = terrain_aabb.min() + chunk_offset; 
         let chunk_aabb = AABB.new_center_extents(chunk_center, 

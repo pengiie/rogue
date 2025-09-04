@@ -89,11 +89,10 @@ impl VoxelModelSFTNode {
             for i in 0..attachment_size {
                 attachment_data[child_offset + i] = data[i];
             }
-            return;
-        }
-
-        for i in 0..attachment_size {
-            attachment_data.insert(child_offset + i, data[i]);
+        } else {
+            for i in 0..attachment_size {
+                attachment_data.insert(child_offset + i, data[i]);
+            }
         }
         *attachment_mask |= child_bit;
     }

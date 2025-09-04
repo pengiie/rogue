@@ -30,7 +30,7 @@ public float3 sample_sky(Ray ray) {
   // Fun colorful sky.
   //var background_color = color::srgb_to_lsrgb(float3(acos(-ray.dir) / 3.14));
   const float3 dark_blue = float3(0.25, 0.4, 0.95);
-  const float3 light_blue = float3(0.3, 0.7, 0.95);
+  const float3 light_blue = float3(0.6, 0.78, 0.98);
   var background_color = color::srgb_to_lsrgb(lerp(dark_blue, light_blue, saturate(ray.dir.y + 0.3)));
 
 

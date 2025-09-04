@@ -151,12 +151,12 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
       }
     }
   } else if (leaf_info.leaf_side_length == 4) {
-    let base_voxel_pos = world_chunk_pos & 0xFFFFFFFC;
+    let base_voxel_pos = world_voxel_pos & 0xFFFFFFFC;
     for (int x = -2; x <= 5; x++) {
       for (int y = -2; y <= 5; y++) {
         for (int z = -2; z <= 5; z++) {
           int3 offset = int3(x,y,z);
-          if (!any(offset == -1) && !any(offset == 4)) {
+          if (!(any(offset <= -1) && any(offset >= 4))) {
             continue;
           }
 
@@ -175,7 +175,7 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
       for (int y = -2; y <= 17; y++) {
         for (int z = -2; z <= 17; z++) {
           int3 offset = int3(x,y,z);
-          if (!any(offset == -1) && !any(offset == 16)) {
+          if (!(any(offset <= -1) && any(offset >= 16))) {
             continue;
           }
 

@@ -50,10 +50,6 @@ use super::{
     voxel_world::{VoxelWorld, VoxelWorldModelGpuInfo},
 };
 
-pub enum VoxelTerrainEvent {
-    UpdateRenderDistance { chunk_render_distance: u32 },
-}
-
 #[derive(Hash, PartialEq, Eq)]
 pub struct ChunkTicket {
     chunk_position: Vector3<i32>,
@@ -251,6 +247,13 @@ impl VoxelRegionLeafNode {
         }
     }
 
+    pub fn new_air() -> Self {
+        Self::Existing {
+            uuid: uuid::Uuid::new_v4(),
+            model: None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         match self {
             VoxelRegionLeafNode::Empty => true,
@@ -423,6 +426,15 @@ impl VoxelChunks {
                     }
                 }
             }
+        }
+    }
+
+    pub fn try_update_chunk_render_distance(&mut self, settings: &Settings) {
+        if settings.chunk_render_distance != self.chunk_render_distance {
+            self.chunk_render_distance = settings.chunk_render_distance;
+            self.renderable_chunks.resize(self.chunk_render_distance);
+            self.chunk_load_iter
+                .update_max_radius(self.chunk_render_distance);
         }
     }
 
@@ -808,6 +820,8 @@ impl ChunkLoadIter {
         if self.max_radius < self.curr_radius {
             self.curr_radius = self.max_radius;
         }
+        // TODO: Remove and do the transition nicer with the renderable chunks following.
+        self.reset();
     }
 
     pub fn max_radius(&self) -> u32 {
@@ -900,6 +914,7 @@ pub struct RenderableChunks {
     pub is_dirty: bool,
 
     pub to_update_chunk_normals: HashSet<Vector3<i32>>,
+    pub to_unload_models: Vec<VoxelModelId>,
 }
 
 impl RenderableChunks {
@@ -912,6 +927,7 @@ impl RenderableChunks {
             chunk_anchor: Vector3::new(0, 0, 0),
             is_dirty: false,
             to_update_chunk_normals: HashSet::new(),
+            to_unload_models: Vec::new(),
         }
     }
 
@@ -929,6 +945,15 @@ impl RenderableChunks {
         self.to_update_chunk_normals.clear();
         self.chunk_model_pointers.fill(VoxelModelId::null());
         self.is_dirty = true;
+    }
+
+    pub fn resize(&mut self, chunk_render_distance: u32) {
+        self.clear();
+        self.side_length = chunk_render_distance * 2;
+        self.chunk_model_pointers = vec![VoxelModelId::null(); self.side_length.pow(3) as usize];
+        self.window_offset = self
+            .chunk_anchor
+            .map(|x| x.rem_euclid(self.side_length as i32) as u32);
     }
 
     pub fn try_load_chunk(
@@ -1013,7 +1038,11 @@ impl RenderableChunks {
 
     fn unload_chunk(&mut self, local_chunk_pos: Vector3<u32>) {
         let index = self.get_chunk_index(local_chunk_pos) as usize;
+        let chunk_model = self.chunk_model_pointers[index];
         self.chunk_model_pointers[index] = VoxelModelId::null();
+        if chunk_model != VoxelModelId::null() {
+            self.to_unload_models.push(chunk_model);
+        }
     }
 
     pub fn chunk_exists(&self, world_chunk_pos: Vector3<i32>) -> bool {
@@ -1029,7 +1058,7 @@ impl RenderableChunks {
         });
         let index = self.get_chunk_index(window_adjusted_pos);
         let chunk_model_id = &self.chunk_model_pointers[index as usize];
-        (!chunk_model_id.is_null()).then_some(*chunk_model_id)
+        (!chunk_model_id.is_null() && !chunk_model_id.is_air()).then_some(*chunk_model_id)
     }
 
     pub fn get_chunk_index(&self, local_chunk_pos: Vector3<u32>) -> u32 {
@@ -1065,7 +1094,12 @@ impl RenderableChunksGpu {
         if let Some(buffer) = self.terrain_acceleration_buffer {
             let buffer_info = device.get_buffer_info(&buffer);
             if buffer_info.size < req_size {
-                todo!("Resize buffer due to render distance change.");
+                //TODO delete previous buffer.
+                self.terrain_acceleration_buffer =
+                    Some(device.create_buffer(GfxBufferCreateInfo {
+                        name: "world_terrain_acceleration_buffer".to_owned(),
+                        size: req_size,
+                    }));
             }
         } else {
             self.terrain_acceleration_buffer = Some(device.create_buffer(GfxBufferCreateInfo {
@@ -1080,12 +1114,13 @@ impl RenderableChunksGpu {
         device: &mut DeviceResource,
         renderable_chunks: &RenderableChunks,
         voxel_model_info_map: &HashMap<VoxelModelId, VoxelWorldModelGpuInfo>,
+        mut should_update: bool,
     ) {
         self.terrain_side_length = renderable_chunks.side_length;
         self.terrain_anchor = renderable_chunks.chunk_anchor;
         self.terrain_window_offset = renderable_chunks.window_offset;
 
-        if renderable_chunks.is_dirty {
+        if renderable_chunks.is_dirty || should_update {
             // TODO: Copy incrementally with updates.
             let volume = renderable_chunks.side_length.pow(3) as usize;
             let mut buf = vec![0xFFFF_FFFFu32; volume];

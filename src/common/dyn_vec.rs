@@ -99,6 +99,17 @@ impl DynVec {
     }
 }
 
+impl Clone for DynVec {
+    fn clone(&self) -> Self {
+        Self {
+            type_info: self.type_info.clone(),
+            data: todo!(),
+            size: self.size.clone(),
+            capacity: self.capacity.clone(),
+        }
+    }
+}
+
 impl Drop for DynVec {
     fn drop(&mut self) {
         for i in 0..self.size {
@@ -147,7 +158,15 @@ impl TypeInfo {
         self.size
     }
 
+    pub unsafe fn drop(&self, data: *mut u8) {
+        (self.drop_fn)(data);
+    }
+
     pub fn alignment(&self) -> usize {
         self.alignment
+    }
+
+    pub fn stride(&self) -> usize {
+        self.size().next_multiple_of(self.alignment)
     }
 }

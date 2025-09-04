@@ -24,9 +24,11 @@ void main(uint3 id: SV_DispatchThreadID) {
   random::init(uint3(coord.xy, u_frame.frame_info.time_ms));
 
   let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
-  var out_color = sample_sky(ray);
+  let sky_color = sample_sky(ray);
   var depth = u_frame.world_info.camera.far_plane;
+  var out_color = sky_color;
 
+  var light = sky_color;
   let ray_terrain = voxel::Terrain.trace(ray);
   if (ray_terrain.did_hit) {
     depth = ray_terrain.depth_t;
@@ -40,6 +42,26 @@ void main(uint3 id: SV_DispatchThreadID) {
     if (ray_entity.depth_t < depth) {
       depth = ray_entity.depth_t;
       out_color = ray_entity.color;
+    }
+  }
+
+  let should_cast_shadow_ray = ray_terrain.did_hit || ray_entity.did_hit;
+  if (should_cast_shadow_ray) {
+    var shadow_ray = ray.advance_clone(depth - 0.001);
+    shadow_ray.dir = normalize(-float3(0.7,-1,0.5));
+    shadow_ray.inv_dir = 1.0 / shadow_ray.dir;
+    let shadow_ray_terrain = voxel::Terrain.trace(shadow_ray);
+    if (shadow_ray_terrain.did_hit) {
+      out_color *= 0.1;
+    } else {
+      // If the hit entity is closer than the hit terrain, use the
+      // entities hit.
+      let shadow_ray_entity = voxel::EntityData.trace(shadow_ray);
+      if (shadow_ray_entity.did_hit) {
+        out_color *= 0.1;
+      } else {
+        out_color *= sample_sky(shadow_ray);
+      }
     }
   }
 

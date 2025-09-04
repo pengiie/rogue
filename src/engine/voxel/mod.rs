@@ -7,6 +7,7 @@ pub mod chunk_generator;
 pub mod cursor;
 pub mod factory;
 pub mod flat;
+pub mod material;
 pub mod sft;
 pub mod sft_compressed;
 pub mod sft_compressed_gpu;

@@ -77,6 +77,10 @@ impl VoxelModelFlat {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        return self.presence_data.data().iter().all(|x| *x == 0);
+    }
+
     pub fn new_empty(length: Vector3<u32>) -> Self {
         let volume = length.x * length.y * length.z;
         Self::new(
@@ -1027,6 +1031,10 @@ impl VoxelModelGpuImpl for VoxelModelFlatGpu {
             self.initialized_data = true;
             return;
         }
+    }
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
+        todo!()
     }
 }
 

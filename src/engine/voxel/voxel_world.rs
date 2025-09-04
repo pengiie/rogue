@@ -38,7 +38,11 @@ use crate::{
         },
         physics::transform::Transform,
         resource::{Res, ResMut},
-        voxel::{voxel::VoxelModelEdit, voxel_terrain::VoxelRegionLeafNode, voxel_world},
+        voxel::{
+            voxel::VoxelModelEdit,
+            voxel_terrain::{RenderableChunks, VoxelRegionLeafNode},
+            voxel_world,
+        },
         window::time::Stopwatch,
     },
     session::Session,
@@ -296,11 +300,16 @@ impl VoxelWorld {
         self.chunks.update_player_position(center_pos);
     }
 
+    // Processes:
+    // - Voxel terrain chunks
+    // - Terrain chunk edits (async handlers, and sync)
+    // - Model removal with gpu mem dealloc
     pub fn update_post_physics(
         events: Res<Events>,
         settings: Res<Settings>,
         mut ecs_world: ResMut<ECSWorld>,
         mut voxel_world: ResMut<VoxelWorld>,
+        mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
         session: Res<Session>,
     ) {
@@ -312,8 +321,21 @@ impl VoxelWorld {
         //     let player_pos = player_transform.position;
         // }
 
+        chunks.try_update_chunk_render_distance(&settings);
         chunks.update_chunk_queue(&mut assets, &mut voxel_world.registry, &session);
         voxel_world.process_chunk_edits(&mut assets);
+
+        for model in voxel_world
+            .chunks
+            .renderable_chunks
+            .to_unload_models
+            .drain(..)
+        {
+            assert_ne!(model, VoxelModelId::null());
+            voxel_world
+                .registry
+                .unload_model(model, voxel_world_gpu.voxel_allocator_mut());
+        }
     }
 
     pub fn trace_world(&self, mut ecs_world: &ECSWorld, mut ray: Ray) -> Option<VoxelTraceInfo> {
@@ -459,20 +481,27 @@ impl VoxelWorld {
                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
                 ));
                 new_flat.set_voxel_range(&chunk_edit);
-                let new_chunk_model = VoxelModelSFT::from(&new_flat);
+                if new_flat.is_empty() {
+                    *node = VoxelRegionLeafNode::new_air();
+                    chunks
+                        .renderable_chunks
+                        .try_load_chunk(&world_chunk_pos, VoxelModelId::air());
+                } else {
+                    let new_chunk_model = VoxelModelSFT::from(&new_flat);
 
-                let new_model_id = registry.register_renderable_voxel_model(
-                    format!(
-                        "chunk_{}_{}_{}",
-                        world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
-                    ),
-                    VoxelModel::new(new_chunk_model),
-                );
+                    let new_model_id = registry.register_renderable_voxel_model(
+                        format!(
+                            "chunk_{}_{}_{}",
+                            world_chunk_pos.x, world_chunk_pos.y, world_chunk_pos.z
+                        ),
+                        VoxelModel::new(new_chunk_model),
+                    );
 
-                *node = VoxelRegionLeafNode::new_with_model(new_model_id);
-                chunks
-                    .renderable_chunks
-                    .try_load_chunk(&world_chunk_pos, new_model_id);
+                    *node = VoxelRegionLeafNode::new_with_model(new_model_id);
+                    chunks
+                        .renderable_chunks
+                        .try_load_chunk(&world_chunk_pos, new_model_id);
+                }
                 chunks.mark_chunk_edited(world_chunk_pos);
                 chunks.mark_region_edited(VoxelChunks::chunk_to_region_pos(&world_chunk_pos));
             }
@@ -794,6 +823,10 @@ impl VoxelWorldGpu {
         &self.voxel_data_allocator
     }
 
+    pub fn voxel_allocator_mut(&mut self) -> &mut VoxelDataAllocator {
+        &mut self.voxel_data_allocator
+    }
+
     pub fn entity_acceleration_struct_size() -> usize {
         /*aabb_min*/
         (4 * 4) + // float3
@@ -909,6 +942,7 @@ impl VoxelWorldGpu {
                 &mut registered_model_infos,
             );
         }
+        let did_register_a_model = !registered_model_infos.is_empty();
         for model_info_copy in registered_model_infos {
             device.write_buffer_slice(
                 voxel_world_gpu.world_voxel_model_info_buffer(),
@@ -922,6 +956,7 @@ impl VoxelWorldGpu {
             &mut device,
             &voxel_world.chunks.renderable_chunks,
             &voxel_world_gpu.voxel_model_info_map,
+            did_register_a_model,
         );
 
         // Write entity acceleration data.
@@ -1123,14 +1158,14 @@ impl VoxelWorldGpu {
                     }
 
                     // Only update the normals for one chunk per frame.
-                    if i > 0 {
-                        voxel_world
-                            .chunks
-                            .renderable_chunks
-                            .to_update_chunk_normals
-                            .insert(chunk_pos);
-                        continue;
-                    }
+                    // if i > 0 {
+                    //     voxel_world
+                    //         .chunks
+                    //         .renderable_chunks
+                    //         .to_update_chunk_normals
+                    //         .insert(chunk_pos);
+                    //     continue;
+                    // }
                     log::debug!("Updating the normals for chunk {:?}", chunk_pos);
                     compute_pass.bind_uniforms(&mut |writer| {
                         writer.use_set_cache("u_frame", Renderer::SET_CACHE_SLOT_FRAME);

@@ -74,4 +74,10 @@ impl VoxelModelGpuImpl for VoxelModelSFTGpu {
                 .write_gpu_updates(device, allocator, compressed_model);
         };
     }
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
+        if let Some(compressed_model) = &self.compressed_model {
+            self.compressed_model_gpu.deallocate(allocator);
+        };
+    }
 }

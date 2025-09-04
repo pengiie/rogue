@@ -35,7 +35,10 @@ use crate::{
         resource::{Res, ResMut},
         ui::UI,
         voxel::{
-            attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap, PTMaterial},
+            attachment::{
+                Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap, BuiltInMaterial,
+                PTMaterial,
+            },
             chunk_generator::ChunkGenerator,
             cursor::{VoxelEditEntityInfo, VoxelEditInfo},
             voxel_world::{self, VoxelEdit, VoxelTraceInfo, VoxelWorld},
@@ -92,7 +95,9 @@ pub struct EditorWorldEditing {
     pub terrain_enabled: bool,
     pub size: u32,
     pub color: Color,
+    pub bmat_index: u16,
     pub tool: EditorEditingTool,
+    pub material: EditorEditingMaterial,
 }
 
 pub struct EditorTerrainGeneration {
@@ -115,8 +120,10 @@ impl EditorWorldEditing {
             terrain_enabled: true,
             entity_enabled: false,
             size: 2,
+            bmat_index: 0,
             color: Color::new_srgb(0.5, 0.5, 0.5),
             tool: EditorEditingTool::Pencil,
+            material: EditorEditingMaterial::BMat,
         }
     }
 }
@@ -126,6 +133,12 @@ pub enum EditorEditingTool {
     Pencil,
     Eraser,
     Brush,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EditorEditingMaterial {
+    PTMat,
+    BMat,
 }
 
 pub struct EditorCameraMarker;
@@ -1008,27 +1021,51 @@ impl Editor {
             match editor.world_editing.tool {
                 EditorEditingTool::Pencil => {
                     let mut attachment_map = AttachmentMap::new();
-                    attachment_map.register_attachment(Attachment::PTMATERIAL);
+                    match editor.world_editing.material {
+                        EditorEditingMaterial::PTMat => {
+                            attachment_map.register_attachment(Attachment::PTMATERIAL)
+                        }
+                        EditorEditingMaterial::BMat => {
+                            attachment_map.register_attachment(Attachment::BMAT)
+                        }
+                    }
                     apply_edit(
                         &mut voxel_world,
                         &editor,
                         &trace,
                         size,
                         attachment_map,
-                        |center| {
-                            let size = size.clone();
-                            let color = editor.world_editing.color.clone();
-                            Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
-                                let distance = center
-                                    .cast::<f32>()
-                                    .metric_distance(&world_voxel_pos.cast::<f32>());
-                                if distance <= size as f32 {
-                                    voxel.set_attachment(
-                                        Attachment::PTMATERIAL_ID,
-                                        &[PTMaterial::diffuse(color.clone()).encode()],
-                                    );
-                                }
-                            })
+                        |center| match editor.world_editing.material {
+                            EditorEditingMaterial::PTMat => {
+                                let size = size.clone();
+                                let color = editor.world_editing.color.clone();
+                                Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
+                                    let distance = center
+                                        .cast::<f32>()
+                                        .metric_distance(&world_voxel_pos.cast::<f32>());
+                                    if distance <= size as f32 {
+                                        voxel.set_attachment(
+                                            Attachment::PTMATERIAL_ID,
+                                            &[PTMaterial::diffuse(color.clone()).encode()],
+                                        );
+                                    }
+                                })
+                            }
+                            EditorEditingMaterial::BMat => {
+                                let size = size.clone();
+                                let bmat_index = editor.world_editing.bmat_index;
+                                Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
+                                    let distance = center
+                                        .cast::<f32>()
+                                        .metric_distance(&world_voxel_pos.cast::<f32>());
+                                    if distance <= size as f32 {
+                                        voxel.set_attachment(
+                                            Attachment::BMAT_ID,
+                                            &[BuiltInMaterial::new(bmat_index).encode()],
+                                        );
+                                    }
+                                })
+                            }
                         },
                     );
                 }

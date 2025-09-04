@@ -22,6 +22,16 @@ use crate::{
             asset::{AssetPath, Assets},
             repr::{editor_settings::EditorProjectAsset, image::ImageAsset},
         },
+        editor::ui::{
+            dialog::{
+                new_project_dialog::new_project_dialog,
+                new_voxel_model_dialog::new_voxel_model_dialog,
+            },
+            entity_properties::entity_properties_pane,
+            stats::stats_pane,
+            user_settings::user_pane,
+            voxel_editing::editing_pane,
+        },
         entity::{
             ecs_world::{ECSWorld, Entity},
             scripting::{ScriptableEntity, Scripts},
@@ -53,13 +63,16 @@ use crate::{
         },
     },
     session::{Session, SessionState},
+    settings::Settings,
 };
 
-use super::{
-    editor::{Editor, EditorEditingTool, EditorView},
-    entity_properties::entity_properties_pane,
-    stats::stats_pane,
-};
+use super::editor::{Editor, EditorEditingTool, EditorView};
+
+pub mod dialog;
+pub mod entity_properties;
+pub mod stats;
+pub mod user_settings;
+pub mod voxel_editing;
 
 pub fn init_editor_ui_textures(ctx: &egui::Context, ui_state: &mut EditorUIState) {
     let icon_color = ctx
@@ -109,112 +122,6 @@ pub fn init_editor_ui_textures(ctx: &egui::Context, ui_state: &mut EditorUIState
     );
 }
 
-pub fn new_project_dialog(
-    ctx: &egui::Context,
-    ui_state: &mut EditorUIState,
-    ecs_world: &mut ECSWorld,
-    session: &mut Session,
-) {
-    if let Some(new_project_dialog) = &mut ui_state.new_project_dialog {
-        let mut force_close = false;
-        egui::Window::new("New Project")
-            .collapsible(false)
-            .resizable(true)
-            .open(&mut new_project_dialog.open)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    match new_project_dialog.rx_file_name.try_recv() {
-                        Ok(chosen_name) => new_project_dialog.file_name = chosen_name,
-                        Err(_) => {}
-                    }
-                    ui.label("Project location: ");
-                    ui.text_edit_singleline(&mut new_project_dialog.file_name);
-                    if ui.button("Browse").clicked() {
-                        let send = new_project_dialog.tx_file_name.clone();
-                        std::thread::spawn(|| {
-                            pollster::block_on(async move {
-                                let folder = rfd::AsyncFileDialog::new().pick_folder().await;
-                                let Some(folder) = folder else {
-                                    return;
-                                };
-                                send.send(folder.path().to_string_lossy().to_string());
-                            });
-                        });
-                    }
-                });
-
-                let path = PathBuf::from_str(&new_project_dialog.file_name);
-                let mut error = String::new();
-                let mut is_valid = 'is_path_valid: {
-                    if new_project_dialog.last_file_name.0 == new_project_dialog.file_name {
-                        error = new_project_dialog.last_file_name.2.clone();
-                        break 'is_path_valid new_project_dialog.last_file_name.1;
-                    }
-
-                    if new_project_dialog.file_name.is_empty() {
-                        break 'is_path_valid false;
-                    }
-                    let Ok(path) = path.as_ref() else {
-                        break 'is_path_valid false;
-                    };
-
-                    if !path.is_absolute() {
-                        error = "Path must be absolute.".to_owned();
-                        break 'is_path_valid false;
-                    }
-                    let Ok(metadata) = std::fs::metadata(path) else {
-                        error = "Directory doesn't exist.".to_owned();
-                        break 'is_path_valid false;
-                    };
-                    if !metadata.is_dir() {
-                        error = "Path must be a directory.".to_owned();
-                        break 'is_path_valid false;
-                    }
-                    let Ok(read) = std::fs::read_dir(path) else {
-                        error = "Failed to read directory.".to_owned();
-                        break 'is_path_valid false;
-                    };
-                    if read.count() > 0 {
-                        error = "Directory must be empty.".to_owned();
-                        //break 'is_path_valid false;
-                    }
-
-                    true
-                };
-                if !error.is_empty() {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new(error.clone()).color(egui::Color32::RED),
-                    ));
-                }
-                new_project_dialog.last_file_name =
-                    (new_project_dialog.file_name.clone(), is_valid, error);
-
-                if ui
-                    .add_enabled(is_valid, egui::Button::new("Create"))
-                    .clicked()
-                {
-                    let mut existing_entities_query = ecs_world.query::<With<(), &GameEntity>>();
-                    let existing_entities = existing_entities_query
-                        .into_iter()
-                        .map(|(entity_id, _)| entity_id)
-                        .collect::<Vec<_>>();
-                    drop(existing_entities_query);
-                    for id in existing_entities {
-                        ecs_world.despawn(id);
-                    }
-
-                    session.project_save_dir = Some(path.clone().unwrap());
-                    session.editor_settings.last_project_dir = Some(path.unwrap());
-                    session.project = EditorProjectAsset::new_empty();
-                    force_close = true;
-                }
-            });
-        if !new_project_dialog.open || force_close {
-            ui_state.new_project_dialog = None;
-        }
-    }
-}
-
 /// Returns padding [top, bottom, left right].
 pub fn egui_editor_ui(
     ctx: &egui::Context,
@@ -229,6 +136,7 @@ pub fn egui_editor_ui(
     window: &mut Window,
     time: &Time,
     mut scripts: &mut Scripts,
+    settings: &mut Settings,
 ) -> Vector4<f32> {
     if !ui_state.initialized_icons {
         init_editor_ui_textures(ctx, ui_state);
@@ -532,6 +440,7 @@ pub fn egui_editor_ui(
                 assets,
                 &time,
                 &mut scripts,
+                settings,
             );
         })
         .response
@@ -539,181 +448,23 @@ pub fn egui_editor_ui(
         .width()
         * ctx.pixels_per_point();
 
-    content_padding.y = egui::TopBottomPanel::bottom("bottom_editor_pane")
-        .resizable(true)
-        .frame(
-            egui::Frame::new()
-                .fill(ctx.style().visuals.window_fill)
-                .inner_margin(8.0),
-        )
-        .default_height(300.0)
-        .show(ctx, |ui| {
-            bottom_editor_pane(ui, &session, &mut ui_state);
-        })
-        .response
-        .rect
-        .height()
-        * ctx.pixels_per_point();
+    //content_padding.y = egui::TopBottomPanel::bottom("bottom_editor_pane")
+    //    .resizable(true)
+    //    .frame(
+    //        egui::Frame::new()
+    //            .fill(ctx.style().visuals.window_fill)
+    //            .inner_margin(8.0),
+    //    )
+    //    .default_height(300.0)
+    //    .show(ctx, |ui| {
+    //        bottom_editor_pane(ui, &session, &mut ui_state);
+    //    })
+    //    .response
+    //    .rect
+    //    .height()
+    //    * ctx.pixels_per_point();
 
     return content_padding;
-}
-
-pub fn new_voxel_model_dialog(
-    ctx: &egui::Context,
-    ui_state: &mut EditorUIState,
-    ecs_world: &mut ECSWorld,
-    session: &mut Session,
-    assets: &mut Assets,
-    voxel_world: &mut VoxelWorld,
-) {
-    if let Some(dialog) = &mut ui_state.new_model_dialog {
-        let mut force_close = false;
-        egui::Window::new("New Voxel Model")
-            .collapsible(false)
-            .resizable(true)
-            .open(&mut dialog.open)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    match dialog.rx_file_name.try_recv() {
-                        Ok(chosen_name) => dialog.file_path = chosen_name,
-                        Err(_) => {}
-                    }
-                    ui.label("New asset location: ");
-                    ui.text_edit_singleline(&mut dialog.file_path);
-                    if ui.button("Browse").clicked() {
-                        let send = dialog.tx_file_name.clone();
-                        let assets_dir = session.project_assets_dir().unwrap();
-                        std::thread::spawn(|| {
-                            pollster::block_on(async move {
-                                let file = rfd::AsyncFileDialog::new()
-                                    .set_title("Choose asset location")
-                                    .set_file_name("untitled.rvox")
-                                    .set_directory(assets_dir)
-                                    .save_file()
-                                    .await;
-                                let Some(file) = file else {
-                                    return;
-                                };
-                                send.send(file.path().to_string_lossy().to_string());
-                            });
-                        });
-                    }
-                });
-
-                let path = PathBuf::from_str(&dialog.file_path);
-                let mut error = String::new();
-                let mut is_valid = 'is_path_valid: {
-                    if dialog.last_file_path.0 == dialog.file_path {
-                        error = dialog.last_file_path.2.clone();
-                        break 'is_path_valid dialog.last_file_path.1;
-                    }
-
-                    if dialog.file_path.is_empty() {
-                        break 'is_path_valid false;
-                    }
-                    let Ok(path) = path.as_ref() else {
-                        break 'is_path_valid false;
-                    };
-
-                    if !path.is_absolute() {
-                        error = "Path must be absolute.".to_owned();
-                        break 'is_path_valid false;
-                    }
-
-                    if !path.starts_with(session.project_assets_dir().unwrap()) {
-                        error = "Path must be within the project asset directory.".to_owned();
-                        break 'is_path_valid false;
-                    }
-
-                    true
-                };
-                if !error.is_empty() {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new(error.clone()).color(egui::Color32::RED),
-                    ));
-                }
-                dialog.last_file_path = (dialog.file_path.clone(), is_valid, error);
-
-                ui.label("Dimensions:");
-                ui.horizontal(|ui| {
-                    ui.label("X:");
-                    let mut x_temp = dialog.dimensions.x.to_string();
-                    egui::TextEdit::singleline(&mut x_temp)
-                        .desired_width(32.0)
-                        .show(ui);
-                    if let Ok(x) = x_temp.parse() {
-                        dialog.dimensions.x = x;
-                    }
-
-                    ui.label("Y:");
-                    let mut y_temp = dialog.dimensions.y.to_string();
-                    egui::TextEdit::singleline(&mut y_temp)
-                        .desired_width(32.0)
-                        .show(ui);
-                    if let Ok(y) = y_temp.parse() {
-                        dialog.dimensions.y = y;
-                    }
-
-                    ui.label("Z:");
-                    let mut z_temp = dialog.dimensions.z.to_string();
-                    egui::TextEdit::singleline(&mut z_temp)
-                        .desired_width(32.0)
-                        .show(ui);
-                    if let Ok(z) = z_temp.parse() {
-                        dialog.dimensions.z = z;
-                    }
-                });
-                is_valid = is_valid && dialog.dimensions.iter().all(|x| *x > 0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Model type: ");
-                    egui::ComboBox::from_id_salt("new_voxel_model_dropdown")
-                        .selected_text(format!("{:?}", dialog.model_type))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut dialog.model_type,
-                                VoxelModelType::Flat,
-                                "Flat",
-                            );
-                        });
-                });
-
-                if ui
-                    .add_enabled(is_valid, egui::Button::new("Create"))
-                    .clicked()
-                {
-                    let flat = VoxelModelFactory::create_cuboid(
-                        dialog.dimensions,
-                        Color::new_srgb(0.5, 0.5, 0.5),
-                    );
-                    let file_path = PathBuf::from_str(&dialog.file_path).unwrap();
-                    let asset_path = AssetPath::from_project_dir_path(
-                        session.project_save_dir.as_ref().unwrap(),
-                        &file_path,
-                    );
-                    assets.save_asset(asset_path.clone(), flat.model.clone());
-                    let model_id = voxel_world.register_renderable_voxel_model(
-                        format!(
-                            "asset_{:?}",
-                            file_path.strip_prefix(session.project_assets_dir().unwrap())
-                        ),
-                        flat,
-                    );
-                    voxel_world
-                        .registry
-                        .set_voxel_model_asset_path(model_id, Some(asset_path));
-                    if let Ok(mut renderable) =
-                        ecs_world.get::<&mut RenderableVoxelEntity>(dialog.associated_entity)
-                    {
-                        renderable.set_id(model_id);
-                    }
-                    force_close = true;
-                }
-            });
-        if !dialog.open || force_close {
-            ui_state.new_model_dialog = None;
-        }
-    }
 }
 
 fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUIState) {
@@ -948,10 +699,21 @@ fn world_pane(
                 "Current chunk {} {} {}",
                 current_chunk.x, current_chunk.y, current_chunk.z
             ));
+            let chunk_load_iter = &voxel_world.chunks.chunk_load_iter;
+            ui.label(format!(
+                "Current chunk_iter radius: {}/{}",
+                chunk_load_iter.curr_radius(),
+                chunk_load_iter.max_radius(),
+            ));
+            ui.label(format!(
+                "Current chunk_iter index: {}/{}",
+                chunk_load_iter.curr_index(),
+                chunk_load_iter.max_index()
+            ));
             ui.horizontal(|ui| {
                 ui.label("Generation radius:");
                 ui.add(
-                    egui::Slider::new(&mut editor.terrain_generation.generation_radius, 0..=16)
+                    egui::Slider::new(&mut editor.terrain_generation.generation_radius, 0..=128)
                         .step_by(1.0),
                 );
             });
@@ -1000,96 +762,6 @@ fn world_pane(
         .show(ui, content);
 }
 
-fn editing_pane(
-    ui: &mut egui::Ui,
-    ecs_world: &mut ECSWorld,
-    editor: &mut Editor,
-    voxel_world: &mut VoxelWorld,
-    ui_state: &mut EditorUIState,
-    session: &mut Session,
-    assets: &mut Assets,
-) {
-    let content = |ui: &mut egui::Ui| {
-        ui.label(egui::RichText::new("Voxel Editing").size(20.0));
-
-        ui.horizontal(|ui| {
-            ui.label("Entity editing enabled:");
-            ui.add(egui::Checkbox::without_text(
-                &mut editor.world_editing.entity_enabled,
-            ));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Terrain editing enabled:");
-            ui.checkbox(&mut editor.world_editing.terrain_enabled, "");
-        });
-
-        let editor_color = &mut editor.world_editing.color;
-        let mut egui_color = egui::Color32::from_rgb(
-            editor_color.r_u8(),
-            editor_color.g_u8(),
-            editor_color.b_u8(),
-        );
-
-        egui::color_picker::color_picker_color32(
-            ui,
-            &mut egui_color,
-            egui::color_picker::Alpha::Opaque,
-        );
-        editor_color.set_rgb_u8(egui_color.r(), egui_color.g(), egui_color.b());
-
-        ui.add_enabled_ui(
-            editor.world_editing.terrain_enabled || editor.world_editing.entity_enabled,
-            |ui| {
-                ui.label("Tools");
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(
-                            editor.world_editing.tool != EditorEditingTool::Pencil,
-                            egui::Button::new("Pencil"),
-                        )
-                        .clicked()
-                    {
-                        editor.world_editing.tool = EditorEditingTool::Pencil;
-                    }
-                    if ui
-                        .add_enabled(
-                            editor.world_editing.tool != EditorEditingTool::Eraser,
-                            egui::Button::new("Eraser"),
-                        )
-                        .clicked()
-                    {
-                        editor.world_editing.tool = EditorEditingTool::Eraser;
-                    }
-                });
-                ui.add_space(8.0);
-
-                let size = &mut editor.world_editing.size;
-                match &mut editor.world_editing.tool {
-                    EditorEditingTool::Pencil => {
-                        ui.label(egui::RichText::new("Pencil").size(18.0));
-                        ui.horizontal(|ui| {
-                            ui.label("Size:");
-                            ui.add(egui::Slider::new(size, 0..=100).step_by(1.0));
-                        });
-                    }
-                    EditorEditingTool::Brush => {}
-                    EditorEditingTool::Eraser => {
-                        ui.label(egui::RichText::new("Eraser").size(18.0));
-                        ui.horizontal(|ui| {
-                            ui.label("Size:");
-                            ui.add(egui::Slider::new(size, 0..=100).step_by(1.0));
-                        });
-                    }
-                }
-            },
-        );
-    };
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, content);
-}
-
 fn right_editor_pane(
     ui: &mut egui::Ui,
     ecs_world: &mut ECSWorld,
@@ -1102,6 +774,7 @@ fn right_editor_pane(
     assets: &mut Assets,
     time: &Time,
     scripts: &mut Scripts,
+    settings: &mut Settings,
 ) {
     ui.horizontal(|ui| {
         ui.style_mut().spacing.item_spacing.x = 1.0;
@@ -1233,6 +906,7 @@ fn right_editor_pane(
                     ui_state,
                     session,
                     assets,
+                    settings,
                     time,
                 );
             }
@@ -1276,26 +950,6 @@ pub fn game_pane(
                 }
             });
         });
-    };
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, content);
-}
-
-pub fn user_pane(
-    ui: &mut egui::Ui,
-    ecs_world: &mut ECSWorld,
-    editor: &mut Editor,
-    voxel_world: &mut VoxelWorld,
-    ui_state: &mut EditorUIState,
-    session: &mut Session,
-    assets: &mut Assets,
-    time: &Time,
-) {
-    let content = |ui: &mut egui::Ui| {
-        ui.label(egui::RichText::new("User Settings").size(20.0));
-        ui.add_space(16.0);
     };
 
     egui::ScrollArea::vertical()

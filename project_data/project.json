@@ -2,15 +2,15 @@
   "editor_camera_transform": {
     "transform": {
       "position": [
-        4.432511,
-        -0.13847482,
-        -1.1624475
+        11.998066,
+        53.398796,
+        -24.135197
       ],
       "rotation": [
-        -0.011958492,
-        -0.61080015,
-        -0.009226722,
-        0.79164076
+        -0.4450234,
+        0.26111874,
+        -0.13743699,
+        -0.8455071
       ],
       "scale": [
         1.0,
@@ -27,9 +27,9 @@
     }
   },
   "rotation_anchor": [
-    0.0,
-    7.450581e-9,
-    0.0
+    -2.7145722,
+    15.407831,
+    -2.587153
   ],
   "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/terrain/sft_test",
   "game_camera": "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
@@ -72,8 +72,8 @@
           "Transform": {
             "position": [
               4.73,
-              6.0,
-              -8.55
+              9.050012,
+              -13.050017
             ],
             "rotation": [
               0.15102473,
@@ -100,21 +100,21 @@
       "uuid": "10857122-7467-4700-b661-d6c0d2d954e3",
       "parent": null,
       "children": [
-        "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
-        "ef50abac-9c19-49e5-b1ec-66b28ba62aec",
+        "31841ea3-b0bd-4e41-9ac9-16c291460915",
         "b595d7f1-d402-4c03-ac20-247a464b6244",
-        "efc1972d-3265-4c87-86e6-9f806c84a522",
-        "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
         "7c5659dc-4740-4447-86de-1cadd45a4be9",
-        "31841ea3-b0bd-4e41-9ac9-16c291460915"
+        "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
+        "ef50abac-9c19-49e5-b1ec-66b28ba62aec",
+        "efc1972d-3265-4c87-86e6-9f806c84a522",
+        "3c4ec113-7ad1-4d5b-965c-a54cad62c466"
       ],
       "components": [
         {
           "Transform": {
             "position": [
               0.0,
-              7.450581e-9,
-              0.0
+              44.399944,
+              -17.05001
             ],
             "rotation": [
               0.0,

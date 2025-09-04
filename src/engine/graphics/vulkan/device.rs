@@ -2026,7 +2026,7 @@ impl VulkanResourceManager {
             let mut in_use_staging_buffers = self.in_use_staging_buffers.write();
             for staging_buffer_handle in to_free_staging_buffer_handles.drain(..) {
                 in_use_staging_buffers.remove(&staging_buffer_handle);
-                let staging_buffer = staging_buffers.get_mut(staging_buffer_handle);
+                let staging_buffer = staging_buffers.get_mut(staging_buffer_handle).unwrap();
                 staging_buffer.curr_write_pointer = 0;
             }
         }
@@ -2879,7 +2879,7 @@ frame_descriptor_set_group
                         .clone()
                 };
                 // Mark descriptor set as used so the GC won't get rid of it for a bit.
-                let mut vk_set = descriptor_sets.get_mut(vk_set_idx);
+                let mut vk_set = descriptor_sets.get_mut(vk_set_idx).unwrap();
                 vk_set.usage_score.set_used();
 
                 Some((set_binding.set_index, vk_set.descriptor_set))
@@ -3101,7 +3101,7 @@ frame_descriptor_set_group
         let staging_buffer_index = self.get_or_create_staging_buffer(allocator, write_len);
 
         let mut staging_buffers = self.staging_buffers.write();
-        let staging_buffer = staging_buffers.get_mut(staging_buffer_index);
+        let staging_buffer = staging_buffers.get_mut(staging_buffer_index).unwrap();
 
         let write_ptr = unsafe {
             staging_buffer
@@ -3153,7 +3153,7 @@ frame_descriptor_set_group
         let staging_buffer_index = self.get_or_create_staging_buffer(allocator, write_len);
 
         let mut staging_buffers = self.staging_buffers.write();
-        let staging_buffer = staging_buffers.get_mut(staging_buffer_index);
+        let staging_buffer = staging_buffers.get_mut(staging_buffer_index).unwrap();
 
         let write_ptr = unsafe {
             staging_buffer
@@ -3249,7 +3249,7 @@ frame_descriptor_set_group
         for (staging_buffer_index, copy_tasks) in copy_tasks.drain() {
             in_use_staging_buffers.insert(staging_buffer_index);
             staging_buffer_gpu_timeline.push(staging_buffer_index);
-            let staging_buffer = staging_buffers.get(staging_buffer_index);
+            let staging_buffer = staging_buffers.get(staging_buffer_index).unwrap();
 
             let mut dst_buffer_copy_map: HashMap<ResourceId<Buffer>, Vec<ash::vk::BufferCopy>> =
                 HashMap::new();

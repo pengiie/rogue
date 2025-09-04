@@ -624,7 +624,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             self.update_tracker = model.update_tracker;
             let compressed_model = VoxelModelTHCCompressed::from(model);
             if self.compressed_model.is_some() {
-                self.compressed_model_gpu.dealloc(allocator);
+                self.compressed_model_gpu.deallocate(allocator);
             }
 
             self.compressed_model = Some(compressed_model);
@@ -650,6 +650,10 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             self.compressed_model_gpu
                 .write_gpu_updates(device, allocator, compressed_model);
         };
+    }
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
+        todo!()
     }
 }
 
@@ -930,20 +934,6 @@ impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {
     }
 }
 
-impl VoxelModelTHCCompressedGpu {
-    pub fn dealloc(&mut self, allocator: &mut VoxelDataAllocator) {
-        if let Some(nodes_alloc) = self.nodes_allocation.take() {
-            allocator.free(&nodes_alloc);
-        }
-        for (_, alloc) in self.attachment_lookup_allocations.drain() {
-            allocator.free(&alloc);
-        }
-        for (_, alloc) in self.attachment_raw_allocations.drain() {
-            allocator.free(&alloc);
-        }
-    }
-}
-
 impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         let Some(data_allocation) = &self.nodes_allocation else {
@@ -1167,6 +1157,18 @@ impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
         //        todo!("Process GPU updates")
         //    }
         //}
+    }
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
+        if let Some(nodes_alloc) = self.nodes_allocation.take() {
+            allocator.free(&nodes_alloc);
+        }
+        for (_, alloc) in self.attachment_lookup_allocations.drain() {
+            allocator.free(&alloc);
+        }
+        for (_, alloc) in self.attachment_raw_allocations.drain() {
+            allocator.free(&alloc);
+        }
     }
 }
 

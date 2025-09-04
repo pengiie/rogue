@@ -38,11 +38,11 @@ impl ChunkGenerator {
 
         let color_noise = noise::Fbm::<noise::Perlin>::new(0).set_octaves(3);
         let height_freq = 1.0 / (32.0 * consts::voxel::VOXELS_PER_METER as f64);
-        let ground_height_noise = noise::Fbm::<noise::Perlin>::new(0)
+        let ground_height_noise_gen = noise::Fbm::<noise::Perlin>::new(0)
             .set_octaves(4)
             .set_frequency(height_freq);
         let structure_freq = 1.0 / (128.0 * consts::voxel::VOXELS_PER_METER as f64);
-        let structure_nosie = noise::Fbm::<noise::Perlin>::new(0)
+        let structure_noise_gen = noise::Fbm::<noise::Perlin>::new(0)
             .set_frequency(structure_freq)
             .set_octaves(4)
             .set_persistence(0.8);
@@ -63,19 +63,23 @@ impl ChunkGenerator {
                 let y = (world_pos.y - world_pos.y.rem_euclid(1)) as f64;
                 let z = (world_pos.z - world_pos.z.rem_euclid(1)) as f64;
 
-                let mut density = structure_nosie.get([x, y, z]);
+                if (y * consts::voxel::VOXEL_METER_LENGTH as f64).abs() >= 64.0 {
+                    return;
+                }
 
-                let height_noise = ground_height_noise.get([x, z]);
+                let mut density = structure_noise_gen.get([x, y, z]);
+
+                let height_noise = ground_height_noise_gen.get([x, z]);
                 let height_range = 8.0 * VOXELS_PER_METER as f64;
-                let structure_noise = ground_height_noise.get([x, z]) * 0.5 + 0.3;
-                let structure_range = 40.0 * VOXELS_PER_METER as f64;
+                let structure_noise = structure_noise_gen.get([x, z]) * 0.5 + 0.3;
+                let structure_range = 60.0 * VOXELS_PER_METER as f64;
                 let base_ground = 0.0;
                 let ground_height =
                     base_ground + height_noise * height_range + structure_noise * structure_range;
                 let ground_bias = ((ground_height - y) / height_range);
                 density += ground_bias;
 
-                if (density > 0.0) {
+                if (density > 0.0 && y > -3.0 * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as f64) {
                     let r_var = color_noise.get([x / 7.0, y / 7.0, z / 7.0]) as f32;
                     let dirting = ((density - 0.1) * 2.0).clamp(0.0, 1.0) as f32;
 

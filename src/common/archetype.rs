@@ -9,7 +9,6 @@ use super::dyn_vec::TypeInfo;
 #[derive(Clone)]
 pub struct Archetype {
     types: Vec<TypeInfo>,
-    // TODO: Replace with DynVec
     data: Vec<Vec<u8>>,
     global_indices: Vec<u64>,
     size: u64,
@@ -58,23 +57,7 @@ impl Archetype {
             .offset((type_info.size() as u64 * index) as isize)
     }
 
-    unsafe fn insert_raw(&mut self, data: *const u8, type_info: TypeInfo, dst_byte_index: u64) {
-        assert_eq!(
-            dst_byte_index % type_info.alignment() as u64,
-            0,
-            "dst_index is not properly aligned to what the source type should be."
-        );
-
-        let dst_data = self.get_type_data_mut(&type_info);
-
-        unsafe {
-            let dst_ptr = dst_data
-                .as_mut_slice()
-                .as_mut_ptr()
-                .offset(dst_byte_index as isize);
-            dst_ptr.copy_from_nonoverlapping(data, type_info.size() as usize);
-        }
-    }
+    unsafe fn insert_raw(&mut self, data: *const u8, type_info: TypeInfo, dst_byte_index: u64) {}
 
     fn resize(&mut self, additional: u64) {
         for (type_info, type_data) in self.types.iter().zip(self.data.iter_mut()) {
@@ -97,14 +80,43 @@ impl Archetype {
         return i;
     }
 
+    pub fn remove(&mut self, index: u64) {
+        assert_ne!(self.global_indices[index as usize], Self::NULL_INDEX);
+        for (i, data) in self.data.iter_mut().enumerate() {
+            let type_info = self.types[i];
+            let ptr = unsafe {
+                data.as_mut_slice()
+                    .as_mut_ptr()
+                    .offset((index * type_info.stride() as u64) as isize)
+            };
+            log::info!("pre drop");
+            unsafe { type_info.drop(ptr) };
+            log::info!("post drop");
+        }
+        self.global_indices[index as usize] = Self::NULL_INDEX;
+    }
+
     pub fn insert<T: ArchetypeStorage>(&mut self, global_id: u64, data: T) -> u64 {
         let index = self.allocate_entry();
 
         // Move `data` into our managed arrays.
         let data_info = data.type_info();
-        for (ty, data_ptr) in data_info {
+        for (i, (type_info, data_ptr)) in data_info.iter().enumerate() {
+            let dst_byte_index = index * type_info.stride() as u64;
+            assert_eq!(
+                dst_byte_index % type_info.alignment() as u64,
+                0,
+                "dst_index is not properly aligned to what the source type should be."
+            );
+
+            let dst_data = &mut self.data[i];
+
             unsafe {
-                self.insert_raw(data_ptr, ty, index * ty.size() as u64);
+                let dst_ptr = dst_data
+                    .as_mut_slice()
+                    .as_mut_ptr()
+                    .offset(dst_byte_index as isize);
+                dst_ptr.copy_from_nonoverlapping(*data_ptr, type_info.size() as usize);
             }
         }
         std::mem::forget(data);
@@ -179,6 +191,10 @@ impl<'a> Iterator for ArchetypeIter<'a> {
         }
 
         let global_id = self.archetype.global_indices[self.i];
+        if global_id == Archetype::NULL_INDEX {
+            self.i += 1;
+            return None;
+        }
         let vec = self
             .archetype
             .types
@@ -215,6 +231,10 @@ impl<'a> Iterator for ArchetypeIterMut<'a> {
         }
 
         let global_id = self.archetype.global_indices[self.i];
+        if global_id == Archetype::NULL_INDEX {
+            self.i += 1;
+            return None;
+        }
         let vec = self
             .archetype
             .types

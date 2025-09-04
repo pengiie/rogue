@@ -44,6 +44,7 @@ impl Default for GraphicsSettings {
 /// Called/recieved whenever a setting is changed.
 pub enum SettingsEvent {
     TicksPerSecond(u32),
+    ChunkRenderDistance(u32),
 }
 
 #[derive(Resource, Serialize, Deserialize)]

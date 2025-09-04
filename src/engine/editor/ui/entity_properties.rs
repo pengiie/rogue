@@ -8,6 +8,7 @@ use crate::{
             asset::{AssetPath, Assets},
             repr::voxel::any::VoxelModelAnyAsset,
         },
+        editor::editor::Editor,
         entity::{
             ecs_world::{ECSWorld, Entity},
             scripting::{ScriptableEntity, Scripts},
@@ -32,8 +33,6 @@ use crate::{
     },
     session::Session,
 };
-
-use super::editor::Editor;
 
 fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
     ui.horizontal(|ui| {
@@ -554,7 +553,7 @@ fn renderable_component(
 
                 // User selected model name with submenu.
                 let text = if let Some(model_id) = renderable_voxel_model.voxel_model_id() {
-                    let info = voxel_world.registry.get_model_info(model_id);
+                    let info = voxel_world.registry.get_model_info(model_id).unwrap();
                     info.asset_path
                         .as_ref()
                         .map(|path| {
@@ -608,9 +607,9 @@ fn renderable_component(
                     }
 
                     // Save the model to the project asset directory.
-                    let model_info = renderable_voxel_model
-                        .voxel_model_id()
-                        .map_or(None, |id| Some(voxel_world.registry.get_model_info(id)));
+                    let model_info = renderable_voxel_model.voxel_model_id().map_or(None, |id| {
+                        Some(voxel_world.registry.get_model_info(id).unwrap())
+                    });
                     if ui
                         .add_enabled(
                             model_info
@@ -651,7 +650,11 @@ fn renderable_component(
 
             // Model type UI with conversion.
             if let Some(model_id) = renderable_voxel_model.voxel_model_id() {
-                let info = voxel_world.registry.get_model_info(model_id).clone();
+                let info = voxel_world
+                    .registry
+                    .get_model_info(model_id)
+                    .unwrap()
+                    .clone();
                 let text = match &info.model_type {
                     Some(ty) => ty.as_ref(),
                     None => "Unknown",

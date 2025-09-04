@@ -297,16 +297,6 @@ impl PhysicsWorld {
                     // COM applies here so:
                     // m1*vi1 + m2*vi2 = m1*vf1 + m2*vf2
                     // vf1 = m1*vi1 + m2*vi2 -
-                    let new_v1 =
-                        rigid_body_a.inv_mass() * rigid_body_b.mass() * rigid_body_b.velocity;
-                    let new_v2 =
-                        rigid_body_b.inv_mass() * rigid_body_a.mass() * rigid_body_a.velocity;
-                    rigid_body_a.velocity = new_v1;
-                    rigid_body_b.velocity = new_v2;
-
-                    // Depending on restitution, COE also applies.
-                    // KE = 1/2 * mass * velocity^2
-                    // 1/2*m1*vi1^2 + 1/2*m2*vi2^2 =  q
                 }
             }
         }

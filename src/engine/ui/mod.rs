@@ -335,7 +335,7 @@ impl UI {
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
         mut physics_world: ResMut<PhysicsWorld>,
-        settings: Res<Settings>,
+        mut settings: ResMut<Settings>,
         mut ecs_world: ResMut<ECSWorld>,
         mut editor: ResMut<Editor>,
         mut session: ResMut<Session>,
@@ -365,6 +365,7 @@ impl UI {
                     window,
                     &time,
                     &mut scripts,
+                    &mut settings,
                 );
             } else {
                 egui::Window::new("Debug")

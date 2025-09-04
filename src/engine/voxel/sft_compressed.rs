@@ -50,7 +50,7 @@ impl SFTNodeCompressed {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SFTAttachmentLookupNodeCompressed {
     pub data_ptr: u32,
     // A mask designating which children have the attachment.
@@ -375,6 +375,13 @@ impl From<&VoxelModelSFT> for VoxelModelSFTCompressed {
             let next_child_node_ptr = &curr_node.children[*curr_child_iter];
             *curr_child_iter += 1;
             stack.push((next_child_node_ptr, compressed_child_ptr, 0));
+        }
+
+        for (attachment_id, lookup_data) in compressed.attachment_lookup_data.iter_mut() {
+            lookup_data.resize(
+                compressed.node_data.len(),
+                SFTAttachmentLookupNodeCompressed::new_empty(),
+            );
         }
 
         return compressed;

@@ -192,7 +192,7 @@ impl EditorGameEntityAsset {
 
         if let Ok(voxel_model_ref) = ecs_world.get::<&RenderableVoxelEntity>(entity_id) {
             if let Some(voxel_model_id) = voxel_model_ref.voxel_model_id() {
-                let model_info = registry.get_model_info(voxel_model_id);
+                let model_info = registry.get_model_info(voxel_model_id).unwrap();
                 if let Some(asset_path) = &model_info.asset_path {
                     s.components
                         .push(EditorGameComponentAsset::RenderableVoxelEntity {

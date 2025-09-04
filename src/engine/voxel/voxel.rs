@@ -127,6 +127,8 @@ pub trait VoxelModelGpuImpl: Send + Sync + Any {
         allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImpl,
     );
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator);
 }
 pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
     fn new() -> Self;

@@ -8,8 +8,12 @@ use crate::{
     common::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
         dyn_vec::TypeInfo,
+        freelist::{FreeList, FreeListHandle},
     },
-    engine::asset::{asset::AssetPath, repr::voxel::any::VoxelModelAnyAsset},
+    engine::{
+        asset::{asset::AssetPath, repr::voxel::any::VoxelModelAnyAsset},
+        voxel::voxel_allocator::VoxelDataAllocator,
+    },
 };
 
 use super::{
@@ -35,6 +39,14 @@ impl VoxelModelId {
         Self { id }
     }
 
+    pub fn air() -> Self {
+        Self { id: 0x0000_FFFEu64 }
+    }
+
+    pub fn is_air(&self) -> bool {
+        self.id == 0x0000_FFFEu64
+    }
+
     pub fn null() -> Self {
         Self { id: u64::MAX }
     }
@@ -50,6 +62,7 @@ pub struct VoxelModelInfo {
     pub model_type_id: std::any::TypeId,
     pub model_type: Option<VoxelModelType>,
     gpu_type: Option<std::any::TypeId>,
+    // The index within the archetype the model is assigned to.
     archetype_index: u64,
     pub asset_path: Option<AssetPath>,
 }
@@ -63,7 +76,7 @@ pub struct VoxelModelRegistry {
     standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
     // TODO: Create FreeList alloc generic impl and replace this with it so we can also unload
     // voxel models.
-    pub voxel_model_info: Vec<VoxelModelInfo>,
+    pub voxel_model_info: FreeList<VoxelModelInfo>,
 
     // Maps model_type to the vtable for dyn VoxelModelImpl and
     // maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
@@ -76,14 +89,15 @@ impl VoxelModelRegistry {
         Self {
             renderable_voxel_model_archtypes: HashMap::new(),
             standalone_voxel_model_archtypes: HashMap::new(),
-            voxel_model_info: Vec::new(),
+            voxel_model_info: FreeList::new(),
             type_vtables: HashMap::new(),
             id_counter: 0,
         }
     }
 
-    pub fn get_model_info(&self, id: VoxelModelId) -> &VoxelModelInfo {
-        &self.voxel_model_info[id.id as usize]
+    pub fn get_model_info(&self, id: VoxelModelId) -> Option<&VoxelModelInfo> {
+        self.voxel_model_info
+            .get(FreeListHandle::new(id.id as usize))
     }
 
     pub fn next_id(&mut self) -> VoxelModelId {
@@ -97,7 +111,38 @@ impl VoxelModelRegistry {
         voxel_model_id: VoxelModelId,
         asset_path: Option<AssetPath>,
     ) {
-        self.voxel_model_info[voxel_model_id.id as usize].asset_path = asset_path;
+        self.voxel_model_info
+            .get_mut(FreeListHandle::new(voxel_model_id.id as usize))
+            .unwrap()
+            .asset_path = asset_path;
+    }
+
+    /// Noop if model is already unloaded or doesn't exist.
+    pub fn unload_model(&mut self, id: VoxelModelId, voxel_allocator: &mut VoxelDataAllocator) {
+        let info_handle = FreeListHandle::new(id.id as usize);
+        let Some(info) = self.voxel_model_info.get(info_handle) else {
+            return;
+        };
+        if info.gpu_type.is_some() {
+            let mut dyn_gpu = self.get_dyn_gpu_model_mut(id);
+            dyn_gpu.deallocate(voxel_allocator);
+            log::info!("deallocated {:?}", id);
+
+            let info = self.voxel_model_info.get(info_handle).unwrap();
+            self.renderable_voxel_model_archtypes
+                .get_mut(&info.model_type_id)
+                .unwrap()
+                .0
+                .remove(info.archetype_index);
+            log::info!("removed");
+        } else {
+            log::info!("deallocated standalone {:?}", id);
+            self.standalone_voxel_model_archtypes
+                .get_mut(&info.model_type_id)
+                .unwrap()
+                .remove(info.archetype_index);
+        }
+        self.voxel_model_info.remove(info_handle);
     }
 
     // TODO: Add more methods to the Impl so we don't have like 50 match statements.
@@ -283,7 +328,7 @@ impl VoxelModelRegistry {
     pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImpl {
         let model_info = self
             .voxel_model_info
-            .get(id.id as usize)
+            .get(FreeListHandle::new(id.id as usize))
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -320,7 +365,7 @@ impl VoxelModelRegistry {
     pub fn get_model<'a, T: VoxelModelImpl>(&'a self, id: VoxelModelId) -> &'a T {
         let model_info = self
             .voxel_model_info
-            .get(id.id as usize)
+            .get(FreeListHandle::new(id.id as usize))
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -350,7 +395,7 @@ impl VoxelModelRegistry {
     pub fn get_dyn_model_mut<'a>(&'a mut self, id: VoxelModelId) -> &'a mut dyn VoxelModelImpl {
         let model_info = self
             .voxel_model_info
-            .get(id.id as usize)
+            .get(FreeListHandle::new(id.id as usize))
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -390,7 +435,7 @@ impl VoxelModelRegistry {
     ) -> (&'a dyn VoxelModelImpl, &'a dyn VoxelModelGpuImpl) {
         let model_info = self
             .voxel_model_info
-            .get(id.id as usize)
+            .get(FreeListHandle::new(id.id as usize))
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -440,6 +485,49 @@ impl VoxelModelRegistry {
         };
 
         (voxel_model_dyn_ref, voxel_model_gpu_dyn_ref)
+    }
+
+    pub fn get_dyn_gpu_model_mut<'a>(
+        &'a mut self,
+        id: VoxelModelId,
+    ) -> &'a mut dyn VoxelModelGpuImpl {
+        let model_info = self
+            .voxel_model_info
+            .get(FreeListHandle::new(id.id as usize))
+            .expect("Voxel model id is invalid");
+
+        let archetype = if model_info.gpu_type.is_none() {
+            panic!("nope");
+        } else {
+            &self
+                .renderable_voxel_model_archtypes
+                .get(&model_info.model_type_id)
+                .unwrap()
+                .0
+        };
+
+        let model_type_info = &archetype.type_infos()[0];
+        assert_eq!(model_type_info.type_id(), model_info.model_type_id);
+        let model_gpu_type_info = &archetype.type_infos()[1];
+        assert_eq!(model_gpu_type_info.type_id(), model_info.gpu_type.unwrap());
+
+        let model_gpu_ptr = unsafe {
+            archetype.get_raw(model_gpu_type_info, model_info.archetype_index) as *mut u8
+        };
+
+        let voxel_model_gpu_dyn_ref = {
+            let model_gpu_vtable = *self
+                .type_vtables
+                .get(&model_gpu_type_info.type_id())
+                .unwrap();
+            let fat_ptr = (model_gpu_ptr, model_gpu_vtable);
+            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelGpuImpl;
+
+            // TODO: Write why this is safe.
+            unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }
+        };
+
+        voxel_model_gpu_dyn_ref
     }
 
     pub fn renderable_models_dyn_iter(&self) -> RenderableVoxelModelIter<'_> {

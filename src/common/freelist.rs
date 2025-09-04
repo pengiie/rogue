@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     iter::Enumerate,
     ops::{Deref, DerefMut},
     usize,
@@ -6,16 +7,32 @@ use std::{
 
 use log::debug;
 
-union FreeListNode<T> {
-    next_free: usize,
+struct FreeListNode<T> {
     data: std::mem::ManuallyDrop<T>,
+}
+
+impl<T: Clone> Clone for FreeListNode<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+        }
+    }
 }
 
 // TODO: Make a new free list variant that stores free nodes with a separate
 // HashSet so we can easily tell which nodes have been freed or not.
 pub struct FreeList<T> {
     data: Vec<FreeListNode<T>>,
-    free_head: usize,
+    free: Vec<usize>,
+}
+
+impl<T: Clone> Clone for FreeList<T> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            free: self.free.clone(),
+        }
+    }
 }
 
 pub struct FreeListHandle<T> {
@@ -74,74 +91,59 @@ impl<T> FreeList<T> {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
-            free_head: std::usize::MAX,
+            free: Vec::new(),
         }
     }
 
     pub fn push(&mut self, val: T) -> FreeListHandle<T> {
-        if self.free_head == std::usize::MAX {
-            self.data.push(FreeListNode {
+        if let Some(next_free) = self.free.pop() {
+            self.data[next_free] = FreeListNode {
                 data: std::mem::ManuallyDrop::new(val),
-            });
-            return FreeListHandle::new(self.data.len() - 1);
+            };
+            return FreeListHandle::new(next_free);
         }
 
-        let new_pos = self.free_head;
-        let next_free = unsafe { self.data[self.free_head].next_free };
-        self.free_head = next_free;
-
-        self.data[new_pos] = FreeListNode {
+        self.data.push(FreeListNode {
             data: std::mem::ManuallyDrop::new(val),
-        };
-        FreeListHandle::new(new_pos)
+        });
+        return FreeListHandle::new(self.data.len() - 1);
     }
 
     pub fn remove(&mut self, handle: FreeListHandle<T>) -> T {
         assert!(handle.index < self.data.len());
-
-        let val = unsafe { std::mem::ManuallyDrop::take(&mut self.data[handle.index].data) };
-
-        // The free head is after the node we just removed, if add, remove, and add index 0,
-        // self.free_head starts as a usize::MAX so next_free is set correctly to usize::MAX.
-        if handle.index < self.free_head {
-            self.data[handle.index].next_free = self.free_head;
-            self.free_head = handle.index;
-            return val;
-        }
-
-        let mut prev_left = self.free_head;
-        let mut left = self.free_head;
-        while left < handle.index {
-            prev_left = left;
-            left = unsafe { self.data[left].next_free };
-        }
-
-        self.data[prev_left].next_free = handle.index;
-        self.data[handle.index].next_free = left;
-
-        return val;
+        self.free.push(handle.index);
+        return unsafe { std::mem::ManuallyDrop::take(&mut self.data[handle.index].data) };
     }
 
-    // TODO: Make this safe with an Option.
-    pub fn get(&self, handle: FreeListHandle<T>) -> &T {
-        unsafe { &self.data[handle.index].data }
+    pub fn is_free(&self, handle: FreeListHandle<T>) -> bool {
+        return self.free.iter().any(|x| *x == handle.index);
     }
 
-    pub fn get_mut(&mut self, handle: FreeListHandle<T>) -> &mut T {
-        unsafe { &mut self.data[handle.index].data }
+    pub fn get(&self, handle: FreeListHandle<T>) -> Option<&T> {
+        if self.is_free(handle) {
+            return None;
+        }
+        return Some(unsafe { &self.data[handle.index].data });
+    }
+
+    pub fn get_mut(&mut self, handle: FreeListHandle<T>) -> Option<&mut T> {
+        assert!(handle.index < self.data.len());
+        if self.is_free(handle) {
+            return None;
+        }
+        return Some(unsafe { &mut self.data[handle.index].data });
     }
 
     /// If we did push, this is the next free handle that we would be given, this handle is not
     /// valid to use.
     pub fn next_free_handle(&self) -> FreeListHandle<T> {
-        return FreeListHandle::new(self.free_head.min(self.data.len()));
+        return FreeListHandle::new(*self.free.last().unwrap_or(&self.data.len()));
     }
 
     pub fn iter(&self) -> FreeListIterator<'_, T> {
         FreeListIterator {
             free_list: self,
             left: 0,
-            right: self.free_head.min(self.data.len().saturating_sub(1)),
         }
     }
 
@@ -149,7 +151,6 @@ impl<T> FreeList<T> {
         FreeListHandleIteratorMut {
             free_list: std::ptr::from_mut(self),
             left: 0,
-            right: self.free_head.min(self.data.len().saturating_sub(1)),
             _marker: std::marker::PhantomData,
         }
     }
@@ -157,19 +158,10 @@ impl<T> FreeList<T> {
 
 impl<T> Drop for FreeList<T> {
     fn drop(&mut self) {
-        let mut left = 0;
-        let mut right = self.free_head.min(self.data.len());
-        while left < self.data.len() && right <= self.data.len() {
-            for i in left..right {
+        for i in 0..self.data.len() {
+            if !self.free.iter().any(|x| *x == i) {
                 unsafe { std::mem::ManuallyDrop::drop(&mut self.data[i].data) };
             }
-            if right == self.data.len() {
-                break;
-            }
-
-            left = right + 1;
-            let next_free = unsafe { self.data[right].next_free };
-            right = next_free.min(self.data.len());
         }
     }
 }
@@ -179,7 +171,6 @@ impl<T> Drop for FreeList<T> {
 pub struct FreeListIterator<'a, T> {
     free_list: &'a FreeList<T>,
     left: usize,
-    right: usize,
 }
 
 impl<'a, T> Iterator for FreeListIterator<'a, T> {
@@ -191,21 +182,9 @@ impl<'a, T> Iterator for FreeListIterator<'a, T> {
             return None;
         }
 
-        if self.left == self.right {
-            let mut last_free = self.right;
-            let mut next_free = unsafe { free_list.data[self.right].next_free };
-            while last_free + 1 == next_free {
-                last_free = next_free;
-                next_free = unsafe { free_list.data[next_free].next_free };
-            }
-
-            // Check if there are more items to iterate.
-            self.left = last_free + 1;
-            if self.left >= free_list.data.len() {
-                return None;
-            }
-
-            self.right = next_free.min(free_list.data.len().saturating_sub(1));
+        if free_list.free.iter().any(|x| *x == self.left) {
+            self.left += 1;
+            return self.next();
         }
 
         let val = unsafe { free_list.data[self.left].data.deref() };
@@ -218,7 +197,6 @@ impl<'a, T> Iterator for FreeListIterator<'a, T> {
 pub struct FreeListHandleIteratorMut<'a, T> {
     free_list: *mut FreeList<T>,
     left: usize,
-    right: usize,
     _marker: std::marker::PhantomData<&'a mut FreeList<T>>,
 }
 
@@ -234,21 +212,9 @@ impl<'a, T> Iterator for FreeListHandleIteratorMut<'a, T> {
             return None;
         }
 
-        if self.left == self.right {
-            let mut last_free = self.right;
-            let mut next_free = unsafe { free_list.data[self.right].next_free };
-            while last_free + 1 == next_free {
-                last_free = next_free;
-                next_free = unsafe { free_list.data[next_free].next_free };
-            }
-
-            // Check if there are more items to iterate.
-            self.left = last_free + 1;
-            if self.left >= free_list.data.len() {
-                return None;
-            }
-
-            self.right = next_free.min(free_list.data.len().saturating_sub(1));
+        if free_list.free.iter().any(|x| *x == self.left) {
+            self.left += 1;
+            return self.next();
         }
 
         let val = unsafe { free_list.data[self.left].data.deref_mut() };

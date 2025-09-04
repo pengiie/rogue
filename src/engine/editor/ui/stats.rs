@@ -6,6 +6,7 @@ use crate::{
     common::util::format_bytes,
     engine::{
         asset::asset::Assets,
+        editor::editor::Editor,
         entity::ecs_world::ECSWorld,
         ui::EditorUIState,
         voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
@@ -13,8 +14,6 @@ use crate::{
     },
     session::Session,
 };
-
-use super::editor::Editor;
 
 pub fn stats_pane(
     ui: &mut egui::Ui,
@@ -92,14 +91,6 @@ pub fn stats_pane(
         let used_bytes = ui.label(format!(
             "Total allocated GPU voxel data: {}",
             format_bytes(voxel_world_gpu.voxel_allocator().total_allocation_size())
-        ));
-        let chunk_load_iter = &voxel_world.chunks.chunk_load_iter;
-        ui.label(format!(
-            "Current chunk_iter radius: {}/{}, index: {}/{}",
-            chunk_load_iter.curr_radius(),
-            chunk_load_iter.max_radius(),
-            chunk_load_iter.curr_index(),
-            chunk_load_iter.max_index()
         ));
     };
 

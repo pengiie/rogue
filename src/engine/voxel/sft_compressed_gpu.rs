@@ -59,6 +59,7 @@ impl VoxelModelSFTCompressedGpu {
                 return false;
             }
             None => {
+                log::info!("SFT node data allocation");
                 let new_allocation = allocator
                     .allocate(device, required_size)
                     .expect("Failed to allocate voxel model data.");
@@ -81,16 +82,12 @@ impl VoxelModelSFTCompressedGpu {
                     let new_allocation = allocator
                         .reallocate(device, old_allocation, required_size)
                         .expect("Failed to reallocate attachment data.");
-                    if old_allocation.start_index_stride_bytes()
-                        != new_allocation.start_index_stride_bytes()
-                    {
-                        allocations.insert(attachment_id.clone(), new_allocation);
-                        return true;
-                    }
+                    return true;
                 }
                 return false;
             }
             None => {
+                log::info!("SFT attachment {:?} allocation data", attachment_id);
                 let new_allocation = allocator
                     .allocate(device, required_size)
                     .expect("Failed to allocate attachment data.");
@@ -265,6 +262,7 @@ impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
             }
 
             for (attachment_id, lookup_data) in model.attachment_lookup_data.iter() {
+                assert_eq!(lookup_data.len(), model.node_data.len());
                 let allocation = self
                     .attachment_lookup_allocations
                     .get(&attachment_id)
@@ -298,6 +296,18 @@ impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
 
             self.initialized_data = true;
             return;
+        }
+    }
+
+    fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
+        if let Some(nodes_alloc) = self.nodes_allocation.take() {
+            allocator.free(&nodes_alloc);
+        }
+        for (_, alloc) in self.attachment_lookup_allocations.drain() {
+            allocator.free(&alloc);
+        }
+        for (_, alloc) in self.attachment_raw_allocations.drain() {
+            allocator.free(&alloc);
         }
     }
 }
