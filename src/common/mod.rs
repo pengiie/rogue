@@ -1,14 +1,13 @@
-pub mod aabb;
 pub mod animate;
 pub mod archetype;
 pub mod bitset;
 pub mod color;
 pub mod dyn_vec;
 pub mod freelist;
+pub mod geometry;
 pub mod id;
 pub mod morton;
-pub mod obb;
 pub mod oneshot;
-pub mod ray;
 pub mod ring_queue;
 pub mod util;
+pub mod vtable;

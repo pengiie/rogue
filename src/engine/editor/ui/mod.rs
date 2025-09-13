@@ -20,7 +20,7 @@ use crate::{
     engine::{
         asset::{
             asset::{AssetPath, Assets},
-            repr::{editor_settings::EditorProjectAsset, image::ImageAsset},
+            repr::image::ImageAsset,
         },
         editor::ui::{
             dialog::{
@@ -40,7 +40,7 @@ use crate::{
         graphics::camera::Camera,
         physics::{
             capsule_collider::{self, CapsuleCollider},
-            physics_world::{ColliderType, Colliders, PhysicsWorld},
+            physics_world::PhysicsWorld,
             plane_collider::PlaneCollider,
             rigid_body::RigidBody,
             transform::Transform,
@@ -55,7 +55,8 @@ use crate::{
             thc::{VoxelModelTHC, VoxelModelTHCCompressed},
             voxel::{VoxelModel, VoxelModelImpl, VoxelModelImplConcrete, VoxelModelType},
             voxel_registry::{VoxelModelId, VoxelModelInfo},
-            voxel_world::{self, VoxelWorld, VoxelWorldGpu},
+            voxel_world::{self, VoxelWorld},
+            voxel_world_gpu::VoxelWorldGpu,
         },
         window::{
             time::{Instant, Time},
@@ -66,7 +67,7 @@ use crate::{
     settings::Settings,
 };
 
-use super::editor::{Editor, EditorEditingTool, EditorView};
+use super::editor::{Editor, EditorView};
 
 pub mod dialog;
 pub mod entity_properties;
@@ -180,7 +181,14 @@ pub fn egui_editor_ui(
                         )
                         .clicked()
                     {
-                        session.save_project(assets, session, editor, ecs_world, voxel_world);
+                        session.save_project(
+                            assets,
+                            session,
+                            editor,
+                            ecs_world,
+                            voxel_world,
+                            physics_world,
+                        );
                         ui.close_menu();
                     }
                     if ui.button("Open").clicked() {}

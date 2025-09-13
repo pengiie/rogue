@@ -11,7 +11,10 @@ use crate::{
         entity::{self, ecs_world::ECSWorld},
         resource::{Res, ResMut},
         ui::UI,
-        voxel::voxel_world::{self, VoxelWorldGpu},
+        voxel::{
+            voxel_world::{self},
+            voxel_world_gpu::VoxelWorldGpu,
+        },
         window::{time::Time, window::Window},
     },
     settings::{GraphicsSettings, Settings},

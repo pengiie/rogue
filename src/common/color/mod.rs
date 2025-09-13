@@ -1,6 +1,6 @@
 use nalgebra::{ComplexField, Matrix3, Vector3};
 
-#[derive(Copy, PartialEq)]
+#[derive(PartialEq)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
     pub xyz: Vector3<f32>,
     _marker: std::marker::PhantomData<S>,
@@ -103,6 +103,8 @@ impl<T: ColorSpace> std::fmt::Debug for Color<T> {
         f.debug_struct("Color").field("xyz", &self.xyz).finish()
     }
 }
+
+impl<T: ColorSpace> Copy for Color<T> {}
 
 impl<T: ColorSpace> Clone for Color<T> {
     fn clone(&self) -> Self {

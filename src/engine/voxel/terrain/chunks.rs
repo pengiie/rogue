@@ -14,10 +14,8 @@ use rogue_macros::Resource;
 
 use crate::{
     common::{
-        aabb::AABB,
         color::Color,
         morton,
-        ray::{Ray, RayDDA},
         ring_queue::RingQueue,
     },
     consts,
@@ -35,20 +33,17 @@ use crate::{
             flat::VoxelModelFlat,
             sft::VoxelModelSFT,
             sft_compressed::VoxelModelSFTCompressed,
+            terrain::{chunk_iter::ChunkIter, RenderableChunks},
             voxel::VoxelModel,
+            voxel_registry::{VoxelModelId, VoxelModelRegistry},
         },
         window::time::Timer,
     },
     session::Session,
     settings::Settings,
 };
-
-use super::{
-    chunk_generator::ChunkGenerator,
-    voxel_registry::{VoxelModelId, VoxelModelInfo, VoxelModelRegistry},
-    voxel_transform::VoxelModelTransform,
-    voxel_world::{VoxelWorld, VoxelWorldModelGpuInfo},
-};
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::{Ray, RayDDA};
 
 #[derive(Hash, PartialEq, Eq)]
 pub struct ChunkTicket {
@@ -265,7 +260,7 @@ impl VoxelRegionLeafNode {
 pub struct VoxelChunks {
     pub chunk_render_distance: u32,
     pub player_chunk_position: Option<Vector3<i32>>,
-    pub chunk_load_iter: ChunkLoadIter,
+    pub chunk_load_iter: ChunkIter,
     // Time between adding chunks to the chunk io queue.
     pub queue_timer: Timer,
     pub renderable_chunks: RenderableChunks,
@@ -288,7 +283,7 @@ impl VoxelChunks {
         Self {
             chunk_render_distance: settings.chunk_render_distance,
             player_chunk_position: None,
-            chunk_load_iter: ChunkLoadIter::new(Vector3::zeros(), settings.chunk_render_distance),
+            chunk_load_iter: ChunkIter::new(Vector3::zeros(), settings.chunk_render_distance),
             renderable_chunks: RenderableChunks::new(settings.chunk_render_distance),
 
             regions: HashMap::new(),
@@ -789,358 +784,5 @@ impl VoxelChunks {
             &world_aabb,
             Vector3::new(side_length, side_length, side_length),
         );
-    }
-}
-
-pub struct ChunkLoadIter {
-    max_radius: u32,
-    curr_radius: u32,
-    curr_index: u32,
-    /// Anchor is in the center with the iterator iterating around.
-    current_chunk_anchor: Vector3<i32>,
-}
-
-impl ChunkLoadIter {
-    pub fn new(chunk_anchor: Vector3<i32>, render_distance: u32) -> Self {
-        Self {
-            max_radius: render_distance,
-            curr_radius: 0,
-            curr_index: 0,
-            current_chunk_anchor: chunk_anchor,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.curr_radius = 0;
-        self.curr_index = 0;
-    }
-
-    pub fn update_max_radius(&mut self, new_max_radius: u32) {
-        self.max_radius = new_max_radius;
-        if self.max_radius < self.curr_radius {
-            self.curr_radius = self.max_radius;
-        }
-        // TODO: Remove and do the transition nicer with the renderable chunks following.
-        self.reset();
-    }
-
-    pub fn max_radius(&self) -> u32 {
-        self.max_radius
-    }
-
-    pub fn curr_radius(&self) -> u32 {
-        self.curr_radius
-    }
-
-    pub fn curr_index(&self) -> u32 {
-        self.curr_index
-    }
-
-    pub fn max_index(&self) -> u32 {
-        let curr_diameter = (self.curr_radius + 1) * 2;
-        let curr_area = curr_diameter.pow(2);
-        return curr_area * 6;
-    }
-
-    pub fn update_anchor(&mut self, new_chunk_anchor: Vector3<i32>) {
-        if new_chunk_anchor == self.current_chunk_anchor {
-            return;
-        }
-
-        let distance = ((new_chunk_anchor - self.current_chunk_anchor).abs().max()) as u32;
-        self.curr_radius = self.curr_radius.saturating_sub(distance);
-        self.curr_index = 0;
-        self.current_chunk_anchor = new_chunk_anchor;
-    }
-
-    /// Enqueues chunks in an iterator fashion so we don't waste time rechecking chunks.
-    pub fn next_chunk(&mut self) -> Option<Vector3<i32>> {
-        if self.curr_radius == self.max_radius {
-            return None;
-        }
-
-        let curr_diameter = (self.curr_radius + 1) * 2;
-        let curr_area = curr_diameter.pow(2);
-        if self.curr_index >= curr_area * 6 {
-            self.curr_radius += 1;
-            self.curr_index = 0;
-            return None;
-        }
-
-        let face = self.curr_index / curr_area;
-        let local_index = self.curr_index % curr_area;
-        let local_position = Vector2::new(
-            (local_index % curr_diameter) as i32,
-            (local_index / curr_diameter) as i32,
-        );
-        let mut chunk_position =
-            self.current_chunk_anchor - Vector3::new(1, 1, 1) * (self.curr_radius + 1) as i32;
-        match face {
-            // Bottom Face
-            0 => chunk_position += Vector3::new(local_position.x, 0, local_position.y),
-            // Top Face
-            1 => {
-                chunk_position +=
-                    Vector3::new(local_position.x, curr_diameter as i32 - 1, local_position.y)
-            }
-            // Front Face
-            2 => chunk_position += Vector3::new(local_position.x, local_position.y, 0),
-            // Back Face
-            3 => {
-                chunk_position +=
-                    Vector3::new(local_position.x, local_position.y, curr_diameter as i32 - 1)
-            }
-            // Left Face
-            4 => chunk_position += Vector3::new(0, local_position.x, local_position.y),
-            // Right Face
-            5 => {
-                chunk_position +=
-                    Vector3::new(curr_diameter as i32 - 1, local_position.x, local_position.y)
-            }
-            _ => unreachable!(),
-        }
-
-        self.curr_index += 1;
-        return Some(chunk_position);
-    }
-}
-
-pub struct RenderableChunks {
-    pub side_length: u32,
-    pub chunk_model_pointers: Vec<VoxelModelId>,
-
-    pub window_offset: Vector3<u32>,
-    pub chunk_anchor: Vector3<i32>,
-    pub is_dirty: bool,
-
-    pub to_update_chunk_normals: HashSet<Vector3<i32>>,
-    pub to_unload_models: Vec<VoxelModelId>,
-}
-
-impl RenderableChunks {
-    pub fn new(render_distance: u32) -> Self {
-        let side_length = render_distance * 2;
-        Self {
-            side_length,
-            chunk_model_pointers: vec![VoxelModelId::null(); side_length.pow(3) as usize],
-            window_offset: Vector3::new(0, 0, 0),
-            chunk_anchor: Vector3::new(0, 0, 0),
-            is_dirty: false,
-            to_update_chunk_normals: HashSet::new(),
-            to_unload_models: Vec::new(),
-        }
-    }
-
-    pub fn in_bounds(&self, world_chunk_pos: &Vector3<i32>) -> bool {
-        let local_chunk_pos = world_chunk_pos - self.chunk_anchor;
-        !(local_chunk_pos.x < 0
-            || local_chunk_pos.y < 0
-            || local_chunk_pos.z < 0
-            || local_chunk_pos.x >= self.side_length as i32
-            || local_chunk_pos.y >= self.side_length as i32
-            || local_chunk_pos.z >= self.side_length as i32)
-    }
-
-    pub fn clear(&mut self) {
-        self.to_update_chunk_normals.clear();
-        self.chunk_model_pointers.fill(VoxelModelId::null());
-        self.is_dirty = true;
-    }
-
-    pub fn resize(&mut self, chunk_render_distance: u32) {
-        self.clear();
-        self.side_length = chunk_render_distance * 2;
-        self.chunk_model_pointers = vec![VoxelModelId::null(); self.side_length.pow(3) as usize];
-        self.window_offset = self
-            .chunk_anchor
-            .map(|x| x.rem_euclid(self.side_length as i32) as u32);
-    }
-
-    pub fn try_load_chunk(
-        &mut self,
-        world_chunk_pos: &Vector3<i32>,
-        model_id: VoxelModelId,
-    ) -> bool {
-        if !self.in_bounds(world_chunk_pos) {
-            return false;
-        }
-
-        let local_chunk_pos = (world_chunk_pos - self.chunk_anchor).map(|x| x as u32);
-        let window_chunk_pos =
-            local_chunk_pos.zip_map(&self.window_offset, |x, y| (x + y) % self.side_length);
-        let index = self.get_chunk_index(window_chunk_pos);
-
-        if self.chunk_model_pointers[index as usize] != model_id {
-            self.is_dirty = true;
-            self.chunk_model_pointers[index as usize] = model_id;
-            return true;
-        }
-        return false;
-    }
-
-    pub fn update_player_position(&mut self, player_chunk_position: Vector3<i32>) {
-        let new_anchor = player_chunk_position.map(|x| x - (self.side_length as i32 / 2));
-        if self.chunk_anchor == new_anchor {
-            return;
-        }
-        let new_window_offset = new_anchor.map(|x| x.rem_euclid(self.side_length as i32) as u32);
-
-        // TODO: Don't unload chunks if we are first initializing the player position.
-        let translation = new_anchor - self.chunk_anchor;
-        let ranges = translation.zip_zip_map(
-            &self.window_offset.cast::<i32>(),
-            &new_window_offset.cast::<i32>(),
-            |translation, old_window_offset, new_window_offset| {
-                if translation.is_positive() {
-                    (new_window_offset - translation)..new_window_offset
-                } else {
-                    (old_window_offset + translation)..old_window_offset
-                }
-            },
-        );
-
-        for x in ranges.x.clone() {
-            let x = x.rem_euclid(self.side_length as i32) as u32;
-            for y in 0..self.side_length {
-                for z in 0..self.side_length {
-                    self.unload_chunk(Vector3::new(x, y, z));
-                }
-            }
-        }
-        for y in ranges.y.clone() {
-            let y = y.rem_euclid(self.side_length as i32) as u32;
-            for x in 0..self.side_length {
-                for z in 0..self.side_length {
-                    self.unload_chunk(Vector3::new(x, y, z));
-                }
-            }
-        }
-        for z in ranges.z.clone() {
-            let z = z.rem_euclid(self.side_length as i32) as u32;
-            for x in 0..self.side_length {
-                for y in 0..self.side_length {
-                    self.unload_chunk(Vector3::new(x, y, z));
-                }
-            }
-        }
-
-        if !ranges.x.is_empty() || !ranges.y.is_empty() || !ranges.z.is_empty() {
-            self.is_dirty = true;
-        }
-
-        self.chunk_anchor = new_anchor;
-        self.window_offset = new_window_offset;
-    }
-
-    pub fn update_render_distance(&mut self, new_render_distance: u32) {
-        todo!()
-    }
-
-    fn unload_chunk(&mut self, local_chunk_pos: Vector3<u32>) {
-        let index = self.get_chunk_index(local_chunk_pos) as usize;
-        let chunk_model = self.chunk_model_pointers[index];
-        self.chunk_model_pointers[index] = VoxelModelId::null();
-        if chunk_model != VoxelModelId::null() {
-            self.to_unload_models.push(chunk_model);
-        }
-    }
-
-    pub fn chunk_exists(&self, world_chunk_pos: Vector3<i32>) -> bool {
-        let local_pos = world_chunk_pos - self.chunk_anchor;
-        return self.get_chunk_model(local_pos.map(|x| x as u32)).is_some();
-    }
-
-    /// local_chunk_pos is local to self.chunk_anchor, with sliding window offset not taken into
-    /// account.
-    pub fn get_chunk_model(&self, local_chunk_pos: Vector3<u32>) -> Option<VoxelModelId> {
-        let window_adjusted_pos = local_chunk_pos.zip_map(&self.window_offset, |x, y| {
-            (x as u32 + y) % self.side_length
-        });
-        let index = self.get_chunk_index(window_adjusted_pos);
-        let chunk_model_id = &self.chunk_model_pointers[index as usize];
-        (!chunk_model_id.is_null() && !chunk_model_id.is_air()).then_some(*chunk_model_id)
-    }
-
-    pub fn get_chunk_index(&self, local_chunk_pos: Vector3<u32>) -> u32 {
-        local_chunk_pos.x
-            + local_chunk_pos.y * self.side_length
-            + local_chunk_pos.z * self.side_length.pow(2)
-    }
-}
-
-pub struct RenderableChunksGpu {
-    pub terrain_acceleration_buffer: Option<ResourceId<Buffer>>,
-    pub terrain_side_length: u32,
-    pub terrain_anchor: Vector3<i32>,
-    pub terrain_window_offset: Vector3<u32>,
-}
-
-impl RenderableChunksGpu {
-    pub fn new() -> Self {
-        Self {
-            terrain_acceleration_buffer: None,
-            terrain_side_length: 0,
-            terrain_anchor: Vector3::new(0, 0, 0),
-            terrain_window_offset: Vector3::new(0, 0, 0),
-        }
-    }
-
-    pub fn update_gpu_objects(
-        &mut self,
-        device: &mut DeviceResource,
-        renderable_chunks: &RenderableChunks,
-    ) {
-        let req_size = 4 * (renderable_chunks.side_length as u64).pow(3);
-        if let Some(buffer) = self.terrain_acceleration_buffer {
-            let buffer_info = device.get_buffer_info(&buffer);
-            if buffer_info.size < req_size {
-                //TODO delete previous buffer.
-                self.terrain_acceleration_buffer =
-                    Some(device.create_buffer(GfxBufferCreateInfo {
-                        name: "world_terrain_acceleration_buffer".to_owned(),
-                        size: req_size,
-                    }));
-            }
-        } else {
-            self.terrain_acceleration_buffer = Some(device.create_buffer(GfxBufferCreateInfo {
-                name: "world_terrain_acceleration_buffer".to_owned(),
-                size: req_size,
-            }));
-        }
-    }
-
-    pub fn write_render_data(
-        &mut self,
-        device: &mut DeviceResource,
-        renderable_chunks: &RenderableChunks,
-        voxel_model_info_map: &HashMap<VoxelModelId, VoxelWorldModelGpuInfo>,
-        mut should_update: bool,
-    ) {
-        self.terrain_side_length = renderable_chunks.side_length;
-        self.terrain_anchor = renderable_chunks.chunk_anchor;
-        self.terrain_window_offset = renderable_chunks.window_offset;
-
-        if renderable_chunks.is_dirty || should_update {
-            // TODO: Copy incrementally with updates.
-            let volume = renderable_chunks.side_length.pow(3) as usize;
-            let mut buf = vec![0xFFFF_FFFFu32; volume];
-            for i in 0..volume {
-                let id = &renderable_chunks.chunk_model_pointers[i];
-                if id.is_null() {
-                    continue;
-                }
-
-                let Some(model_info) = voxel_model_info_map.get(id) else {
-                    continue;
-                };
-                buf[i] = model_info.info_allocation.start_index_stride_dword() as u32;
-            }
-
-            device.write_buffer_slice(
-                self.terrain_acceleration_buffer.as_ref().unwrap(),
-                0,
-                bytemuck::cast_slice::<u32, u8>(buf.as_slice()),
-            );
-        }
     }
 }

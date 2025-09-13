@@ -13,10 +13,7 @@ use crate::{
         physics::physics_world::PhysicsWorld,
         system::System,
         ui::UI,
-        voxel::{
-            cursor::VoxelCursor,
-            voxel_world::{VoxelWorld, VoxelWorldGpu},
-        },
+        voxel::{cursor::VoxelCursor, voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
     game::entity::player::Player,
@@ -104,6 +101,8 @@ pub fn game_loop(app: &App) {
     app.run_system(VoxelWorld::update_post_physics);
 
     // ------- GPU RENDERING ---------
+
+    app.run_system(PhysicsWorld::render_debug_colliders);
 
     app.run_system(VoxelWorldGpu::update_gpu_objects);
     app.run_system(VoxelWorldGpu::write_render_data);

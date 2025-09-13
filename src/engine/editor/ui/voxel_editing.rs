@@ -2,7 +2,10 @@ use crate::{
     common::color::Color,
     engine::{
         asset::asset::Assets,
-        editor::editor::{Editor, EditorEditingMaterial, EditorEditingTool},
+        editor::{
+            brush::{EditorEditingMaterial, EditorEditingTool},
+            editor::Editor,
+        },
         entity::ecs_world::ECSWorld,
         ui::EditorUIState,
         voxel::voxel_world::VoxelWorld,

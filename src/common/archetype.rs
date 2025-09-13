@@ -4,7 +4,7 @@ use std::{mem::offset_of, u64};
 use super::dyn_vec::TypeInfo;
 
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.
-/// Useful for storing contiguous heterogenous (X, Y, Z) tuples but being able to iterate over just
+/// Useful for storing parallel heterogenous (X, Y, Z) tuples but being able to iterate over just
 /// a specific type, such as X.
 #[derive(Clone)]
 pub struct Archetype {

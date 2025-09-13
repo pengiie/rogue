@@ -10,14 +10,12 @@ use petgraph::matrix_graph::Zero;
 
 use crate::{
     common::{
-        aabb::AABB,
         bitset::Bitset,
         color::Color,
         morton::{
             self, morton_decode, morton_encode, morton_traversal_octree, morton_traversal_thc,
             next_power_of_4,
         },
-        ray::Ray,
     },
     consts,
     engine::{
@@ -28,7 +26,8 @@ use crate::{
         voxel::attachment::{self, PTMaterial},
     },
 };
-
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,

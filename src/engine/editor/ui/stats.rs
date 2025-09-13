@@ -9,7 +9,7 @@ use crate::{
         editor::editor::Editor,
         entity::ecs_world::ECSWorld,
         ui::EditorUIState,
-        voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
+        voxel::{voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
     session::Session,

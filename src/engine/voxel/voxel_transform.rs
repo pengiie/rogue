@@ -1,11 +1,8 @@
-use nalgebra::{Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::{
-    common::{aabb::AABB, obb::OBB},
-    consts,
-};
-
-use super::voxel::VoxelModelImpl;
+use crate::consts;
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::obb::OBB;
 
 pub enum VoxelModelRotationAnchor {
     Zero,

@@ -1,18 +1,21 @@
-use std::{any::TypeId, collections::HashSet, ops::Deref};
+use std::{collections::HashSet, ops::Deref};
 
-use hecs::{Query, QueryBorrow, QueryIter, With};
+use hecs::{Query, QueryBorrow, With};
 use rogue_macros::Resource;
 
 use crate::{
     engine::{
         graphics::camera::{Camera, MainCamera},
-        physics::{physics_world::Colliders, rigid_body::RigidBody, transform::Transform},
+        physics::{collider::Colliders, rigid_body::RigidBody, transform::Transform},
         system::SystemParam,
-        voxel::voxel::{VoxelModel, VoxelModelImpl},
+        voxel::{
+            voxel::VoxelModelImpl,
+            voxel_world::VoxelWorld,
+        },
     },
     game::entity::player::Player,
 };
-
+use crate::common::geometry::obb::OBB;
 use super::{
     scripting::ScriptableEntity, EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
 };
@@ -29,6 +32,25 @@ impl ECSWorld {
         ECSWorld {
             world: hecs::World::new(),
         }
+    }
+
+    // Gets the minimum OBB of the entity's voxel model.
+    pub fn get_entity_obb(&self, entity: Entity, voxel_world: &VoxelWorld) -> Option<OBB> {
+        let Ok(mut query) = self.query_one::<(&Transform, &RenderableVoxelEntity)>(entity) else {
+            return None;
+        };
+        let Some((mut local_transform, mut renderable)) = query.get() else {
+            return None;
+        };
+        if renderable.is_null() {
+            return None;
+        }
+
+        let world_transform = self.get_world_transform(entity, &local_transform);
+        let voxel_model = voxel_world
+            .registry
+            .get_dyn_model(renderable.voxel_model_id_unchecked());
+        return Some(world_transform.as_voxel_model_obb(voxel_model.length()));
     }
 
     pub fn clone_game_entities(&mut self) -> ECSWorld {
@@ -145,10 +167,8 @@ impl ECSWorld {
             let Ok(parent_transform) = self.world.get::<&Transform>(parent.parent) else {
                 break;
             };
-            curr_transform.position = parent_transform
-                .scale
-                .component_mul(&(parent_transform.rotation * curr_transform.position))
-                + parent_transform.position;
+            curr_transform.position =
+                (parent_transform.rotation * curr_transform.position) + parent_transform.position;
             curr_transform.rotation = parent_transform.rotation * curr_transform.rotation;
             curr_transform.scale = curr_transform.scale.component_mul(&parent_transform.scale);
             curr_parent = self.world.get::<&EntityParent>(parent.parent);

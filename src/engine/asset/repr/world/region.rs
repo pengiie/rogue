@@ -10,7 +10,7 @@ use crate::{
             asset::{AssetFile, AssetLoadError, AssetLoader, AssetSaver},
             util::{AssetByteReader, AssetByteWriter},
         },
-        voxel::voxel_terrain::{VoxelChunkRegionData, VoxelChunkRegionNode, VoxelRegionLeafNode},
+        voxel::terrain::chunks::{VoxelChunkRegionData, VoxelChunkRegionNode, VoxelRegionLeafNode},
     },
 };
 

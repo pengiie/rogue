@@ -27,7 +27,7 @@ use crate::{
         resource::{Res, ResMut, Resource, ResourceBank},
         system::System,
         ui::{gui::Egui, UI},
-        voxel::voxel_world::{VoxelWorld, VoxelWorldGpu},
+        voxel::voxel_world::VoxelWorld,
         window::{time::Time, window::Window},
     },
     game::{self, entity::player::Player},

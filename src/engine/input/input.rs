@@ -1,7 +1,10 @@
 use nalgebra::Vector2;
+use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use crate::common::geometry::ray::Ray;
 use crate::consts;
+use crate::engine::physics::transform::Transform;
 use crate::engine::resource::Res;
 use crate::engine::resource::ResMut;
 use crate::engine::window::window::Window;
@@ -56,6 +59,24 @@ impl Input {
 
     pub fn collect_gamepad_events(mut input: ResMut<Input>) {
         input.gamepad.collect_events();
+    }
+
+    pub fn mouse_ray(
+        &self,
+        content_offset: Vector2<f32>,
+        content_size: Vector2<f32>,
+        fov: f32,
+        camera_transform: &Transform,
+    ) -> Ray {
+        let aspect_ratio = content_size.x / content_size.y;
+        let mouse_pos_uv = (self.mouse_position() - content_offset).component_div(&content_size);
+        let mouse_pos_ndc = Vector2::new(mouse_pos_uv.x * 2.0 - 1.0, 1.0 - mouse_pos_uv.y * 2.0);
+        let scaled_ndc =
+            Vector2::new(mouse_pos_ndc.x * aspect_ratio, mouse_pos_ndc.y) * (fov * 0.5).tan();
+        let ray_origin = camera_transform.position;
+        let ray_dir =
+            (camera_transform.rotation * Vector3::new(scaled_ndc.x, scaled_ndc.y, 1.0)).normalize();
+        return Ray::new(ray_origin, ray_dir);
     }
 
     // General Input

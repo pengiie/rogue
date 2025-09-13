@@ -2,18 +2,15 @@ use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
-    common::{
-        color::{Color, ColorSpaceSrgb},
-        obb::OBB,
-    },
+    common::color::{Color, ColorSpaceSrgb},
     consts,
 };
-
+use crate::common::geometry::obb::OBB;
 use super::{
     graphics::{
         backend::GraphicsBackendRecorder, frame_graph::FrameGraphContext, renderer::Renderer,
     },
-    input::{keyboard, Input},
+    input::Input,
     resource::{Res, ResMut},
 };
 
@@ -81,6 +78,7 @@ pub struct DebugOBB<'a> {
     pub thickness: f32,
     pub color: Color<ColorSpaceSrgb>,
     pub alpha: f32,
+    pub flags: DebugFlags,
 }
 
 impl DebugRenderer {
@@ -147,7 +145,7 @@ impl DebugRenderer {
             thickness: debug_obb.thickness,
             color: debug_obb.color.clone(),
             alpha: debug_obb.alpha,
-            flags: DebugFlags::NONE,
+            flags: debug_obb.flags,
         };
         self.draw_line(line(min, min + forward));
         self.draw_line(line(min, min + right));

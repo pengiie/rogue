@@ -3,14 +3,14 @@ use std::{collections::HashMap, ops::Deref};
 use nalgebra::Vector3;
 
 use crate::{
-    common::{morton, ray::Ray},
+    common::morton,
     consts,
     engine::voxel::{
         attachment::{AttachmentMap, BuiltInMaterial},
         voxel::{VoxelModelSchema, VoxelModelTrace},
     },
 };
-
+use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap},
     flat::VoxelModelFlat,
@@ -187,8 +187,8 @@ impl VoxelModelImplConcrete for VoxelModelSFTCompressed {
 impl VoxelModelImpl for VoxelModelSFTCompressed {
     fn trace(
         &self,
-        ray: &crate::common::ray::Ray,
-        aabb: &crate::common::aabb::AABB,
+        ray: &crate::common::geometry::ray::Ray,
+        aabb: &crate::common::geometry::aabb::AABB,
     ) -> Option<super::voxel::VoxelModelTrace> {
         let mut ray = ray.clone();
         let Some(model_t) = ray.intersect_aabb(aabb) else {

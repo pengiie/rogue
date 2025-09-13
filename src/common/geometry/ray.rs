@@ -1,7 +1,7 @@
 use log::debug;
 use nalgebra::{Vector2, Vector3};
 
-use super::aabb::AABB;
+use crate::common::geometry::aabb::AABB;
 
 #[derive(Clone, Debug)]
 pub struct Ray {
@@ -74,7 +74,7 @@ impl Ray {
     ) -> f32 {
         let lv = end - start;
         let rd = pos - start;
-        let p_t = (rd.dot(&lv) / lv.norm_squared()).clamp(0.0, 1.0);
+        let p_t = (rd.dot(&lv) / lv.dot(&lv)).clamp(0.0, 1.0);
         let d = (rd - lv * p_t).magnitude();
         return d - radius;
     }

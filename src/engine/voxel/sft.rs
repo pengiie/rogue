@@ -3,15 +3,12 @@ use std::{collections::HashMap, u64};
 use nalgebra::Vector3;
 
 use crate::{
-    common::{
-        aabb::AABB,
-        morton::{self, morton_encode, morton_traversal_thc, next_power_of_4},
-        ray::Ray,
-    },
+    common::morton::{self, morton_encode, morton_traversal_thc, next_power_of_4},
     consts,
     engine::{graphics::device::GfxDevice, voxel::attachment::BuiltInMaterial},
 };
-
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,

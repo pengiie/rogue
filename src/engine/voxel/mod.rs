@@ -12,17 +12,18 @@ pub mod sft;
 pub mod sft_compressed;
 pub mod sft_compressed_gpu;
 pub mod sft_gpu;
+pub mod terrain;
 pub mod thc;
 pub mod voxel;
 pub mod voxel_allocator;
 pub mod voxel_registry;
-pub mod voxel_terrain;
 pub mod voxel_transform;
 pub mod voxel_world;
+pub mod voxel_world_gpu;
 
 pub fn initialize_voxel_world_resources(app: &mut crate::app::App) {
     let voxel_world = voxel_world::VoxelWorld::new(&app.get_resource::<Settings>());
-    let voxel_world_gpu = voxel_world::VoxelWorldGpu::new();
+    let voxel_world_gpu = voxel_world_gpu::VoxelWorldGpu::new();
 
     app.insert_resource(voxel_world);
     app.insert_resource(voxel_world_gpu);

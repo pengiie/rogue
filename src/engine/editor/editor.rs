@@ -7,21 +7,19 @@ use nalgebra::{
 };
 use rogue_macros::Resource;
 
+use crate::common::geometry::ray::Ray;
 use crate::{
-    common::{animate::Animation, color::Color, ray::Ray},
+    common::{animate::Animation, color::Color},
     consts::{
         self,
         editor::gizmo::{DRAGGING_ROTATION_SENSITIVITY, DRAGGING_TRANSFORM_SENSITIVITY},
     },
     engine::{
-        asset::{
-            asset::{AssetPath, Assets},
-            repr::editor_settings::EditorSessionAsset,
-        },
+        asset::asset::{AssetPath, Assets},
         debug::{
             DebugCapsule, DebugFlags, DebugLine, DebugOBB, DebugPlane, DebugRenderer, DebugRing,
         },
-        editor::ui::init_editor_ui_textures,
+        editor::{brush::EditorWorldEditing, gizmo::EditorGizmo, ui::init_editor_ui_textures},
         entity::{
             ecs_world::{ECSWorld, Entity},
             RenderableVoxelEntity,
@@ -31,7 +29,7 @@ use crate::{
             keyboard::{self, Key, Modifier},
             mouse, Input,
         },
-        physics::{capsule_collider, physics_world::Colliders, transform::Transform},
+        physics::{capsule_collider, collider::Colliders, transform::Transform},
         resource::{Res, ResMut},
         ui::UI,
         voxel::{
@@ -53,12 +51,6 @@ use crate::{
     settings::Settings,
 };
 
-pub enum EditorGizmo {
-    Translate,
-    Rotate,
-    Scale,
-}
-
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum EditorView {
     PanOrbit,
@@ -76,28 +68,15 @@ pub struct Editor {
     pub is_active: bool,
     pub initialized: bool,
 
-    pub selected_gizmo: EditorGizmo,
+    pub gizmo: EditorGizmo,
     pub selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
 
     pub focus_animation: Animation<Vector3<f32>>,
     pub double_clicker_buffer: [Option<Instant>; 2],
 
-    pub dragging_gizmo_axis: Option<Vector3<f32>>,
-    pub hover_gizmo_axis: Option<Vector3<f32>>,
-
     pub world_editing: EditorWorldEditing,
     pub terrain_generation: EditorTerrainGeneration,
-}
-
-pub struct EditorWorldEditing {
-    pub entity_enabled: bool,
-    pub terrain_enabled: bool,
-    pub size: u32,
-    pub color: Color,
-    pub bmat_index: u16,
-    pub tool: EditorEditingTool,
-    pub material: EditorEditingMaterial,
 }
 
 pub struct EditorTerrainGeneration {
@@ -112,33 +91,6 @@ impl EditorTerrainGeneration {
             generation_radius: 0,
         }
     }
-}
-
-impl EditorWorldEditing {
-    pub fn new() -> Self {
-        Self {
-            terrain_enabled: true,
-            entity_enabled: false,
-            size: 2,
-            bmat_index: 0,
-            color: Color::new_srgb(0.5, 0.5, 0.5),
-            tool: EditorEditingTool::Pencil,
-            material: EditorEditingMaterial::BMat,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum EditorEditingTool {
-    Pencil,
-    Eraser,
-    Brush,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum EditorEditingMaterial {
-    PTMat,
-    BMat,
 }
 
 pub struct EditorCameraMarker;
@@ -158,15 +110,12 @@ impl Editor {
             initialized: false,
             curr_editor_view: EditorView::PanOrbit,
 
-            selected_gizmo: EditorGizmo::Translate,
+            gizmo: EditorGizmo::new(),
             selected_entity: None,
             hovered_entity: None,
 
             focus_animation: Animation::new(Duration::ZERO),
             double_clicker_buffer: [const { None }; 2],
-
-            dragging_gizmo_axis: None,
-            hover_gizmo_axis: None,
 
             world_editing: EditorWorldEditing::new(),
             terrain_generation: EditorTerrainGeneration::new(),
@@ -392,12 +341,8 @@ impl Editor {
             }
         }
 
-        if input.is_action_pressed(consts::actions::EDITOR_GIZMO_TRANSLATION) {
-            editor.selected_gizmo = EditorGizmo::Translate;
-        }
-        if input.is_action_pressed(consts::actions::EDITOR_GIZMO_ROTATION) {
-            editor.selected_gizmo = EditorGizmo::Rotate;
-        }
+        // Updates the current selected gizmo off of any keybinds.
+        editor.gizmo.update_gizmo_selection(&input);
 
         let mut editor_camera_query = ecs_world
             .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
@@ -411,23 +356,16 @@ impl Editor {
         };
         voxel_world.update_render_center(world_center);
 
-        let mouse_ray = if window.is_cursor_locked() {
-            editor_transform.get_ray()
-        } else {
-            let content_size = ui.content_size(window.inner_size_vec2().cast::<f32>());
-            let aspect_ratio = content_size.x / content_size.y;
-            let mouse_pos_uv =
-                (input.mouse_position() - ui.content_offset()).component_div(&content_size);
-            let mouse_pos_ndc =
-                Vector2::new(mouse_pos_uv.x * 2.0 - 1.0, 1.0 - mouse_pos_uv.y * 2.0);
-            let scaled_ndc = Vector2::new(mouse_pos_ndc.x * aspect_ratio, mouse_pos_ndc.y)
-                * (camera.fov() * 0.5).tan();
-            let ray_origin = editor_transform.position;
-            let ray_dir = (editor_transform.rotation
-                * Vector3::new(scaled_ndc.x, scaled_ndc.y, 1.0))
-            .normalize();
-            Ray::new(ray_origin, ray_dir)
+        let mouse_ray = match editor.curr_editor_view {
+            EditorView::PanOrbit => input.mouse_ray(
+                ui.content_offset(),
+                ui.content_size(window.inner_size_vec2().cast::<f32>()),
+                camera.fov(),
+                &editor_transform,
+            ),
+            EditorView::Fps => editor_transform.get_ray(),
         };
+
         let hovered_trace = voxel_world.trace_world(&ecs_world, mouse_ray.clone());
 
         let not_using_editor_camera = main_camera.camera.as_ref().map_or(false, |(camera, _)| {
@@ -454,155 +392,18 @@ impl Editor {
             }
         }
 
-        'collider_draw: {
-            if let Some(selected_entity) = editor.selected_entity {
-                let Ok(mut selected_entity_query) =
-                    ecs_world.query_one::<(&Transform, &Colliders)>(selected_entity)
-                else {
-                    break 'collider_draw;
-                };
-                let Some((model_local_transform, colliders)) = selected_entity_query.get() else {
-                    break 'collider_draw;
-                };
-                let model_world_transform =
-                    ecs_world.get_world_transform(selected_entity, model_local_transform);
-                //for capsule_collider in &colliders.capsule_colliders {
-                //    debug_renderer.draw_ellipsoid(DebugEllipsoid {
-                //        center: capsule_collider.center + model_world_transform.position,
-                //        orientation: capsule_collider.orientation * model_world_transform.rotation,
-                //        radius: capsule_collider.radius,
-                //        height: capsule_collider.height,
-                //        color: Color::new_srgb(0.7, 0.1, 0.3),
-                //        alpha: 0.3,
-                //        flags: DebugFlags::SHADING,
-                //    });
-                //}
-                //for plane_collider in &colliders.plane_colliders {
-                //    debug_renderer.draw_plane(DebugPlane {
-                //        center: plane_collider.center + model_world_transform.position,
-                //        normal: model_world_transform.rotation * plane_collider.normal,
-                //        size: plane_collider.size,
-                //        color: Color::new_srgb(0.7, 0.1, 0.3),
-                //        alpha: 0.3,
-                //        flags: DebugFlags::SHADING,
-                //    });
-                //}
-            }
-        }
-
+        // Update which gizmo axis is selected or hovered.
         let mut consume_left_click = false;
-        'gizmo_drag: {
-            if !show_entity_outlines {
-                break 'gizmo_drag;
-            }
-            if input.is_mouse_button_released(mouse::Button::Left) {
-                editor.dragging_gizmo_axis = None;
-            }
-
-            if let Some(selected_entity) = editor.selected_entity {
-                let Ok(mut selected_entity_query) =
-                    ecs_world.query_one::<(&Transform)>(selected_entity)
-                else {
-                    break 'gizmo_drag;
-                };
-                let Some((model_local_transform)) = selected_entity_query.get() else {
-                    break 'gizmo_drag;
-                };
-                let model_world_transform =
-                    ecs_world.get_world_transform(selected_entity, model_local_transform);
-                let center = model_world_transform.position;
-
-                let mut min_d = 1000.0;
-                let mut axis = None;
-
-                match editor.selected_gizmo {
-                    EditorGizmo::Translate => {
-                        if let Some(d) = mouse_ray.intersect_line_segment(
-                            center,
-                            center + Vector3::x() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            1000.0,
-                        ) {
-                            axis = Some(Vector3::x());
-                            min_d = d;
-                        }
-                        if let Some(d) = mouse_ray.intersect_line_segment(
-                            center,
-                            center + Vector3::y() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            1000.0,
-                        ) {
-                            if (d < min_d) {
-                                axis = Some(Vector3::y());
-                                min_d = d;
-                            }
-                        }
-                        if let Some(d) = mouse_ray.intersect_line_segment(
-                            center,
-                            center + Vector3::z() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            1000.0,
-                        ) {
-                            if (d < min_d) {
-                                axis = Some(Vector3::z());
-                                min_d = d;
-                            }
-                        }
-                    }
-                    EditorGizmo::Rotate => {
-                        let thickness = consts::editor::gizmo::ROTATION_THICKNESS;
-                        let max_t = 1000.0;
-                        if let Some(d) = mouse_ray.intersect_ring_segment(
-                            center,
-                            model_local_transform
-                                .rotation
-                                .transform_vector(&Vector3::x()),
-                            consts::editor::gizmo::ROTATION_DISTANCE_X,
-                            thickness,
-                            max_t,
-                        ) {
-                            axis = Some(Vector3::x());
-                            min_d = d;
-                        }
-                        if let Some(d) = mouse_ray.intersect_ring_segment(
-                            center,
-                            model_local_transform
-                                .rotation
-                                .transform_vector(&Vector3::y()),
-                            consts::editor::gizmo::ROTATION_DISTANCE_Y,
-                            thickness,
-                            max_t,
-                        ) {
-                            if (d < min_d) {
-                                axis = Some(Vector3::y());
-                                min_d = d;
-                            }
-                        }
-                        if let Some(d) = mouse_ray.intersect_ring_segment(
-                            center,
-                            model_local_transform
-                                .rotation
-                                .transform_vector(&Vector3::z()),
-                            consts::editor::gizmo::ROTATION_DISTANCE_Z,
-                            thickness,
-                            max_t,
-                        ) {
-                            if (d < min_d) {
-                                axis = Some(Vector3::z());
-                                min_d = d;
-                            }
-                        }
-                    }
-                    EditorGizmo::Scale => {}
-                }
-
-                editor.hover_gizmo_axis = axis;
-                if input.is_mouse_button_pressed(mouse::Button::Left) {
-                    editor.dragging_gizmo_axis = axis;
-                    consume_left_click = axis.is_some();
-                }
-            }
+        if let Some(selected_entity) = editor.selected_entity {
+            editor.gizmo.update_gizmo_axes(
+                &input,
+                selected_entity,
+                &mut consume_left_click,
+                &ecs_world,
+                &mouse_ray,
+            );
         }
+
         if input.is_mouse_button_pressed(mouse::Button::Left) && !consume_left_click {
             if let Some(VoxelTraceInfo::Entity {
                 entity_id,
@@ -616,131 +417,51 @@ impl Editor {
             }
         }
 
-        // Editing circle preview.
-        'editing_preview: {
-            let center = match &hovered_trace {
-                Some(VoxelTraceInfo::Terrain { world_voxel_pos }) => {
-                    if editor.world_editing.terrain_enabled {
-                        let center = (world_voxel_pos.cast::<f32>()
-                            * consts::voxel::VOXEL_METER_LENGTH)
-                            .add_scalar(consts::voxel::VOXEL_METER_LENGTH * 0.5);
-                        Some(center)
-                    } else {
-                        None
-                    }
+        // Draw bounding box of hovered entity within editor ui..
+        if let Some(hovered_entity) = editor.hovered_entity {
+            let is_hovering_selected_entity = editor
+                .selected_entity
+                .map(|selected_entity| selected_entity == hovered_entity)
+                .unwrap_or(false);
+            if !is_hovering_selected_entity && show_entity_outlines {
+                if let Some(obb) = ecs_world.get_entity_obb(hovered_entity, &voxel_world) {
+                    debug_renderer.draw_obb(DebugOBB {
+                        obb: &obb,
+                        thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
+                        color: Color::new_srgb_hex("#4553ad"),
+                        alpha: 1.0,
+                        flags: DebugFlags::XRAY,
+                    });
                 }
-                Some(VoxelTraceInfo::Entity {
-                    entity_id,
-                    voxel_model_id,
-                    local_voxel_pos,
-                }) => {
-                    if editor.world_editing.entity_enabled {
-                        let Ok(mut preview_entity_query) =
-                            ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(*entity_id)
-                        else {
-                            break 'editing_preview;
-                        };
-                        let Some((model_local_transform, renderable)) = preview_entity_query.get()
-                        else {
-                            break 'editing_preview;
-                        };
-                        let model_world_transform =
-                            ecs_world.get_world_transform(*entity_id, &model_local_transform);
-
-                        let side_length = voxel_world
-                            .get_dyn_model(renderable.voxel_model_id().unwrap())
-                            .length();
-                        let model_obb = model_world_transform.as_voxel_model_obb(side_length);
-                        let forward = model_world_transform.forward()
-                            * consts::voxel::VOXEL_METER_LENGTH
-                            * model_world_transform.scale.z;
-                        let right = model_world_transform.right()
-                            * consts::voxel::VOXEL_METER_LENGTH
-                            * model_world_transform.scale.x;
-                        let up = model_world_transform.up()
-                            * consts::voxel::VOXEL_METER_LENGTH
-                            * model_world_transform.scale.y;
-
-                        let center = model_obb.aabb.min
-                            + forward * (local_voxel_pos.z as f32 + 0.5)
-                            + right * (local_voxel_pos.x as f32 + 0.5)
-                            + up * (local_voxel_pos.y as f32 + 0.5);
-                        Some(center)
-                    } else {
-                        None
-                    }
-                }
-                None => None,
-            };
-
-            if let Some(center) = center {
-                debug_renderer.draw_line(DebugLine {
-                    start: center,
-                    end: center,
-                    thickness: (editor.world_editing.size as f32 + 1.0)
-                        * consts::voxel::VOXEL_METER_LENGTH
-                        * 0.5,
-                    color: editor.world_editing.color.clone(),
-                    alpha: 0.4,
-                    flags: DebugFlags::NONE,
-                });
             }
         }
 
-        if let Some(hovered_entity) = editor.hovered_entity {
-            // Hovered entity within editor ui.
-            if !(editor.selected_entity.is_some()
-                && editor.selected_entity.unwrap() == hovered_entity)
-                && show_entity_outlines
-            {
-                'hovered_entity_block: {
-                    let Ok(mut hovered_entity_query) =
-                        ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(hovered_entity)
-                    else {
-                        break 'hovered_entity_block;
-                    };
-                    let Some((model_local_transform, renderable_entity)) =
-                        hovered_entity_query.get()
-                    else {
-                        break 'hovered_entity_block;
-                    };
-                    if let Some(voxel_model_id) = renderable_entity.voxel_model_id() {
-                        let voxel_model = voxel_world.registry.get_dyn_model(voxel_model_id);
-                        let model_world_transform =
-                            ecs_world.get_world_transform(hovered_entity, &model_local_transform);
-                        let obb = model_world_transform.as_voxel_model_obb(voxel_model.length());
-                        debug_renderer.draw_obb(DebugOBB {
-                            obb: &obb,
-                            thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
-                            color: Color::new_srgb_hex("#4553ad"),
-                            alpha: 1.0,
-                        });
-                    }
-                }
-            }
-        } else if let Some(VoxelTraceInfo::Entity {
-            entity_id,
+        if let Some(VoxelTraceInfo::Entity {
+            entity_id: hovered_entity_id,
             voxel_model_id,
             local_voxel_pos,
         }) = &hovered_trace
         {
             // Hovered entity with mouse.
-            let model_local_transform = ecs_world.get::<&Transform>(*entity_id).unwrap();
+            let model_local_transform = ecs_world.get::<&Transform>(*hovered_entity_id).unwrap();
             let model_world_transform =
-                ecs_world.get_world_transform(*entity_id, &model_local_transform);
-            if !(editor.selected_entity.is_some() && editor.selected_entity.unwrap() == *entity_id)
+                ecs_world.get_world_transform(*hovered_entity_id, &model_local_transform);
+            if !(editor.selected_entity.is_some()
+                && editor.selected_entity.unwrap() == *hovered_entity_id)
                 && show_entity_outlines
             {
-                let voxel_model = voxel_world.registry.get_dyn_model(*voxel_model_id);
-                let obb = model_world_transform.as_voxel_model_obb(voxel_model.length());
-                debug_renderer.draw_obb(DebugOBB {
-                    obb: &obb,
-                    thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
-                    color: Color::new_srgb_hex("#4553ad"),
-                    alpha: 1.0,
-                });
+                if let Some(obb) = ecs_world.get_entity_obb(*hovered_entity_id, &voxel_world) {
+                    debug_renderer.draw_obb(DebugOBB {
+                        obb: &obb,
+                        thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
+                        color: Color::new_srgb_hex("#4553ad"),
+                        alpha: 1.0,
+                        flags: DebugFlags::XRAY,
+                    });
+                }
             }
 
+            // Update double click to focus-zoom camera on entity.
             if has_valid_double_click {
                 // Animate camera onto the entity.
                 // TODO: Adjust based off of entity size.
@@ -754,7 +475,10 @@ impl Editor {
                 );
                 *editor_camera = EditorCamera::from_pos_anchor(end, model_world_transform.position);
             }
-        } else if let Some(VoxelTraceInfo::Terrain { world_voxel_pos }) = &hovered_trace {
+        }
+
+        // Update double click to focus-zoom camera on terrain.
+        if let Some(VoxelTraceInfo::Terrain { world_voxel_pos }) = &hovered_trace {
             // Hovered terrain voxel position.
             if has_valid_double_click {
                 // Animate camera onto the terrain pos.
@@ -772,335 +496,49 @@ impl Editor {
             }
         }
 
-        // Gizmo and outline drawing for selected entity.
-        'selected_entity_block: {
-            if !show_entity_outlines {
-                break 'selected_entity_block;
-            }
+        // Update the entity transform and render the gizmo.
+        if show_entity_outlines {
             if let Some(selected_entity) = editor.selected_entity {
-                let Ok(mut selected_entity_query) =
-                    ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(selected_entity)
-                else {
-                    break 'selected_entity_block;
-                };
-                let Ok(mut model_local_transform) =
-                    ecs_world.get::<(&mut Transform)>(selected_entity)
-                else {
-                    break 'selected_entity_block;
-                };
-                let model_world_transform =
-                    ecs_world.get_world_transform(selected_entity, &model_local_transform);
-
-                match editor.selected_gizmo {
-                    EditorGizmo::Translate => {
-                        let center = model_world_transform.position;
-                        let flags = DebugFlags::XRAY | DebugFlags::SHADING;
-                        let mut x_line = DebugLine {
-                            start: center,
-                            end: center + Vector3::x() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            thickness: consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            color: Color::new_srgb(1.0, 0.0, 0.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        let mut y_line = DebugLine {
-                            start: center,
-                            end: center + Vector3::y() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            thickness: consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            color: Color::new_srgb(0.0, 1.0, 0.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        let mut z_line = DebugLine {
-                            start: center,
-                            end: center + Vector3::z() * consts::editor::gizmo::TRANSLATION_LENGTH,
-                            thickness: consts::editor::gizmo::TRANSLATION_THICKNESS,
-                            color: Color::new_srgb(0.0, 0.0, 1.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        if let Some(dragging_axis) = editor.dragging_gizmo_axis {
-                            if dragging_axis == Vector3::x() {
-                                x_line.color.multiply_gamma(1.5);
-                                model_local_transform.position.x += input.mouse_delta().x
-                                    * DRAGGING_TRANSFORM_SENSITIVITY
-                                    * (editor_transform.position - center)
-                                        .dot(&-Vector3::z())
-                                        .signum()
-                            } else if dragging_axis == Vector3::y() {
-                                y_line.color.multiply_gamma(1.5);
-                                model_local_transform.position.y +=
-                                    input.mouse_delta().y * DRAGGING_TRANSFORM_SENSITIVITY;
-                            } else if dragging_axis == Vector3::z() {
-                                z_line.color.multiply_gamma(1.5);
-                                model_local_transform.position.z += input.mouse_delta().x
-                                    * DRAGGING_TRANSFORM_SENSITIVITY
-                                    * (editor_transform.position - center)
-                                        .dot(&Vector3::x())
-                                        .signum()
-                            }
-                        } else if let Some(hovered_axis) = editor.hover_gizmo_axis {
-                            if hovered_axis == Vector3::x() {
-                                x_line.color.multiply_gamma(1.15);
-                            } else if hovered_axis == Vector3::y() {
-                                y_line.color.multiply_gamma(1.15);
-                            } else if hovered_axis == Vector3::z() {
-                                z_line.color.multiply_gamma(1.15);
-                            }
-                        }
-
-                        debug_renderer.draw_line(x_line);
-                        debug_renderer.draw_line(y_line);
-                        debug_renderer.draw_line(z_line);
-                    }
-                    EditorGizmo::Rotate => {
-                        let center = model_world_transform.position;
-                        let flags = DebugFlags::XRAY | DebugFlags::SHADING;
-                        let thickness = consts::editor::gizmo::ROTATION_THICKNESS;
-                        let mut x_ring = DebugRing {
-                            center,
-                            normal: Vector3::x(),
-                            stretch: consts::editor::gizmo::ROTATION_DISTANCE_X,
-                            thickness,
-                            color: Color::new_srgb(1.0, 0.0, 0.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        let mut y_ring = DebugRing {
-                            center,
-                            stretch: consts::editor::gizmo::ROTATION_DISTANCE_Y,
-                            normal: Vector3::y(),
-                            thickness,
-                            color: Color::new_srgb(0.0, 1.0, 0.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        let mut z_ring = DebugRing {
-                            center,
-                            stretch: consts::editor::gizmo::ROTATION_DISTANCE_Z,
-                            normal: Vector3::z(),
-                            thickness,
-                            color: Color::new_srgb(0.0, 0.0, 1.0),
-                            alpha: 1.0,
-                            flags,
-                        };
-                        if let Some(dragging_axis) = editor.dragging_gizmo_axis {
-                            if dragging_axis == Vector3::x() {
-                                x_ring.color.multiply_gamma(1.5);
-                                let delta = input.mouse_delta().y * DRAGGING_ROTATION_SENSITIVITY;
-
-                                model_local_transform.rotation *= UnitQuaternion::from_axis_angle(
-                                    &Vector3::x_axis(),
-                                    delta.to_radians(),
-                                );
-                            } else if dragging_axis == Vector3::y() {
-                                y_ring.color.multiply_gamma(1.5);
-                                let delta = input.mouse_delta().x * DRAGGING_ROTATION_SENSITIVITY;
-                                model_local_transform.rotation *= UnitQuaternion::from_axis_angle(
-                                    &Vector3::y_axis(),
-                                    delta.to_radians(),
-                                );
-                            } else if dragging_axis == Vector3::z() {
-                                z_ring.color.multiply_gamma(1.5);
-                                let delta = input.mouse_delta().y * DRAGGING_ROTATION_SENSITIVITY;
-                                model_local_transform.rotation *= UnitQuaternion::from_axis_angle(
-                                    &Vector3::z_axis(),
-                                    delta.to_radians(),
-                                );
-                            }
-                        } else if let Some(hovered_axis) = editor.hover_gizmo_axis {
-                            if hovered_axis == Vector3::x() {
-                                x_ring.color.multiply_gamma(1.15);
-                            } else if hovered_axis == Vector3::y() {
-                                y_ring.color.multiply_gamma(1.15);
-                            } else if hovered_axis == Vector3::z() {
-                                z_ring.color.multiply_gamma(1.15);
-                            }
-                        }
-
-                        // Do this after so rotation is most up to date.
-                        x_ring.normal = model_local_transform
-                            .rotation
-                            .transform_vector(&x_ring.normal);
-                        y_ring.normal = model_local_transform
-                            .rotation
-                            .transform_vector(&y_ring.normal);
-                        z_ring.normal = model_local_transform
-                            .rotation
-                            .transform_vector(&z_ring.normal);
-
-                        debug_renderer.draw_ring(x_ring);
-                        debug_renderer.draw_ring(y_ring);
-                        debug_renderer.draw_ring(z_ring);
-                    }
-                    EditorGizmo::Scale => todo!(),
-                }
-
-                let Ok(renderable_entity) =
-                    ecs_world.get::<(&RenderableVoxelEntity)>(selected_entity)
-                else {
-                    break 'selected_entity_block;
-                };
-                if renderable_entity.is_null() {
-                    break 'selected_entity_block;
-                }
-                let voxel_model = voxel_world
-                    .registry
-                    .get_dyn_model(renderable_entity.voxel_model_id_unchecked());
-                let obb = model_world_transform.as_voxel_model_obb(voxel_model.length());
-                debug_renderer.draw_obb(DebugOBB {
-                    obb: &obb,
-                    thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
-                    color: Color::new_srgb_hex("#1026b3"),
-                    alpha: 1.0,
-                });
+                editor.gizmo.update_and_render(
+                    &mut debug_renderer,
+                    &input,
+                    selected_entity,
+                    &ecs_world,
+                    editor_transform,
+                );
             }
         }
+
+        // Render the selected entity's bounding box if it contains a model.
+        if let Some(selected_entity_obb) = editor
+            .selected_entity
+            .map(|selected_entity| ecs_world.get_entity_obb(selected_entity, &voxel_world))
+            .unwrap_or(None)
+        {
+            debug_renderer.draw_obb(DebugOBB {
+                obb: &selected_entity_obb,
+                thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
+                color: Color::new_srgb_hex("#1026b3"),
+                alpha: 1.0,
+                flags: DebugFlags::XRAY,
+            });
+        }
+
+        // Update any brush actions.
+        editor
+            .world_editing
+            .update_brush(&input, &mut voxel_world, &hovered_trace);
+
+        // Editing circle preview.
+        editor.world_editing.render_preview(
+            &mut debug_renderer,
+            &hovered_trace,
+            &ecs_world,
+            &voxel_world,
+        );
+
+        // Clear any frame state.
         editor.hovered_entity = None;
-        editor.hover_gizmo_axis = None;
-
-        // Editing things.
-        if input.is_mouse_button_pressed(mouse::Button::Left) {
-            let size = editor.world_editing.size;
-            let trace = hovered_trace;
-
-            fn apply_edit(
-                voxel_world: &mut VoxelWorld,
-                editor: &Editor,
-                trace: &Option<VoxelTraceInfo>,
-                size: u32,
-                attachment_map: AttachmentInfoMap,
-                f: impl Fn(
-                    /*world/model_voxel_center=*/ Vector3<i32>,
-                ) -> Box<
-                    dyn Fn(
-                        VoxelEdit,
-                        /*world/model_voxel_pos*/ Vector3<i32>,
-                        /*local/model_voxel_pos=*/ Vector3<u32>,
-                    ),
-                >,
-            ) {
-                let size_vec = Vector3::new(size, size, size);
-                if let Some(VoxelTraceInfo::Terrain {
-                    world_voxel_pos: world_voxel_hit,
-                }) = trace
-                {
-                    if editor.world_editing.terrain_enabled {
-                        let anchor = world_voxel_hit - size_vec.cast::<i32>();
-                        voxel_world.apply_voxel_edit(
-                            VoxelEditInfo {
-                                world_voxel_position: anchor,
-                                world_voxel_length: (size_vec * 2).add_scalar(1),
-                                attachment_map,
-                            },
-                            f(*world_voxel_hit),
-                        );
-                    }
-                } else if let Some(VoxelTraceInfo::Entity {
-                    entity_id,
-                    voxel_model_id,
-                    local_voxel_pos,
-                }) = &trace
-                {
-                    if editor.world_editing.entity_enabled {
-                        let local_voxel_pos = local_voxel_pos.cast::<i32>();
-                        let anchor = local_voxel_pos - size_vec.cast::<i32>();
-                        voxel_world.apply_voxel_edit_entity(
-                            VoxelEditEntityInfo {
-                                model_id: *voxel_model_id,
-                                local_voxel_pos: anchor,
-                                voxel_length: (size_vec * 2).add_scalar(1),
-                                attachment_map,
-                            },
-                            f(local_voxel_pos),
-                        );
-                    }
-                }
-            }
-
-            match editor.world_editing.tool {
-                EditorEditingTool::Pencil => {
-                    let mut attachment_map = AttachmentMap::new();
-                    match editor.world_editing.material {
-                        EditorEditingMaterial::PTMat => {
-                            attachment_map.register_attachment(Attachment::PTMATERIAL)
-                        }
-                        EditorEditingMaterial::BMat => {
-                            attachment_map.register_attachment(Attachment::BMAT)
-                        }
-                    }
-                    apply_edit(
-                        &mut voxel_world,
-                        &editor,
-                        &trace,
-                        size,
-                        attachment_map,
-                        |center| match editor.world_editing.material {
-                            EditorEditingMaterial::PTMat => {
-                                let size = size.clone();
-                                let color = editor.world_editing.color.clone();
-                                Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
-                                    let distance = center
-                                        .cast::<f32>()
-                                        .metric_distance(&world_voxel_pos.cast::<f32>());
-                                    if distance <= size as f32 {
-                                        voxel.set_attachment(
-                                            Attachment::PTMATERIAL_ID,
-                                            &[PTMaterial::diffuse(color.clone()).encode()],
-                                        );
-                                    }
-                                })
-                            }
-                            EditorEditingMaterial::BMat => {
-                                let size = size.clone();
-                                let bmat_index = editor.world_editing.bmat_index;
-                                Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
-                                    let distance = center
-                                        .cast::<f32>()
-                                        .metric_distance(&world_voxel_pos.cast::<f32>());
-                                    if distance <= size as f32 {
-                                        voxel.set_attachment(
-                                            Attachment::BMAT_ID,
-                                            &[BuiltInMaterial::new(bmat_index).encode()],
-                                        );
-                                    }
-                                })
-                            }
-                        },
-                    );
-                }
-                EditorEditingTool::Brush => {}
-                EditorEditingTool::Eraser => {
-                    let mut attachment_map = AttachmentMap::new();
-                    apply_edit(
-                        &mut voxel_world,
-                        &editor,
-                        &trace,
-                        size,
-                        attachment_map,
-                        |center| {
-                            Box::new(move |mut voxel, world_voxel_pos, local_voxel_pos| {
-                                let distance = center
-                                    .cast::<f32>()
-                                    .metric_distance(&world_voxel_pos.cast::<f32>());
-                                if distance <= size as f32 {
-                                    voxel.set_removed();
-                                }
-                            })
-                        },
-                    );
-                }
-            }
-        }
-
-        //debug_renderer.draw_line(DebugLine {
-        //    start: editor_camera.rotation_anchor,
-        //    end: editor_camera.rotation_anchor,
-        //    thickness: 1.0,
-        //    color: Color::new_srgb(0.8, 0.1, 0.7),
-        //    alpha: 1.0,
-        //    flags: DebugFlags::NONE,
-        //});
     }
 
     pub fn update_toggle(

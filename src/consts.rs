@@ -11,7 +11,7 @@ pub mod voxel {
     pub const TERRAIN_CHUNK_METER_LENGTH: f32 =
         TERRAIN_CHUNK_VOXEL_LENGTH as f32 * VOXEL_METER_LENGTH;
     // Must be a multiple of 4 to be compatible with SFT and THC.
-    pub const TERRAIN_CHUNK_VOXEL_LENGTH: u32 = 256;
+    pub const TERRAIN_CHUNK_VOXEL_LENGTH: u32 = 64;
     pub const TERRAIN_CHUNK_VOXEL_VOLUME: u32 = TERRAIN_CHUNK_VOXEL_LENGTH.pow(3);
 
     pub const VOXELS_PER_METER: u32 = 8;
@@ -68,6 +68,8 @@ pub mod actions {
     }
 
     pub const EDITOR_TOGGLE: &str = "editor_toggle";
+    // Toggles debug visualization for:
+    // - Colliders
     pub const EDITOR_TOGGLE_DEBUG: &str = "editor_toggle_debug";
     pub const EDITOR_GIZMO_TRANSLATION: &str = "editor_gizmo_translation";
     pub const EDITOR_GIZMO_ROTATION: &str = "editor_gizmo_rotation";

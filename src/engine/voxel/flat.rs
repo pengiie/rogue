@@ -13,19 +13,20 @@ use log::debug;
 use nalgebra::Vector3;
 
 use crate::{
-    common::{aabb::AABB, bitset::Bitset, morton::morton_decode, ray::Ray},
+    common::{bitset::Bitset, morton::morton_decode},
     consts,
     engine::graphics::{
         device::{DeviceResource, GfxDevice},
         gpu_allocator::{Allocation, GpuBufferAllocator},
     },
 };
-
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     thc::VoxelModelTHCCompressed,
     voxel::{
-        VoxelData, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},

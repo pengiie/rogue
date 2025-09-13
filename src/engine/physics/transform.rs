@@ -6,10 +6,12 @@ use nalgebra::{
 };
 
 use crate::{
-    common::{aabb::AABB, obb::OBB, ray::Ray},
     consts,
     engine::entity::ecs_world::ECSWorld,
 };
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::obb::OBB;
+use crate::common::geometry::ray::Ray;
 
 /// Transform relative to the world-space or parent transform if one exists.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -76,19 +78,22 @@ impl Transform {
         self.rotation.transform_vector(&Vector3::y())
     }
 
+    pub fn transform_obb(&self, obb: &OBB) -> OBB {
+        return OBB::new(
+            AABB::new_two_point(obb.aabb.min + self.position, obb.aabb.max + self.position),
+            obb.rotation * self.rotation,
+            Vector3::zeros(),
+        );
+    }
+
     pub fn as_voxel_model_obb(&self, model_dimensions: Vector3<u32>) -> OBB {
         let half_length = model_dimensions.zip_map(&self.scale, |x, y| x as f32 * y)
             * consts::voxel::VOXEL_METER_LENGTH
             * 0.5;
         let min = self.position - half_length;
         let max = self.position + half_length;
-        let rotation_anchor = self.position;
 
-        OBB::new(
-            AABB::new_two_point(min, max),
-            self.rotation,
-            rotation_anchor,
-        )
+        OBB::new(AABB::new_two_point(min, max), self.rotation, half_length)
     }
 }
 

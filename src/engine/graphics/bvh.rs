@@ -1,4 +1,4 @@
-use crate::common::aabb::AABB;
+use crate::common::geometry::aabb::AABB;
 
 pub struct BVH {
     node: Option<BVHNode>,

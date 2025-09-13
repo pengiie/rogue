@@ -1,18 +1,8 @@
-use nalgebra::{Quaternion, Rotation3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Rotation3, UnitQuaternion, Vector2, Vector3};
 
-use crate::{
-    common::{aabb::AABB, color::Color},
-    engine::{
-        debug::{DebugFlags, DebugPlane, DebugRenderer},
-        physics::physics_world::ColliderConcrete,
-    },
-};
-
-use super::{
-    capsule_collider::CapsuleCollider,
-    physics_world::{Collider, ColliderType, CollisionInfo},
-    transform::Transform,
-};
+use super::{capsule_collider::CapsuleCollider, transform::Transform};
+use crate::common::geometry::aabb::AABB;
+use crate::engine::physics::collider::{Collider, ColliderConcrete, ColliderType, CollisionInfo};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -41,15 +31,22 @@ impl ColliderConcrete for PlaneCollider {
 }
 
 impl Collider for PlaneCollider {
-    fn test_collision(&self, other: &dyn Collider) -> Option<CollisionInfo> {
+    fn test_collision(
+        &self,
+        other: &dyn Collider,
+        transform_a: &Transform,
+        transform_b: &Transform,
+    ) -> Option<CollisionInfo> {
         match other.collider_type() {
             ColliderType::Capsule => {
                 let capsule = other.downcast_ref::<CapsuleCollider>().unwrap();
 
                 Some(CollisionInfo {
                     penetration_depth: Vector3::zeros(),
+                    contact_point: Vector3::zeros(),
                 })
             }
+            _ => None,
             ColliderType::Null | ColliderType::Plane => None,
         }
     }
@@ -65,7 +62,7 @@ impl Collider for PlaneCollider {
         return AABB::new_two_point(min, max);
     }
 
-    fn collider_type(&self) -> super::physics_world::ColliderType {
+    fn collider_type(&self) -> ColliderType {
         ColliderType::Plane
     }
 }

@@ -16,10 +16,13 @@ use crate::{
         },
         graphics::camera::Camera,
         physics::{
+            box_collider::BoxCollider,
             capsule_collider::CapsuleCollider,
-            physics_world::{self, ColliderId, ColliderType, Colliders, PhysicsWorld},
+            collider::{ColliderType, Colliders},
+            collider_registry::ColliderId,
+            physics_world::{self, PhysicsWorld},
             plane_collider::PlaneCollider,
-            rigid_body::RigidBody,
+            rigid_body::{RigidBody, RigidBodyType},
             transform::Transform,
         },
         ui::{EditorNewVoxelModelDialog, EditorUIState},
@@ -33,6 +36,7 @@ use crate::{
     },
     session::Session,
 };
+use crate::common::geometry::aabb::AABB;
 
 fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
     ui.horizontal(|ui| {
@@ -104,6 +108,33 @@ fn rotation_ui(ui: &mut egui::Ui, rotation: &mut UnitQuaternion<f32>) {
         if diff.z != 0.0 {
             *rotation = UnitQuaternion::from_euler_angles(roll, pitch, edit.z.to_radians());
         }
+    });
+}
+
+fn scale_ui(ui: &mut egui::Ui, scale: &mut Vector3<f32>) {
+    ui.horizontal(|ui| {
+        ui.label("Scale:");
+        ui.label("X");
+        ui.add(
+            egui::DragValue::new(&mut scale.x)
+                .range(0.001..=1000.0)
+                .speed(0.01)
+                .fixed_decimals(2),
+        );
+        ui.label("Y");
+        ui.add(
+            egui::DragValue::new(&mut scale.y)
+                .range(0.001..=1000.0)
+                .speed(0.01)
+                .fixed_decimals(2),
+        );
+        ui.label("Z");
+        ui.add(
+            egui::DragValue::new(&mut scale.z)
+                .range(0.001..=1000.0)
+                .speed(0.01)
+                .fixed_decimals(2),
+        );
     });
 }
 
@@ -312,10 +343,28 @@ pub fn entity_properties_pane(
             if let Ok(mut rigid_body) = ecs_world.get::<&mut RigidBody>(*selected_entity) {
                 component_widget(ui, "Rigid body", Some(&mut remove_rigid_body), |ui| {
                     ui.horizontal(|ui| {
+                        ui.label("Type");
+                        egui::ComboBox::from_id_salt("Rigid body type")
+                            .selected_text(format!("{:?}", rigid_body.rigid_body_type))
+                            .show_ui(ui, |ui| {
+                                for val in [RigidBodyType::Static, RigidBodyType::Dynamic] {
+                                    ui.selectable_value(
+                                        &mut rigid_body.rigid_body_type,
+                                        val,
+                                        format!("{:?}", val),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
                         ui.label("Mass");
                         let mut mass = rigid_body.mass();
                         ui.add(egui::DragValue::new(&mut mass).range(0.1..=100.0));
                         rigid_body.set_mass(mass);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Restitution");
+                        ui.add(egui::DragValue::new(&mut rigid_body.restitution).range(0.0..=1.0));
                     });
                 });
             }
@@ -429,30 +478,7 @@ fn transform_component(
         component_widget(ui, "Transform", None, |ui| {
             position_ui(ui, &mut transform.position);
             rotation_ui(ui, &mut transform.rotation);
-            ui.horizontal(|ui| {
-                ui.label("Scale:");
-                ui.label("X");
-                ui.add(
-                    egui::DragValue::new(&mut transform.scale.x)
-                        .range(0.001..=1000.0)
-                        .speed(0.01)
-                        .fixed_decimals(2),
-                );
-                ui.label("Y");
-                ui.add(
-                    egui::DragValue::new(&mut transform.scale.y)
-                        .range(0.001..=1000.0)
-                        .speed(0.01)
-                        .fixed_decimals(2),
-                );
-                ui.label("Z");
-                ui.add(
-                    egui::DragValue::new(&mut transform.scale.z)
-                        .range(0.001..=1000.0)
-                        .speed(0.01)
-                        .fixed_decimals(2),
-                );
-            });
+            scale_ui(ui, &mut transform.scale);
         });
     } // End Transform
 }
@@ -610,6 +636,7 @@ fn renderable_component(
                     let model_info = renderable_voxel_model.voxel_model_id().map_or(None, |id| {
                         Some(voxel_world.registry.get_model_info(id).unwrap())
                     });
+                    // TOOO: Save in memory things.
                     if ui
                         .add_enabled(
                             model_info
@@ -714,6 +741,7 @@ fn collider_type_to_str(collider_type: ColliderType) -> &'static str {
         ColliderType::Null => "Null (oops)",
         ColliderType::Capsule => "Capsule",
         ColliderType::Plane => "Plane",
+        ColliderType::Box => "Box",
     };
 }
 
@@ -739,12 +767,32 @@ fn capsule_collider_ui(
     ui.horizontal(|ui| {
         ui.label("Height:");
         ui.add(
-            egui::DragValue::new(&mut collider.height)
+            egui::DragValue::new(&mut collider.half_height)
                 .suffix(" m")
                 .speed(0.01)
                 .fixed_decimals(2),
         );
     });
+}
+
+fn box_collider_ui(collider_id: &ColliderId, physics_world: &mut PhysicsWorld, ui: &mut egui::Ui) {
+    let mut collider = physics_world
+        .colliders
+        .get_collider_mut::<BoxCollider>(collider_id);
+
+    let mut center = collider.obb.aabb.center();
+    let original_center = center.clone();
+    position_ui(ui, &mut center);
+
+    let mut half_side_length = collider.obb.aabb.half_side_length();
+    let original_half_side_length = half_side_length.clone();
+
+    rotation_ui(ui, &mut collider.obb.rotation);
+
+    scale_ui(ui, &mut half_side_length);
+    if center != original_center || half_side_length != original_half_side_length {
+        collider.obb.aabb = AABB::new_center_extents(center, half_side_length);
+    }
 }
 
 fn plane_collider_ui(
@@ -849,6 +897,13 @@ fn colliders_component(
                     colliders.colliders.push(plane_collider);
                     ui.close_menu();
                 }
+                if ui.button("Box collider").clicked() {
+                    let box_collider = physics_world
+                        .colliders
+                        .register_collider(BoxCollider::default());
+                    colliders.colliders.push(box_collider);
+                    ui.close_menu();
+                }
             });
 
             egui::ScrollArea::vertical()
@@ -887,6 +942,7 @@ fn colliders_component(
                         ColliderType::Plane => {
                             plane_collider_ui(collider_id, physics_world, ui);
                         }
+                        ColliderType::Box => box_collider_ui(collider_id, physics_world, ui),
                     }
                 }
                 None => {

@@ -1,8 +1,11 @@
 use super::asset::{AssetLoadError, AssetLoader, AssetSaver};
 
+pub mod collider;
 pub mod components;
 pub mod editor_settings;
+pub mod game_entity;
 pub mod image;
+pub mod project;
 pub mod settings;
 pub mod voxel;
 pub mod world;

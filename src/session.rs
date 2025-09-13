@@ -15,7 +15,7 @@ use crate::{
         asset::{
             asset::{AssetHandle, AssetPath, Assets},
             repr::{
-                editor_settings::{EditorProjectAsset, EditorSessionAsset, EditorSettingsAsset},
+                editor_settings::EditorSettingsAsset, project::EditorProjectAsset,
                 voxel::any::VoxelModelAnyAsset,
             },
         },
@@ -27,6 +27,7 @@ use crate::{
         },
         graphics::camera::{Camera, MainCamera},
         physics::{
+            collider_registry::ColliderRegistry,
             physics_world::{self, PhysicsWorld},
             transform::Transform,
         },
@@ -130,13 +131,16 @@ impl Session {
         self.project_save_dir.as_ref().map(|p| p.join("assets"))
     }
 
-    pub fn init(
+    pub fn init_from_project_asset(
         mut session: ResMut<Session>,
         mut ecs_world: ResMut<ECSWorld>,
         mut assets: ResMut<Assets>,
         mut scripts: ResMut<Scripts>,
+        mut physics_world: ResMut<PhysicsWorld>,
     ) {
         let session: &mut Session = &mut session;
+
+        // Add all top-level game entities.
         let mut uuid_map = HashMap::new();
         let mut to_add_children = Vec::new();
         for entity in &session.project.game_entities {
@@ -157,6 +161,12 @@ impl Session {
             }
         }
 
+        // Collect collider information and load into physics world. Ensuring collider ids match
+        // properly with what is referenced in entity components.
+        physics_world.colliders = ColliderRegistry::from(&session.project.collider_registry);
+
+        // Add children if their parent uuid is spawned in until we spawned all entities in the
+        // project asset file.
         while !to_add_children.is_empty() {
             to_add_children = to_add_children
                 .into_iter()
@@ -182,6 +192,9 @@ impl Session {
                 })
                 .collect::<Vec<_>>();
         }
+
+        // Assert that each entities colliders exist in the registry.
+        physics_world.validate_colliders_exist(&mut ecs_world);
     }
 
     pub fn can_start_game(&self) -> bool {
@@ -313,6 +326,7 @@ impl Session {
         editor: &Editor,
         ecs_world: &ECSWorld,
         voxel_world: &VoxelWorld,
+        physics_world: &PhysicsWorld,
     ) {
         assets.save_asset(
             AssetPath::new_user_dir(consts::io::EDITOR_SETTINGS_FILE),
@@ -328,6 +342,7 @@ impl Session {
                     voxel_world,
                     self.terrain_dir.clone(),
                     self.game_camera.clone(),
+                    &physics_world.colliders,
                 ),
             );
         }

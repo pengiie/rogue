@@ -18,7 +18,8 @@ use crate::{
     consts,
     engine::{
         asset::{asset::AssetPath, repr::settings::SettingsAsset},
-        physics::physics_world::{ColliderId, PhysicsWorld},
+        physics::{collider_registry::ColliderId, physics_world::PhysicsWorld},
+        voxel::voxel_world_gpu::VoxelWorldGpu,
     },
     session::Session,
     settings::Settings,
@@ -34,14 +35,14 @@ use super::{
     },
     graphics::renderer::Renderer,
     input::Input,
-    physics::{physics_world::ColliderType, transform::Transform},
+    physics::transform::Transform,
     resource::{Res, ResMut},
     voxel::{
         attachment::{Attachment, PTMaterial},
         chunk_generator::{self, ChunkGenerator},
         flat::VoxelModelFlat,
         voxel::{VoxelModel, VoxelModelType},
-        voxel_world::{self, VoxelWorld, VoxelWorldGpu},
+        voxel_world::{self, VoxelWorld},
     },
     window::{
         time::{Instant, Time, Timer},

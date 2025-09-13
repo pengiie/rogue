@@ -56,5 +56,5 @@ pub fn init_post_graphics(app: &mut App) {
     engine::graphics::initialize_graphics_resources(app);
     engine::voxel::initialize_voxel_world_resources(app);
 
-    app.run_system(Session::init);
+    app.run_system(Session::init_from_project_asset);
 }

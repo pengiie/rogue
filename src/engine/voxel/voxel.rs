@@ -9,13 +9,9 @@ use nalgebra::Vector3;
 use rogue_macros::Resource;
 
 use crate::{
-    common::{
-        aabb::AABB,
-        color::{
-            Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
-            ColorSpaceTransitionInto,
-        },
-        ray::Ray,
+    common::color::{
+        Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
+        ColorSpaceTransitionInto,
     },
     engine::{
         graphics::{
@@ -26,7 +22,8 @@ use crate::{
         physics::transform::Transform,
     },
 };
-
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, PTMaterial},
     flat::VoxelModelFlat,
@@ -227,69 +224,6 @@ where
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.model_gpu
-    }
-}
-
-pub type OptionalVoxelData = Option<VoxelData>;
-
-/// The data of a singular voxel, holds the attachments and values stored by the attachments.
-/// Stored in a contiguous homogenous array to avoid cache misses due to pointer hopping with
-/// something like a HashMap<Attachment, Vec<u32>>.
-///
-/// Data is encoded as, size of attachments, attachment ids, followed by attachment data in the
-/// same order. This data will start at some default size supporting the most common attachment
-/// needs and will have to perform a heap allocation for additional attachments.
-pub struct VoxelData {
-    // TODO: Actually implement that.
-    data: HashMap<AttachmentId, Vec<u32>>,
-}
-
-impl VoxelData {
-    const DEFAULT_CAPACITY: usize = 2;
-
-    pub fn empty() -> Self {
-        Self {
-            data: HashMap::with_capacity(Self::DEFAULT_CAPACITY),
-        }
-    }
-
-    pub fn with_diffuse<S>(mut self, albedo: Color<S>) -> Self
-    where
-        S: ColorSpace + ColorSpaceTransitionInto<ColorSpaceSrgb>,
-    {
-        let material = PTMaterial::diffuse(albedo.into_color_space());
-        self.add_attachment(
-            &Attachment::PTMATERIAL,
-            &Attachment::encode_ptmaterial(&material),
-        );
-        self
-    }
-
-    pub fn with_normal(mut self, normal: Vector3<f32>) -> Self {
-        self.add_attachment(&Attachment::NORMAL, &Attachment::encode_normal(&normal));
-        self
-    }
-
-    pub fn with_emmisive(mut self, candela: u32) -> Self {
-        self.add_attachment(&Attachment::EMMISIVE, &Attachment::encode_emmisive(candela));
-        self
-    }
-
-    fn add_attachment<T: bytemuck::Pod>(&mut self, attachment: &Attachment, data: &T) {
-        self.data.insert(
-            attachment.id(),
-            bytemuck::cast_slice(bytemuck::bytes_of(data)).to_vec(),
-        );
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&AttachmentId, &[u32])> {
-        self.data
-            .iter()
-            .map(|(attachment_id, data)| (attachment_id, data.as_slice()))
-    }
-
-    pub fn attachment_ids(&self) -> impl Iterator<Item = &AttachmentId> {
-        self.data.keys()
     }
 }
 

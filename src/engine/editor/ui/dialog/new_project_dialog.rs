@@ -4,7 +4,7 @@ use hecs::With;
 
 use crate::{
     engine::{
-        asset::repr::editor_settings::EditorProjectAsset,
+        asset::repr::project::EditorProjectAsset,
         entity::{ecs_world::ECSWorld, GameEntity},
         ui::EditorUIState,
     },
