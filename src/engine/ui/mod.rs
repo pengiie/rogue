@@ -18,8 +18,10 @@ use crate::{
     consts,
     engine::{
         asset::{asset::AssetPath, repr::settings::SettingsAsset},
+        editor::ui::dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog,
+        event::Events,
         physics::{collider_registry::ColliderId, physics_world::PhysicsWorld},
-        voxel::voxel_world_gpu::VoxelWorldGpu,
+        voxel::{voxel_registry::VoxelModelId, voxel_world_gpu::VoxelWorldGpu},
     },
     session::Session,
     settings::Settings,
@@ -71,7 +73,8 @@ pub struct UI {
 pub struct EditorUIState {
     pub new_project_dialog: Option<EditorNewProjectDialog>,
     pub new_model_dialog: Option<EditorNewVoxelModelDialog>,
-    pub existing_model_dialog: EditorExistingModelDialog,
+    pub open_model_dialog: EditorOpenModelDialog,
+    pub save_model_dialog: EditorSaveModelDialog,
     pub terrain_dialog: EditorTerrainDialog,
     pub add_script_dialog: EditorAddScriptDialog,
 
@@ -100,6 +103,7 @@ pub enum EditorTab {
     EntityProperties,
     WorldProperties,
     Editing,
+    // Game/project specific settings.
     Game,
     Stats,
     User,
@@ -110,10 +114,16 @@ pub struct EditorTerrainDialog {
     pub rx_file_name: Receiver<String>,
 }
 
-pub struct EditorExistingModelDialog {
+pub struct EditorOpenModelDialog {
     pub tx_file_name: Sender<String>,
     pub rx_file_name: Receiver<String>,
     pub associated_entity: Entity,
+}
+
+pub struct EditorSaveModelDialog {
+    pub tx_file_name: Sender<String>,
+    pub rx_file_name: Receiver<String>,
+    pub model_id: VoxelModelId,
 }
 
 pub struct EditorAddScriptDialog {
@@ -129,18 +139,6 @@ pub struct EditorNewProjectDialog {
     pub rx_file_name: Receiver<String>,
     // Tracked so we don't read the dir every frame, only on updates.
     pub last_file_name: (String, /*valid_dir=*/ bool, /*error=*/ String),
-}
-
-pub struct EditorNewVoxelModelDialog {
-    pub open: bool,
-    pub associated_entity: Entity,
-    pub file_path: String,
-    pub tx_file_name: Sender<String>,
-    pub rx_file_name: Receiver<String>,
-    // Tracked so we don't read the dir every frame, only on updates.
-    pub last_file_path: (String, /*valid_path=*/ bool, /*error=*/ String),
-    pub dimensions: Vector3<u32>,
-    pub model_type: VoxelModelType,
 }
 
 pub struct EditorAssetBrowserState {
@@ -201,6 +199,7 @@ impl EditorUIState {
         let terrain_dialog_channel = std::sync::mpsc::channel();
         let existing_model_dialog_channel = std::sync::mpsc::channel();
         let add_script_dialog_channel = std::sync::mpsc::channel();
+        let save_model_script_dialog_channel = std::sync::mpsc::channel();
         Self {
             message: String::new(),
             new_project_dialog: None,
@@ -210,7 +209,7 @@ impl EditorUIState {
                 tx_file_name: terrain_dialog_channel.0,
                 rx_file_name: terrain_dialog_channel.1,
             },
-            existing_model_dialog: EditorExistingModelDialog {
+            open_model_dialog: EditorOpenModelDialog {
                 tx_file_name: existing_model_dialog_channel.0,
                 rx_file_name: existing_model_dialog_channel.1,
                 associated_entity: Entity::DANGLING,
@@ -219,6 +218,11 @@ impl EditorUIState {
                 tx_file_name: add_script_dialog_channel.0,
                 rx_file_name: add_script_dialog_channel.1,
                 associated_entity: Entity::DANGLING,
+            },
+            save_model_dialog: EditorSaveModelDialog {
+                tx_file_name: save_model_script_dialog_channel.0,
+                rx_file_name: save_model_script_dialog_channel.1,
+                model_id: VoxelModelId::null(),
             },
 
             asset_browser: EditorAssetBrowserState {
@@ -342,6 +346,7 @@ impl UI {
         mut session: ResMut<Session>,
         time: Res<Time>,
         mut scripts: ResMut<Scripts>,
+        mut events: ResMut<Events>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let ui: &mut UI = &mut ui;
@@ -367,6 +372,7 @@ impl UI {
                     &time,
                     &mut scripts,
                     &mut settings,
+                    &mut events,
                 );
             } else {
                 egui::Window::new("Debug")

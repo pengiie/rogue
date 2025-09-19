@@ -62,6 +62,7 @@ pub fn game_loop(app: &App) {
     app.run_system(Editor::update_toggle);
     if app.get_resource::<Editor>().is_active {
         app.run_system(Editor::update_editor_actions);
+        app.run_system(Editor::update_editor_zoom);
         let curr_editor_view = app.get_resource::<Editor>().curr_editor_view;
         match curr_editor_view {
             EditorView::PanOrbit => {
@@ -71,6 +72,8 @@ pub fn game_loop(app: &App) {
                 app.run_system(Editor::update_editor_fps);
             }
         }
+
+        // Override editor camera position with any animations.
         app.run_system(Editor::update_camera_animations);
     }
 
@@ -124,8 +127,9 @@ pub fn game_loop(app: &App) {
 
     // Discard any inputs and events cached for this frame.
     app.run_system(Input::clear_inputs);
-    app.run_system(Events::clear_events);
+    app.run_system(Events::frame_cleanup);
     app.run_system(VoxelWorld::clear_state);
+    app.run_system(Events::frame_cleanup);
 
     //debug!(
     //    "CPU Frame took {}ms",

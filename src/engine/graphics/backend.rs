@@ -31,6 +31,7 @@ use super::{
     shader::{Shader, ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
 
+#[derive(Clone)]
 pub enum GraphicsBackendEvent {
     Initialized,
     PipelineShaderUpdate(ResourceId<Untyped>),

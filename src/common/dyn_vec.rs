@@ -116,7 +116,11 @@ impl DynVec {
         self.capacity = new_capacity;
     }
 
-    pub fn size(&self) -> usize {
+    pub fn clear(&mut self) {
+        self.size = 0;
+    }
+
+    pub fn len(&self) -> usize {
         self.size
     }
 

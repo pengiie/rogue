@@ -1,17 +1,17 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 
-use crate::{
-    common::color::{Color, ColorSpaceSrgb},
-    consts,
-};
-use crate::common::geometry::obb::OBB;
 use super::{
     graphics::{
         backend::GraphicsBackendRecorder, frame_graph::FrameGraphContext, renderer::Renderer,
     },
     input::Input,
     resource::{Res, ResMut},
+};
+use crate::common::geometry::obb::OBB;
+use crate::{
+    common::color::{Color, ColorSpaceSrgb},
+    consts,
 };
 
 pub struct DebugGizmo {}

@@ -2,6 +2,10 @@ use std::{path::PathBuf, str::FromStr};
 
 use nalgebra::{UnitQuaternion, Vector3};
 
+use crate::common::geometry::aabb::AABB;
+use crate::engine::editor::ui::dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog;
+use crate::engine::voxel::sft::VoxelModelSFT;
+use crate::engine::voxel::sft_compressed::VoxelModelSFTCompressed;
 use crate::{
     engine::{
         asset::{
@@ -25,7 +29,7 @@ use crate::{
             rigid_body::{RigidBody, RigidBodyType},
             transform::Transform,
         },
-        ui::{EditorNewVoxelModelDialog, EditorUIState},
+        ui::EditorUIState,
         voxel::{
             flat::VoxelModelFlat,
             thc::{VoxelModelTHC, VoxelModelTHCCompressed},
@@ -36,7 +40,6 @@ use crate::{
     },
     session::Session,
 };
-use crate::common::geometry::aabb::AABB;
 
 fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
     ui.horizontal(|ui| {
@@ -150,7 +153,7 @@ pub fn entity_properties_pane(
     scripts: &mut Scripts,
 ) {
     'existing_model_dialog_rx: {
-        match ui_state.existing_model_dialog.rx_file_name.try_recv() {
+        match ui_state.open_model_dialog.rx_file_name.try_recv() {
             Ok(model_path) => {
                 let Ok(path) = PathBuf::from_str(&model_path) else {
                     break 'existing_model_dialog_rx;
@@ -192,12 +195,39 @@ pub fn entity_properties_pane(
                 voxel_world
                     .registry
                     .set_voxel_model_asset_path(model_id, Some(asset_path));
-                if let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(
-                    ui_state.existing_model_dialog.associated_entity,
-                ) {
+                if let Ok(mut renderable) = ecs_world
+                    .get::<&mut RenderableVoxelEntity>(ui_state.open_model_dialog.associated_entity)
+                {
                     renderable.set_id(model_id);
                 }
                 voxel_world.to_update_normals.insert(model_id);
+            }
+            Err(_) => {}
+        }
+    }
+    'save_model_dialog_rx: {
+        match ui_state.save_model_dialog.rx_file_name.try_recv() {
+            Ok(model_path) => {
+                let Ok(path) = PathBuf::from_str(&model_path) else {
+                    break 'save_model_dialog_rx;
+                };
+                if !path.is_absolute() {
+                    break 'save_model_dialog_rx;
+                }
+                if !path.starts_with(session.project_assets_dir().unwrap()) {
+                    log::error!(
+                        "Picked model path {:?} does start with the project assets dir.",
+                        path
+                    );
+                    break 'save_model_dialog_rx;
+                }
+
+                let model_path = PathBuf::from_str(&model_path).unwrap();
+                let asset_path = AssetPath::from_project_dir_path(
+                    session.project_save_dir.as_ref().unwrap(),
+                    &model_path,
+                );
+                voxel_world.save_model(assets, ui_state.save_model_dialog.model_id, asset_path);
             }
             Err(_) => {}
         }
@@ -364,8 +394,12 @@ pub fn entity_properties_pane(
                     });
                     ui.horizontal(|ui| {
                         ui.label("Restitution");
-                        ui.add(egui::DragValue::new(&mut rigid_body.restitution).range(0.0..=1.0));
+                        ui.add(egui::DragValue::new(&mut rigid_body.restitution).range(0.0..=50.0));
                     });
+                    ui.label(format!(
+                        "Velocity  X: {}, Y: {}, Z: {}",
+                        rigid_body.velocity.x, rigid_body.velocity.y, rigid_body.velocity.z
+                    ));
                 });
             }
             if remove_scripts {
@@ -557,6 +591,48 @@ fn convert_model_ui(
             }
             ui.close_menu();
         }
+        if ui
+            .add_enabled(model_type != VoxelModelType::SFT, egui::Button::new("SFT"))
+            .clicked()
+        {
+            match model_type {
+                VoxelModelType::Flat => convert_model::<VoxelModelFlat, VoxelModelSFT>(
+                    voxel_world,
+                    &mut renderable_voxel_model,
+                    &info,
+                    model_id,
+                ),
+                VoxelModelType::SFTCompressed => {
+                    convert_model::<VoxelModelSFTCompressed, VoxelModelSFT>(
+                        voxel_world,
+                        &mut renderable_voxel_model,
+                        &info,
+                        model_id,
+                    )
+                }
+                VoxelModelType::THC => convert_model::<VoxelModelTHC, VoxelModelSFT>(
+                    voxel_world,
+                    &mut renderable_voxel_model,
+                    &info,
+                    model_id,
+                ),
+                VoxelModelType::THCCompressed => {
+                    convert_model::<VoxelModelTHCCompressed, VoxelModelSFT>(
+                        voxel_world,
+                        &mut renderable_voxel_model,
+                        &info,
+                        model_id,
+                    )
+                }
+                ty => {
+                    log::error!(
+                        "Can't convert from {} to THC since it's not implemented yet.",
+                        ty.to_string()
+                    );
+                }
+            }
+            ui.close_menu();
+        }
     });
 }
 
@@ -598,25 +674,16 @@ fn renderable_component(
                 ui.menu_button(text, |ui| {
                     // Open new model dialog within the editor.
                     if ui.button("Create new").clicked() {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        ui_state.new_model_dialog = Some(EditorNewVoxelModelDialog {
-                            open: true,
-                            associated_entity: *selected_entity,
-                            file_path: String::new(),
-                            tx_file_name: tx,
-                            rx_file_name: rx,
-                            last_file_path: (String::new(), false, String::new()),
-                            dimensions: Vector3::new(32, 32, 32),
-                            model_type: VoxelModelType::Flat,
-                        });
+                        ui_state.new_model_dialog =
+                            Some(EditorNewVoxelModelDialog::new(*selected_entity));
                         ui.close_menu();
                     }
 
                     // Choose existing model saved on the file system within the project asset
                     // directory.
                     if ui.button("Choose existing").clicked() {
-                        let send = ui_state.existing_model_dialog.tx_file_name.clone();
-                        ui_state.existing_model_dialog.associated_entity = *selected_entity;
+                        let send = ui_state.open_model_dialog.tx_file_name.clone();
+                        ui_state.open_model_dialog.associated_entity = *selected_entity;
                         std::thread::spawn(|| {
                             pollster::block_on(async move {
                                 let file = rfd::AsyncFileDialog::new()
@@ -632,45 +699,59 @@ fn renderable_component(
                         ui.close_menu();
                     }
 
-                    // Save the model to the project asset directory.
+                    // Save the model to its currently saved to file.
                     let model_info = renderable_voxel_model.voxel_model_id().map_or(None, |id| {
-                        Some(voxel_world.registry.get_model_info(id).unwrap())
+                        Some(voxel_world.registry.get_model_info(id).unwrap().clone())
                     });
-                    // TOOO: Save in memory things.
+                    let model_info_exists = model_info.is_some();
+
+                    let has_asset_path = model_info
+                        .as_ref()
+                        .filter(|info| info.asset_path.is_some())
+                        .is_some();
                     if ui
-                        .add_enabled(
-                            model_info
-                                .filter(|info| info.asset_path.is_some())
-                                .is_some(),
-                            egui::Button::new("Save"),
-                        )
+                        .add_enabled(has_asset_path, egui::Button::new("Save"))
                         .clicked()
                     {
                         let model_id = renderable_voxel_model.voxel_model_id().unwrap();
-                        let model_info = model_info.unwrap();
-                        let asset_path = model_info.asset_path.clone().unwrap();
-                        match &model_info.model_type {
-                            Some(VoxelModelType::Flat) => {
-                                let flat =
-                                    voxel_world.get_model::<VoxelModelFlat>(model_id).clone();
-                                assets.save_asset(asset_path, flat);
-                            }
-                            Some(VoxelModelType::THC) => {
-                                let thc = voxel_world.get_model::<VoxelModelTHC>(model_id);
-                                assets.save_asset(asset_path, VoxelModelTHCCompressed::from(thc));
-                            }
-                            Some(VoxelModelType::THCCompressed) => {
-                                let thc_compressed = voxel_world
-                                    .get_model::<VoxelModelTHCCompressed>(model_id)
-                                    .clone();
-                                assets.save_asset(asset_path, thc_compressed);
-                            }
-                            None => {
-                                log::error!("Don't know how to save this asset format");
-                            }
-                            ty => todo!("Save model type {:?}", ty),
-                        }
+                        let asset_path = model_info.unwrap().asset_path.clone().unwrap();
+                        voxel_world.save_model(assets, model_id, asset_path);
                         ui.close_menu();
+                    }
+
+                    // Save the model to a specific file.
+                    if ui
+                        .add_enabled(model_info_exists, egui::Button::new("Save as"))
+                        .clicked()
+                    {
+                        let send = ui_state.save_model_dialog.tx_file_name.clone();
+                        ui_state.save_model_dialog.model_id =
+                            renderable_voxel_model.voxel_model_id().unwrap();
+                        std::thread::spawn(|| {
+                            pollster::block_on(async move {
+                                let file = rfd::AsyncFileDialog::new()
+                                    .add_filter("RVox", &["rvox"])
+                                    .save_file()
+                                    .await;
+                                let Some(file) = file else {
+                                    return;
+                                };
+                                send.send(file.path().to_string_lossy().to_string());
+                            });
+                        });
+                        ui.close_menu();
+                    }
+
+                    // Essentially calculates the bounds of the content, and allows
+                    // the user to move the bounds of the model as long as the content
+                    // still fits. During this process the user can also resize the model following
+                    // the models resizing rules.
+                    if ui
+                        .add_enabled(model_info_exists, egui::Button::new("Resize/Rebound"))
+                        .on_hover_text("Move around and resize the model bounds.")
+                        .clicked()
+                    {
+                        // TODO: Edit the model bounds.
                     }
                 });
             });

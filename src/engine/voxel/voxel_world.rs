@@ -12,6 +12,27 @@ use log::debug;
 use nalgebra::{allocator, Vector3};
 use rogue_macros::Resource;
 
+use super::{
+    attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
+    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
+    flat::VoxelModelFlat,
+    sft::VoxelModelSFT,
+    voxel::{
+        VoxelMaterialSet, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
+    },
+    voxel_allocator::VoxelDataAllocator,
+    voxel_registry::{VoxelModelId, VoxelModelRegistry},
+    voxel_transform::VoxelModelTransform,
+};
+use crate::{
+    common::geometry::aabb::AABB,
+    engine::voxel::{
+        thc::{VoxelModelTHC, VoxelModelTHCCompressed},
+        voxel::VoxelModelType,
+    },
+};
+use crate::{common::geometry::ray::Ray, engine::voxel::sft_compressed::VoxelModelSFTCompressed};
 use crate::{
     common::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
@@ -21,7 +42,7 @@ use crate::{
     },
     consts::{self, voxel::VOXEL_METER_LENGTH},
     engine::{
-        asset::asset::{AssetHandle, Assets},
+        asset::asset::{AssetHandle, AssetPath, Assets},
         entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
         event::Events,
         graphics::{
@@ -49,21 +70,6 @@ use crate::{
     },
     session::Session,
     settings::Settings,
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
-use super::{
-    attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
-    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
-    flat::VoxelModelFlat,
-    sft::VoxelModelSFT,
-    voxel::{
-        VoxelMaterialSet, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
-        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
-    },
-    voxel_allocator::VoxelDataAllocator,
-    voxel_registry::{VoxelModelId, VoxelModelRegistry},
-    voxel_transform::VoxelModelTransform,
 };
 
 pub struct QueuedVoxelEdit {
@@ -714,6 +720,44 @@ impl VoxelWorld {
                     })
                 }
             }
+        }
+    }
+
+    // Issues the save request in the registry and updates the model info with the provided asset
+    // path the model was saved to.
+    pub fn save_model(
+        &mut self,
+        assets: &mut Assets,
+        model_id: VoxelModelId,
+        asset_path: AssetPath,
+    ) {
+        let mut model_info = self.registry.get_model_info_mut(model_id).unwrap();
+        model_info.asset_path = Some(asset_path.clone());
+        match &model_info.model_type {
+            Some(VoxelModelType::Flat) => {
+                let flat = self.get_model::<VoxelModelFlat>(model_id).clone();
+                assets.save_asset(asset_path, flat);
+            }
+            Some(VoxelModelType::THC) => {
+                let thc = self.get_model::<VoxelModelTHC>(model_id);
+                assets.save_asset(asset_path, VoxelModelTHCCompressed::from(thc));
+            }
+            Some(VoxelModelType::THCCompressed) => {
+                let thc_compressed = self.get_model::<VoxelModelTHCCompressed>(model_id).clone();
+                assets.save_asset(asset_path, thc_compressed);
+            }
+            Some(VoxelModelType::SFT) => {
+                let sft = self.get_model::<VoxelModelSFT>(model_id).clone();
+                assets.save_asset(asset_path, VoxelModelSFTCompressed::from(&sft));
+            }
+            Some(VoxelModelType::SFTCompressed) => {
+                let sft_compressed = self.get_model::<VoxelModelSFTCompressed>(model_id).clone();
+                assets.save_asset(asset_path, sft_compressed);
+            }
+            None => {
+                log::error!("Don't know how to save this asset format");
+            }
+            ty => todo!("Save model type {:?}", ty),
         }
     }
 

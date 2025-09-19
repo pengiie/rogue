@@ -2,13 +2,6 @@ use std::{collections::HashMap, u64};
 
 use nalgebra::Vector3;
 
-use crate::{
-    common::morton::{self, morton_encode, morton_traversal_thc, next_power_of_4},
-    consts,
-    engine::{graphics::device::GfxDevice, voxel::attachment::BuiltInMaterial},
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,
@@ -20,6 +13,13 @@ use super::{
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
+};
+use crate::common::geometry::ray::Ray;
+use crate::{common::geometry::aabb::AABB, engine::voxel::thc::VoxelModelTHC};
+use crate::{
+    common::morton::{self, morton_encode, morton_traversal_thc, next_power_of_4},
+    consts,
+    engine::{graphics::device::GfxDevice, voxel::attachment::BuiltInMaterial},
 };
 
 #[derive(Clone)]
@@ -447,5 +447,19 @@ impl From<&VoxelModelSFTCompressed> for VoxelModelSFT {
 impl From<&VoxelModelFlat> for VoxelModelSFT {
     fn from(flat: &VoxelModelFlat) -> Self {
         VoxelModelSFT::from(&VoxelModelSFTCompressed::from(flat))
+    }
+}
+
+impl From<&VoxelModelTHC> for VoxelModelSFT {
+    fn from(thc: &VoxelModelTHC) -> Self {
+        VoxelModelSFT::from(&VoxelModelSFTCompressed::from(
+            &VoxelModelTHCCompressed::from(thc),
+        ))
+    }
+}
+
+impl From<&VoxelModelTHCCompressed> for VoxelModelSFT {
+    fn from(thc_compressed: &VoxelModelTHCCompressed) -> Self {
+        VoxelModelSFT::from(&VoxelModelSFTCompressed::from(thc_compressed))
     }
 }

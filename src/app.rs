@@ -20,7 +20,7 @@ use crate::{
         audio::Audio,
         editor::editor::Editor,
         entity::ecs_world::ECSWorld,
-        event::Events,
+        event::{EventReader, Events},
         graphics::{backend::GraphicsBackendEvent, device::DeviceResource, renderer::Renderer},
         input::Input,
         physics::physics_world::PhysicsWorld,
@@ -45,6 +45,7 @@ pub struct App {
     initialized_window: bool,
     did_first_resize: bool,
     initialized_graphics: bool,
+    graphics_event_reader: EventReader<GraphicsBackendEvent>,
     resource_bank: ResourceBank,
 
     event_sender: Sender<AppEvent>,
@@ -63,6 +64,7 @@ impl App {
             initialized_window: false,
             did_first_resize: false,
             initialized_graphics: false,
+            graphics_event_reader: EventReader::new(),
             resource_bank: ResourceBank::new(),
 
             event_sender,
@@ -158,14 +160,11 @@ impl winit::application::ApplicationHandler for App {
                     .handle()
                     .request_redraw();
 
-                self.run_system(DeviceResource::pre_init_update);
-
                 if !self.initialized_graphics {
-                    for event in self
-                        .resource_bank
-                        .get_resource::<Events>()
-                        .iter::<GraphicsBackendEvent>()
-                    {
+                    self.run_system(DeviceResource::pre_graphics_update);
+
+                    let events = self.resource_bank.get_resource::<Events>();
+                    for event in self.graphics_event_reader.read(&events) {
                         match event {
                             GraphicsBackendEvent::Initialized => {
                                 self.initialized_graphics = true;
@@ -174,6 +173,7 @@ impl winit::application::ApplicationHandler for App {
                             _ => {}
                         }
                     }
+                    drop(events);
 
                     // Graphics backend isn't ready yet.
                     if !self.initialized_graphics {

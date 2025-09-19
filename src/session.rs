@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use hecs::With;
 use rogue_macros::Resource;
 
 use crate::{
@@ -23,7 +24,7 @@ use crate::{
         entity::{
             ecs_world::{ECSWorld, Entity},
             scripting::Scripts,
-            RenderableVoxelEntity,
+            GameEntity, RenderableVoxelEntity,
         },
         graphics::camera::{Camera, MainCamera},
         physics::{
@@ -212,6 +213,30 @@ impl Session {
     pub fn stop_game(&mut self) {
         assert_ne!(self.session_state, SessionState::Editor);
         self.should_stop_game = true;
+    }
+
+    pub fn new_project(
+        &mut self,
+        ecs_world: &mut ECSWorld,
+        new_project_path: PathBuf,
+        voxel_world: &mut VoxelWorld,
+    ) {
+        let mut existing_entities_query = ecs_world.query::<With<(), &GameEntity>>();
+        let existing_entities = existing_entities_query
+            .into_iter()
+            .map(|(entity_id, _)| entity_id)
+            .collect::<Vec<_>>();
+        drop(existing_entities_query);
+        for id in existing_entities {
+            ecs_world.despawn(id);
+        }
+
+        self.project_save_dir = Some(new_project_path.clone());
+        self.editor_settings.last_project_dir = Some(new_project_path);
+        self.project = EditorProjectAsset::new_empty();
+        self.terrain_dir = None;
+        self.game_camera = None;
+        voxel_world.chunks.clear();
     }
 
     pub fn update(

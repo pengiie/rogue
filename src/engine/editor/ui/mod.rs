@@ -22,21 +22,25 @@ use crate::{
             asset::{AssetPath, Assets},
             repr::image::ImageAsset,
         },
-        editor::ui::{
-            dialog::{
-                new_project_dialog::new_project_dialog,
-                new_voxel_model_dialog::new_voxel_model_dialog,
+        editor::{
+            events::EventEditorZoom,
+            ui::{
+                dialog::{
+                    new_project_dialog::new_project_dialog,
+                    new_voxel_model_dialog::new_voxel_model_dialog_ui,
+                },
+                entity_properties::entity_properties_pane,
+                stats::stats_pane,
+                user_settings::user_pane,
+                voxel_editing::editing_pane,
             },
-            entity_properties::entity_properties_pane,
-            stats::stats_pane,
-            user_settings::user_pane,
-            voxel_editing::editing_pane,
         },
         entity::{
             ecs_world::{ECSWorld, Entity},
             scripting::{ScriptableEntity, Scripts},
             EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
+        event::Events,
         graphics::camera::Camera,
         physics::{
             capsule_collider::{self, CapsuleCollider},
@@ -46,8 +50,8 @@ use crate::{
             transform::Transform,
         },
         ui::{
-            gui::Egui, EditorAssetBrowserState, EditorNewProjectDialog, EditorNewVoxelModelDialog,
-            EditorTab, EditorUIState, UI,
+            gui::Egui, EditorAssetBrowserState, EditorNewProjectDialog, EditorTab, EditorUIState,
+            UI,
         },
         voxel::{
             factory::VoxelModelFactory,
@@ -138,6 +142,7 @@ pub fn egui_editor_ui(
     time: &Time,
     mut scripts: &mut Scripts,
     settings: &mut Settings,
+    events: &mut Events,
 ) -> Vector4<f32> {
     if !ui_state.initialized_icons {
         init_editor_ui_textures(ctx, ui_state);
@@ -274,8 +279,8 @@ pub fn egui_editor_ui(
         * ctx.pixels_per_point();
 
     // DIALOGS
-    new_project_dialog(ctx, ui_state, ecs_world, session);
-    new_voxel_model_dialog(ctx, ui_state, ecs_world, session, assets, voxel_world);
+    new_project_dialog(ctx, ui_state, ecs_world, session, voxel_world);
+    new_voxel_model_dialog_ui(ctx, ui_state, ecs_world, session, assets, voxel_world);
 
     // Hide left and right panel if we don't have a project selected.
     if session.project_save_dir.is_none() {
@@ -344,6 +349,7 @@ pub fn egui_editor_ui(
                         ui_state: &mut EditorUIState,
                         entity_id: Entity,
                         game_entity: &GameEntity,
+                        events: &mut Events,
                     ) {
                         let label_id =
                             egui::Id::new(format!("left_panel_{}_entity_label", entity_id.id()));
@@ -371,6 +377,12 @@ pub fn egui_editor_ui(
                                 editor.selected_entity = Some(entity_id);
                             }
                         }
+
+                        if label.double_clicked_by(egui::PointerButton::Secondary) {
+                            events.push(EventEditorZoom::Entity {
+                                target_entity: entity_id,
+                            });
+                        }
                     };
 
                     for (entity_id, game_entity) in game_entities {
@@ -381,6 +393,7 @@ pub fn egui_editor_ui(
                             ui_state,
                             entity_id,
                             &game_entity,
+                            events,
                         );
 
                         fn render_children(
@@ -388,6 +401,7 @@ pub fn egui_editor_ui(
                             editor: &mut Editor,
                             ecs_world: &mut ECSWorld,
                             ui_state: &mut EditorUIState,
+                            events: &mut Events,
                             entity_id: Entity,
                         ) {
                             let Ok(children_query) = ecs_world.get::<&EntityChildren>(entity_id)
@@ -408,15 +422,17 @@ pub fn egui_editor_ui(
                                             child_game_entity.as_ref().unwrap().deref().clone();
                                         drop(child_game_entity);
                                         render_entity_label(
-                                            ui, editor, ecs_world, ui_state, child, &ge,
+                                            ui, editor, ecs_world, ui_state, child, &ge, events,
                                         );
-                                        render_children(ui, editor, ecs_world, ui_state, child);
+                                        render_children(
+                                            ui, editor, ecs_world, ui_state, events, child,
+                                        );
                                     }
                                 });
                             });
                         };
 
-                        render_children(ui, editor, ecs_world, ui_state, entity_id);
+                        render_children(ui, editor, ecs_world, ui_state, events, entity_id);
                     }
                 });
             //ui.label(egui::RichText::new("Performance:").size(8.0));

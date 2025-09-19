@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use hecs::Without;
 use nalgebra::Vector3;
@@ -141,6 +144,7 @@ impl PhysicsWorld {
             .colliders
             .update_entity_collider_positions(&mut ecs_world);
 
+        let mut tested_collision = HashSet::new();
         for (_, bin) in physics_world.colliders.bins.iter() {
             for (entity_a, collider_id_a) in bin {
                 for (entity_b, collider_id_b) in bin {
@@ -148,21 +152,20 @@ impl PhysicsWorld {
                         continue;
                     }
 
+                    if tested_collision.contains(&(*entity_a, *entity_b)) {
+                        continue;
+                    }
+                    tested_collision.insert((*entity_a, *entity_b));
+                    tested_collision.insert((*entity_b, *entity_a));
+
                     // TODO: Do collider triggers that don't require a rigid body.
-                    let Ok(mut query_a) =
-                        ecs_world.query_one::<(&mut Transform, &mut RigidBody)>(*entity_a)
+                    let mut query = ecs_world
+                        .query_many_mut::<(&mut Transform, &mut RigidBody), 2>([
+                            *entity_a, *entity_b,
+                        ]);
+                    let Ok([Ok((transform_a, rigid_body_a)), Ok((transform_b, rigid_body_b))]) =
+                        query.get_disjoint_mut([0, 1])
                     else {
-                        continue;
-                    };
-                    let Some((transform_a, rigid_body_a)) = query_a.get() else {
-                        continue;
-                    };
-                    let Ok(mut query_b) =
-                        ecs_world.query_one::<(&mut Transform, &mut RigidBody)>(*entity_b)
-                    else {
-                        continue;
-                    };
-                    let Some((transform_b, rigid_body_b)) = query_b.get() else {
                         continue;
                     };
 
@@ -177,31 +180,30 @@ impl PhysicsWorld {
                         continue;
                     }
 
-                    // Momentum (p) = mass * velocity
-                    // COM applies here so:
-                    // m1*vi1 + m2*vi2 = m1*vf1 + m2*vf2
-                    // vf1 = m1*vi1 + m2*vi2 -
                     let normal = collision_info.penetration_depth.normalize();
-                    let relative_velocity = rigid_body_b.velocity - rigid_body_a.velocity;
+                    let relative_velocity = rigid_body_b.velocity() - rigid_body_a.velocity();
+                    let relative_velocity_along_normal = relative_velocity.dot(&normal);
 
                     let restitution = rigid_body_a.restitution.min(rigid_body_b.restitution);
                     let inv_mass_a = rigid_body_a.inv_mass();
                     let inv_mass_b = rigid_body_b.inv_mass();
 
-                    let vel_delta = (-(1.0 + restitution) * relative_velocity).dot(&normal);
-                    let impulse = vel_delta / (inv_mass_a + inv_mass_b);
+                    let impulse = -((1.0 + restitution) * relative_velocity_along_normal)
+                        / (inv_mass_a + inv_mass_b);
+                    let impulse_vec = impulse * normal;
 
                     // Apply the normal velocity.
-                    rigid_body_a.velocity -= inv_mass_a * impulse * normal;
-                    rigid_body_b.velocity += inv_mass_b * impulse * normal;
+                    rigid_body_a.velocity -= inv_mass_a * impulse_vec;
+                    rigid_body_b.velocity += inv_mass_b * impulse_vec;
 
-                    // Separate positions for the frame, object with largest velocity moving is the
-                    // one moved.
-                    if rigid_body_a.velocity.norm_squared() > rigid_body_b.velocity.norm_squared() {
-                        transform_a.position -= collision_info.penetration_depth;
-                    } else {
-                        transform_b.position += collision_info.penetration_depth;
-                    }
+                    const POSITION_CORRECTION_FACTOR: f32 = 0.8;
+                    // Correct position so objects are no longer penetrating.
+                    let weighting_a =
+                        POSITION_CORRECTION_FACTOR * (inv_mass_a / (inv_mass_a + inv_mass_b));
+                    let weighting_b =
+                        POSITION_CORRECTION_FACTOR * (inv_mass_b / (inv_mass_a + inv_mass_b));
+                    transform_a.position -= weighting_a * collision_info.penetration_depth;
+                    transform_b.position += weighting_b * collision_info.penetration_depth;
                 }
             }
         }

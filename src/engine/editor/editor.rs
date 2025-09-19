@@ -8,6 +8,8 @@ use nalgebra::{
 use rogue_macros::Resource;
 
 use crate::common::geometry::ray::Ray;
+use crate::engine::editor::events::EventEditorZoom;
+use crate::engine::event::{EventReader, Events};
 use crate::{
     common::{animate::Animation, color::Color},
     consts::{
@@ -72,6 +74,7 @@ pub struct Editor {
     pub selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
 
+    pub focus_event_reader: EventReader<EventEditorZoom>,
     pub focus_animation: Animation<Vector3<f32>>,
     pub double_clicker_buffer: [Option<Instant>; 2],
 
@@ -109,6 +112,8 @@ impl Editor {
             is_active: !is_inactive,
             initialized: false,
             curr_editor_view: EditorView::PanOrbit,
+
+            focus_event_reader: EventReader::new(),
 
             gizmo: EditorGizmo::new(),
             selected_entity: None,
@@ -291,6 +296,49 @@ impl Editor {
             .update(&mut editor_transform.position);
     }
 
+    pub fn update_editor_zoom(
+        mut editor: ResMut<Editor>,
+        input: Res<Input>,
+        mut ecs_world: ResMut<ECSWorld>,
+        mut voxel_world: ResMut<VoxelWorld>,
+        settings: Res<Settings>,
+        mut window: ResMut<Window>,
+        mut ui: ResMut<UI>,
+        mut debug_renderer: ResMut<DebugRenderer>,
+        mut main_camera: ResMut<MainCamera>,
+        session: Res<Session>,
+        events: Res<Events>,
+    ) {
+        let Some(zoom_event) = editor.focus_event_reader.read(&events).last() else {
+            return;
+        };
+
+        let target_position = match zoom_event {
+            EventEditorZoom::Entity { target_entity } => {
+                // Hovered entity with mouse.
+                let model_local_transform = ecs_world.get::<&Transform>(*target_entity).unwrap();
+                let model_world_transform =
+                    ecs_world.get_world_transform(*target_entity, &model_local_transform);
+                model_world_transform.position
+            }
+            EventEditorZoom::Position { position } => *position,
+        };
+
+        let mut editor_camera_query = ecs_world
+            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
+            .unwrap();
+        let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
+
+        let focus_distance = 16.0;
+        let end = target_position - editor_transform.forward() * focus_distance;
+        editor.focus_animation.start(
+            editor_transform.position,
+            end,
+            Duration::from_secs_f64(0.75),
+        );
+        editor.editor_camera = EditorCamera::from_pos_anchor(end, target_position);
+    }
+
     /// The first editor update function called.
     pub fn update_editor_actions(
         mut editor: ResMut<Editor>,
@@ -303,6 +351,7 @@ impl Editor {
         mut debug_renderer: ResMut<DebugRenderer>,
         mut main_camera: ResMut<MainCamera>,
         session: Res<Session>,
+        mut events: ResMut<Events>,
     ) {
         let editor: &mut Editor = &mut editor;
 
@@ -429,7 +478,7 @@ impl Editor {
                         obb: &obb,
                         thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
                         color: Color::new_srgb_hex("#4553ad"),
-                        alpha: 1.0,
+                        alpha: 0.5,
                         flags: DebugFlags::XRAY,
                     });
                 }
@@ -455,7 +504,7 @@ impl Editor {
                         obb: &obb,
                         thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
                         color: Color::new_srgb_hex("#4553ad"),
-                        alpha: 1.0,
+                        alpha: 0.5,
                         flags: DebugFlags::XRAY,
                     });
                 }
@@ -463,17 +512,9 @@ impl Editor {
 
             // Update double click to focus-zoom camera on entity.
             if has_valid_double_click {
-                // Animate camera onto the entity.
-                // TODO: Adjust based off of entity size.
-                let focus_distance = 6.0;
-                let end =
-                    model_world_transform.position - editor_transform.forward() * focus_distance;
-                editor.focus_animation.start(
-                    editor_transform.position,
-                    end,
-                    Duration::from_secs_f64(0.75),
-                );
-                *editor_camera = EditorCamera::from_pos_anchor(end, model_world_transform.position);
+                events.push(EventEditorZoom::Entity {
+                    target_entity: *hovered_entity_id,
+                });
             }
         }
 
@@ -484,15 +525,9 @@ impl Editor {
                 // Animate camera onto the terrain pos.
                 let voxel_world_position =
                     world_voxel_pos.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH;
-                // TODO: Adjust based off of entity size.
-                let focus_distance = 6.0;
-                let end = voxel_world_position - editor_transform.forward() * focus_distance;
-                editor.focus_animation.start(
-                    editor_transform.position,
-                    end,
-                    Duration::from_secs_f64(0.75),
-                );
-                *editor_camera = EditorCamera::from_pos_anchor(end, voxel_world_position);
+                events.push(EventEditorZoom::Position {
+                    position: voxel_world_position,
+                });
             }
         }
 
@@ -519,7 +554,7 @@ impl Editor {
                 obb: &selected_entity_obb,
                 thickness: consts::editor::ENTITY_OUTLINE_THICKNESS,
                 color: Color::new_srgb_hex("#1026b3"),
-                alpha: 1.0,
+                alpha: 0.5,
                 flags: DebugFlags::XRAY,
             });
         }

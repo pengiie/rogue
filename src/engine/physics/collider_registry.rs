@@ -54,7 +54,7 @@ impl ColliderRegistry {
             .colliders
             .entry(collider_type)
             .or_insert(DynVec::new(TypeInfoCloneable::new::<C>()));
-        let index = vec.size();
+        let index = vec.len();
         vec.push(collider);
         return ColliderId {
             collider_type: collider_type,
@@ -67,7 +67,7 @@ impl ColliderRegistry {
             return false;
         };
 
-        return collider_id.index < colliders.size();
+        return collider_id.index < colliders.len();
     }
 
     pub fn update_entity_collider_positions(&mut self, ecs_world: &mut ECSWorld) {

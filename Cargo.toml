@@ -7,6 +7,7 @@ edition = "2021"
 [dependencies]
 # Macros
 rogue-macros = { path = "./macros" }
+
 # Windowing/graphics apis
 ash = "0.38.0+1.3.281"
 ash-window = "0.13.0"
@@ -14,6 +15,7 @@ raw-window-handle = "0.6.2"
 slang = { path = "../slang-rs" }
 wgpu = { version = "22.1.0", features = ["webgpu", "vulkan-portability", "spirv"] }
 winit = "0.30.5"
+
 # Egui
 catppuccin-egui = { version = "5.5.0", default-features = false, features = ["egui31"] }
 egui = { version = "0.31.1", features = ["bytemuck"] }
@@ -21,6 +23,7 @@ egui_dock = "0.16"
 egui_plot = "0.32.1"
 egui-winit = { version = "0.31.1", default-features = false, features = [] }
 epaint = { version = "0.31.1", features = ["bytemuck"] }
+
 # Utility
 anyhow = { version = "1.0.89" }
 bitflags = "2.6.0"
@@ -39,15 +42,20 @@ pollster = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
 uuid = { version = "1.15.1", features = [ "v4", "bytemuck" ]}
-# Math
+
+# Math/physics
 nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
 noise = "0.9.0"
+
 # Scripting
 mlua = { version = "0.10.5", features = ["lua54", "vendored"]}
+
 # Audio
 cpal = "0.15.3"
+
 # Gamepad
 gilrs = "0.11.0"
+
 # IO related
 png = "0.17.16"
 rfd = "0.15.3"

@@ -14,8 +14,9 @@ pub enum ForceType {
     /// Applies a force gradually.
     /// Newtons / Second
     Force,
-    /// Directly adds to the velocity in m/s.
-    Velocity,
+    /// Directly adds to the velocity in m/s, same as Impulse
+    /// but doesn't take mass into account.
+    Acceleration,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
@@ -44,7 +45,6 @@ pub struct RigidBody {
     pub velocity: Vector3<f32>,
     // Axis angle with length representing ccw-speed in radians per second.
     pub angular_velocity: Vector3<f32>,
-    pub acceleration: Vector3<f32>,
 
     // Set and cleared after physics update.
     pub force: Vector3<f32>,
@@ -72,7 +72,6 @@ impl RigidBody {
         Self {
             velocity: Vector3::zeros(),
             angular_velocity: Vector3::zeros(),
-            acceleration: Vector3::zeros(),
             force: Vector3::zeros(),
             impulse_force: Vector3::zeros(),
 
@@ -82,6 +81,13 @@ impl RigidBody {
             inv_mass: 1.0 / create_info.mass,
             restitution: create_info.restitution,
         }
+    }
+
+    pub fn velocity(&self) -> Vector3<f32> {
+        if self.rigid_body_type == RigidBodyType::Static {
+            return Vector3::zeros();
+        }
+        return self.velocity;
     }
 
     pub fn set_mass(&mut self, mass: f32) {
@@ -111,23 +117,22 @@ impl RigidBody {
             ForceType::Force => {
                 self.force += force;
             }
-            ForceType::Velocity => {
+            ForceType::Acceleration => {
                 self.velocity += force;
             }
         }
     }
 
     pub fn update(&mut self, timestep: Duration, transform: &mut Transform) {
-        let mut forces = self.impulse_force;
-        forces += self.force * timestep.as_secs_f32();
+        let forces = self.impulse_force + self.force * timestep.as_secs_f32();
         self.impulse_force = Vector3::zeros();
         self.force = Vector3::zeros();
 
         // Apply forces.
         // F = ma
         // a = F/m
-        self.acceleration += forces * self.inv_mass;
-        self.velocity = (self.velocity + self.acceleration * timestep.as_secs_f32()).map(|x| {
+        let acceleration = forces * self.inv_mass;
+        self.velocity = (self.velocity + acceleration).map(|x| {
             x.clamp(
                 -consts::physics::VELOCITY_MAX,
                 consts::physics::VELOCITY_MAX,

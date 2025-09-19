@@ -1,0 +1,283 @@
+{
+  "editor_camera_transform": {
+    "transform": {
+      "position": [
+        -34.456024,
+        50.96467,
+        4.738819
+      ],
+      "rotation": [
+        -0.24318872,
+        -0.68182826,
+        0.2593687,
+        -0.6392944
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "editor_camera": {
+    "camera": {
+      "fov": 1.5707964,
+      "near_plane": 0.01,
+      "far_plane": 10000.0
+    }
+  },
+  "rotation_anchor": [
+    -5.632774,
+    25.272537,
+    2.8809533
+  ],
+  "terrain_asset_path": null,
+  "game_camera": "02229fe2-c0d3-4005-b473-5b5df909c5a8",
+  "game_entities": [
+    {
+      "name": "Main Camera",
+      "uuid": "02229fe2-c0d3-4005-b473-5b5df909c5a8",
+      "parent": null,
+      "children": [],
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              -0.25,
+              27.93,
+              -52.08
+            ],
+            "rotation": [
+              0.19166556,
+              0.0,
+              0.0,
+              0.9814603
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        {
+          "Camera": {
+            "fov": 1.0471976
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cube",
+      "uuid": "980cfd50-0ccb-4d8d-a068-2ff77f2063a5",
+      "parent": null,
+      "children": [],
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              0.0,
+              27.47,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "cube::rvox"
+          }
+        },
+        {
+          "RigidBody": {
+            "rigid_body_type": "Dynamic",
+            "mass": 1.0,
+            "restitution": 1.0
+          }
+        },
+        {
+          "Colliders": {
+            "colliders": [
+              {
+                "collider_type": "Box",
+                "index": 2
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ground Plane",
+      "uuid": "0305c05f-7a46-4701-961f-62f424b345e2",
+      "parent": null,
+      "children": [],
+      "components": [
+        {
+          "Transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              16.0,
+              0.5,
+              16.0
+            ]
+          }
+        },
+        {
+          "RenderableVoxelEntity": {
+            "model_asset_path": "cube::rvox"
+          }
+        },
+        {
+          "RigidBody": {
+            "rigid_body_type": "Static",
+            "mass": 1.0,
+            "restitution": 1.0
+          }
+        },
+        {
+          "Colliders": {
+            "colliders": [
+              {
+                "collider_type": "Box",
+                "index": 3
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "collider_registry": {
+    "Box": [
+      {
+        "obb": {
+          "aabb": {
+            "min": [
+              -1.92,
+              -5.9700003,
+              -1.55
+            ],
+            "max": [
+              1.92,
+              4.0299997,
+              1.55
+            ]
+          },
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rotation_anchor": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      {
+        "obb": {
+          "aabb": {
+            "min": [
+              -11.95,
+              -0.35,
+              -8.17
+            ],
+            "max": [
+              11.95,
+              0.35,
+              8.17
+            ]
+          },
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rotation_anchor": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      {
+        "obb": {
+          "aabb": {
+            "min": [
+              -2.0,
+              -2.0,
+              -2.0
+            ],
+            "max": [
+              2.0,
+              2.0,
+              2.0
+            ]
+          },
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rotation_anchor": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      {
+        "obb": {
+          "aabb": {
+            "min": [
+              -32.0,
+              -1.0,
+              -32.0
+            ],
+            "max": [
+              32.0,
+              1.0,
+              32.0
+            ]
+          },
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "rotation_anchor": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    ]
+  }
+}

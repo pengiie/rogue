@@ -100,6 +100,11 @@ impl VoxelModelRegistry {
             .get(FreeListHandle::new(id.id as usize))
     }
 
+    pub fn get_model_info_mut(&mut self, id: VoxelModelId) -> Option<&mut VoxelModelInfo> {
+        self.voxel_model_info
+            .get_mut(FreeListHandle::new(id.id as usize))
+    }
+
     pub fn next_id(&mut self) -> VoxelModelId {
         let id = self.id_counter;
         self.id_counter += 1;

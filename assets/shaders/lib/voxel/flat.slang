@@ -50,8 +50,12 @@ public struct Flat {
           var color = pt_material;
           if (let normal = this.load_normal(voxel_index)) {
             let rot_normal = mul(rotation, normal);
-            let l = sqrt(dot(rot_normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
-            color *= max(l, 0.2);
+            var sun_dir = u_frame.world_info.sun_dir;
+            if (sun_dir.y < 0) {
+              sun_dir *= -1;
+            }
+            let l = dot(rot_normal, sun_dir);
+            color *= max(l, 0.1);
           }
           //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
           let t_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;

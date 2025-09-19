@@ -145,6 +145,7 @@ pub fn box_capsule_collision_test(
 
     return Some(CollisionInfo {
         penetration_depth: box_to_capsule_penetration,
-        contact_point: Vector3::zeros(),
+        contact_points_a: todo!(),
+        contact_points_b: todo!(),
     });
 }

@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, f32};
 
 use log::{debug, warn};
-use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
+use nalgebra::{Matrix3, Matrix4, UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
@@ -455,11 +455,14 @@ impl Renderer {
             .frame_graph_executor
             .write_uniforms(&mut |writer, ctx| {
                 writer.write_set_cache("u_frame", Self::SET_CACHE_SLOT_FRAME);
+
+                // FrameInfo struct
                 writer.write_uniform(
                     "u_frame.frame_info.time_ms",
                     time.start_time().elapsed().as_millis() as u32,
                 );
 
+                // FrameWorldInfo struct
                 if let Some(mut camera_query) = ecs_world.try_get_main_camera(&main_camera) {
                     let (camera_local_transform, camera) = camera_query.get().unwrap();
                     let camera_world_transform = ecs_world
@@ -503,7 +506,12 @@ impl Renderer {
                     writer.write_uniform("u_frame.world_info.camera.near_plane", 0.0);
                     writer.write_uniform("u_frame.world_info.camera.far_plane", 0.0);
                 }
+                // Every minute is a rotation.
+                let rot_t = time.start_time().elapsed().as_secs_f32() / 60.0;
+                let sun_rot = UnitQuaternion::new(Vector3::z() * rot_t * f32::consts::TAU);
+                writer.write_uniform("u_frame.world_info.sun_dir", sun_rot * Vector3::y());
 
+                // Voxel entity bindings
                 writer.write_binding(
                     "u_frame.voxel.entity_data.accel_buf",
                     *voxel_world_gpu.world_entity_acceleration_buffer(),
@@ -513,6 +521,7 @@ impl Renderer {
                     voxel_world_gpu.rendered_voxel_model_entity_count(),
                 );
 
+                // Voxel model bindings
                 writer.write_binding(
                     "u_frame.voxel.model_info_data",
                     *voxel_world_gpu.world_voxel_model_info_buffer(),
@@ -526,6 +535,7 @@ impl Renderer {
                     &voxel_world_gpu.world_data_buffers(),
                 );
 
+                // Voxel terrain data
                 writer.write_binding(
                     "u_frame.voxel.terrain.data",
                     *voxel_world_gpu.world_terrain_acceleration_buffer(),

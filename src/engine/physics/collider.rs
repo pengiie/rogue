@@ -9,8 +9,10 @@ use crate::engine::{
 pub struct CollisionInfo {
     // Normal is facing away from the first object and towards the second object.
     pub penetration_depth: Vector3<f32>,
-    // The world-space contact point of the two colliders.
-    pub contact_point: Vector3<f32>,
+    // The world-space contact points of the first collider.
+    pub contact_points_a: Vec<Vector3<f32>>,
+    // The world-space contact points of the second collider.
+    pub contact_points_b: Vec<Vector3<f32>>,
 }
 
 pub trait ColliderConcrete {

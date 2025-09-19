@@ -7,6 +7,7 @@ use crate::{
         asset::repr::project::EditorProjectAsset,
         entity::{ecs_world::ECSWorld, GameEntity},
         ui::EditorUIState,
+        voxel::voxel_world::VoxelWorld,
     },
     session::Session,
 };
@@ -16,6 +17,7 @@ pub fn new_project_dialog(
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,
     session: &mut Session,
+    voxel_world: &mut VoxelWorld,
 ) {
     if let Some(new_project_dialog) = &mut ui_state.new_project_dialog {
         let mut force_close = false;
@@ -95,19 +97,7 @@ pub fn new_project_dialog(
                     .add_enabled(is_valid, egui::Button::new("Create"))
                     .clicked()
                 {
-                    let mut existing_entities_query = ecs_world.query::<With<(), &GameEntity>>();
-                    let existing_entities = existing_entities_query
-                        .into_iter()
-                        .map(|(entity_id, _)| entity_id)
-                        .collect::<Vec<_>>();
-                    drop(existing_entities_query);
-                    for id in existing_entities {
-                        ecs_world.despawn(id);
-                    }
-
-                    session.project_save_dir = Some(path.clone().unwrap());
-                    session.editor_settings.last_project_dir = Some(path.unwrap());
-                    session.project = EditorProjectAsset::new_empty();
+                    session.new_project(ecs_world, path.unwrap(), voxel_world);
                     force_close = true;
                 }
             });

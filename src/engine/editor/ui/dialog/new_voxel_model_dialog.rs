@@ -1,17 +1,54 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::mpsc::{Receiver, Sender},
+};
+
+use nalgebra::Vector3;
 
 use crate::{
     common::color::Color,
     engine::{
         asset::asset::{AssetPath, Assets},
-        entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
+        entity::{
+            ecs_world::{ECSWorld, Entity},
+            RenderableVoxelEntity,
+        },
         ui::EditorUIState,
         voxel::{factory::VoxelModelFactory, voxel::VoxelModelType, voxel_world::VoxelWorld},
     },
     session::Session,
 };
 
-pub fn new_voxel_model_dialog(
+pub struct EditorNewVoxelModelDialog {
+    pub open: bool,
+    pub associated_entity: Entity,
+    pub file_path: String,
+    pub tx_file_name: Sender<String>,
+    pub rx_file_name: Receiver<String>,
+    // Tracked so we don't read the dir every frame, only on updates.
+    pub last_file_path: (String, /*valid_path=*/ bool, /*error=*/ String),
+    pub dimensions: Vector3<u32>,
+    pub model_type: VoxelModelType,
+}
+
+impl EditorNewVoxelModelDialog {
+    pub fn new(associated_entity: Entity) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self {
+            open: true,
+            associated_entity,
+            file_path: String::new(),
+            tx_file_name: tx,
+            rx_file_name: rx,
+            last_file_path: (String::new(), false, String::new()),
+            dimensions: Vector3::new(32, 32, 32),
+            model_type: VoxelModelType::Flat,
+        }
+    }
+}
+
+pub fn new_voxel_model_dialog_ui(
     ctx: &egui::Context,
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,

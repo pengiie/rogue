@@ -43,7 +43,8 @@ impl Collider for PlaneCollider {
 
                 Some(CollisionInfo {
                     penetration_depth: Vector3::zeros(),
-                    contact_point: Vector3::zeros(),
+                    contact_points_a: todo!(),
+                    contact_points_b: todo!(),
                 })
             }
             _ => None,

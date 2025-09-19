@@ -1,5 +1,6 @@
 use std::{
     any::TypeId,
+    array,
     borrow::BorrowMut,
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -7,117 +8,161 @@ use std::{
 
 use rogue_macros::Resource;
 
-use crate::common::dyn_vec::TypeInfo;
+use crate::common::dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable};
 
 use super::resource::ResMut;
 
+pub type EventId = u32;
+
+struct EventBank {
+    // Alternates between 0 and 1.
+    pub curr_frame_index: u32,
+    // Monotically increasing id starting from 1.
+    event_id_tracker: EventId,
+    // One for every other frame.
+    data: [(/*first_event_id_in_vec*/ EventId, DynVec); 2],
+}
+
+pub trait Event: Clone + 'static {}
+impl<T: Clone + 'static> Event for T {}
+
+impl EventBank {
+    pub fn new<T: Event>(curr_frame_index: u32) -> Self {
+        Self {
+            curr_frame_index,
+            event_id_tracker: 1,
+            data: array::from_fn(|_| (0, DynVec::new(TypeInfoCloneable::new::<T>()))),
+        }
+    }
+
+    pub fn push<T: Event>(&mut self, event: T) {
+        let event_id = self.event_id_tracker;
+        let (first_event_id, vec) = &mut self.data[self.curr_frame_index as usize];
+        if vec.is_empty() {
+            *first_event_id = event_id;
+        }
+        self.event_id_tracker += 1;
+        vec.push(event);
+    }
+
+    pub fn clear(&mut self) {
+        let (first_event_id, vec) = &mut self.data[self.curr_frame_index as usize];
+        vec.clear();
+    }
+}
+
+pub struct EventReader<T: Event> {
+    last_event_id: EventId,
+    // Marker since the event id is specific to the event type.
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T: Event> EventReader<T> {
+    /// Will read double events in the case that the producer runs before this reader in the game
+    /// loop. Keep that in mind :p.
+    pub fn new() -> Self {
+        Self {
+            last_event_id: 0,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn read<'a>(&'a mut self, events: &'a Events) -> EventReaderIter<T> {
+        let event_bank = events.banks.get(&std::any::TypeId::of::<T>());
+        let last_event_id = self.last_event_id;
+        EventReaderIter {
+            event_reader: self,
+            event_bank,
+            curr_event_id: last_event_id + 1,
+            // Start with the opposite since it will have lower ids.
+            curr_vec_index: (events.curr_frame_index + 1) % 2,
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
+pub struct EventReaderIter<'a, 'b, T: Event> {
+    event_reader: &'b mut EventReader<T>,
+    event_bank: Option<&'a EventBank>,
+    curr_event_id: EventId,
+    curr_vec_index: u32,
+    marker: std::marker::PhantomData<&'a T>,
+}
+
+impl<'a, 'b, T: Event> Iterator for EventReaderIter<'a, 'b, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(event_bank) = self.event_bank else {
+            return None;
+        };
+
+        let (first_event_id, data) = &event_bank.data[self.curr_vec_index as usize];
+        if self.curr_event_id < *first_event_id {
+            self.curr_event_id = *first_event_id;
+        }
+        let index = self.curr_event_id - *first_event_id;
+        if index >= data.len() as u32 {
+            self.curr_vec_index = (self.curr_vec_index + 1) % 2;
+            // If we come back to the same event bank we started with then we are done.
+            if self.curr_vec_index != event_bank.curr_frame_index {
+                return None;
+            }
+            return self.next();
+        }
+        self.event_reader.last_event_id = self.curr_event_id;
+        self.curr_event_id += 1;
+        return Some(data.get(index as usize));
+    }
+}
+
+/// Stores abitrary events to make message passing between systems easier. These events are not
+/// actually observer based, instead events are stored in buffer which can be queried and is also
+/// cleared at the end of every frame. This prevents the dreaded `Arc<RwLock<_>>` that comes with
+/// the observer pattern in rust and keeps event consumption more deterministic.
+// TODO: Event tracking system so each event type has a monotic tracking id, consumers of events
+// can use that id and track to their own id to see if they consumed the event already. Then we can
+// persist events for two frames in the case that the consumer comes before the producer in the
+// game loop.
 #[derive(Resource)]
 pub struct Events {
-    // TODO: Reimplement with DynVec
-    events: HashMap<TypeId, Vec<u8>>,
+    banks: HashMap<TypeId, EventBank>,
     event_type_info: HashMap<TypeId, TypeInfo>,
+    // Alternating index between 0 and 1.
+    curr_frame_index: u32,
 }
 
 impl Events {
     pub fn new() -> Self {
         Self {
-            events: HashMap::new(),
+            banks: HashMap::new(),
             event_type_info: HashMap::new(),
+            curr_frame_index: 0,
         }
     }
 
-    pub fn push<T: 'static>(&mut self, event: T) {
+    pub fn frame_cleanup(mut events: ResMut<Events>) {
+        let events: &mut Events = &mut events;
+        // Update the frame index for all the event banks.
+        events.curr_frame_index = (events.curr_frame_index + 1) % 2;
+        for (event_type_id, bank) in events.banks.iter_mut() {
+            bank.curr_frame_index = events.curr_frame_index;
+            let (_, data) = &mut bank.data[events.curr_frame_index as usize];
+            data.clear();
+        }
+    }
+
+    pub fn push<T: Event>(&mut self, event: T) {
         let type_id = TypeId::of::<T>();
         let type_info = self
             .event_type_info
             .entry(type_id)
             .or_insert(TypeInfo::new::<T>())
             .clone();
-        let event_data = self.events.entry(type_id).or_insert(Vec::new());
-        // TODO: Worry about alignment, this will surely come back to bite me later.
-        // TODO: Copy drop function because we are going to memory leak every frame.
-        let i = event_data.len();
-        event_data.resize(event_data.len() + type_info.size() as usize, 0);
-
-        // Safety: The offset of i bytes works because we resize event_data above so the copy is
-        // also safe.
-        unsafe {
-            let event_data_ptr = event_data.as_mut_slice().as_mut_ptr().offset(i as isize);
-            event_data_ptr.copy_from(
-                std::ptr::from_ref(&event) as *const u8,
-                type_info.size() as usize,
-            );
-        }
-    }
-
-    /// Iterates of all events of type T submitted since the beginning of this frame.
-    pub fn iter<T: 'static>(&self) -> EventIter<'_, T> {
-        EventIter::<T>::new(self)
-    }
-
-    /// Clears all cached events from the previous frame.
-    pub fn clear_events(mut events: ResMut<Events>) {
-        let type_info_map = events.event_type_info.clone();
-        for (type_info, event_data) in events
-            .events
-            .iter_mut()
-            .map(|(type_id, event_data)| (type_info_map.get(type_id).unwrap(), event_data))
-        {
-            // TODO: Call the drop function for this type_info on each entry here, since right now
-            // we are leaking memory :p.
-            event_data.clear();
-        }
-    }
-}
-
-pub struct EventIter<'a, T> {
-    event_data: Option<&'a [u8]>,
-    type_info: TypeInfo,
-    index: usize,
-    _marker: std::marker::PhantomData<&'a T>,
-}
-
-impl<'a, T> EventIter<'a, T> {
-    pub fn new(events: &'a Events) -> Self
-    where
-        T: 'static,
-    {
-        let type_info = TypeInfo::new::<T>();
-        let event_data = events.events.get(&TypeId::of::<T>()).map(|d| d.as_slice());
-
-        Self {
-            event_data,
-            type_info,
-            index: 0,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<'a, T> Iterator for EventIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let Some(event_data) = self.event_data else {
-            // No events of this type were issued this frame.
-            return None;
-        };
-
-        let byte_index = self.index * self.type_info.size() as usize;
-        if byte_index >= event_data.len() {
-            // We have reached the end of the event buffer.
-            return None;
-        }
-
-        // Safety: We ensure byte_index..(byte_index + size_of::<T>()) is within the range of
-        // event_data. We can safely cast to T since TODO: all T's in event_data are aligned and
-        // valid byte data for T.
-        assert!(byte_index + self.type_info.size() as usize <= event_data.len());
-        let ptr = unsafe { event_data.as_ptr().offset(byte_index as isize) } as *const T;
-        let t_ref = unsafe { ptr.as_ref().unwrap() };
-
-        self.index += 1;
-
-        Some(t_ref)
+        let event_bank = self
+            .banks
+            .entry(type_id)
+            .or_insert(EventBank::new::<T>(self.curr_frame_index));
+        event_bank.push(event);
     }
 }

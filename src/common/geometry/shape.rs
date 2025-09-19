@@ -67,7 +67,6 @@ pub trait Shape {
             .flatten()
             .collect::<Vec<_>>();
 
-        let mut contact_point = Vector3::zeros();
         let mut penetration_depth = Vector3::zeros();
         let mut max_depth = 10000.0;
         for axis in axes {
@@ -87,7 +86,8 @@ pub trait Shape {
 
         return Some(CollisionInfo {
             penetration_depth,
-            contact_point,
+            contact_points_a: vec![],
+            contact_points_b: vec![],
         });
     }
 }

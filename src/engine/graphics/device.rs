@@ -101,7 +101,7 @@ impl DeviceResource {
     }
 
     // Systems
-    pub fn pre_init_update(mut device: ResMut<DeviceResource>, mut events: ResMut<Events>) {
+    pub fn pre_graphics_update(mut device: ResMut<DeviceResource>, mut events: ResMut<Events>) {
         if let Some(device) = device.backend_device.as_mut() {
             device.pre_init_update(&mut events);
         }
