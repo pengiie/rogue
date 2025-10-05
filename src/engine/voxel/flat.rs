@@ -12,16 +12,6 @@ use bytemuck::Pod;
 use log::debug;
 use nalgebra::Vector3;
 
-use crate::{
-    common::{bitset::Bitset, morton::morton_decode},
-    consts,
-    engine::graphics::{
-        device::{DeviceResource, GfxDevice},
-        gpu_allocator::{Allocation, GpuBufferAllocator},
-    },
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     thc::VoxelModelTHCCompressed,
@@ -30,6 +20,16 @@ use super::{
         VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
+};
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
+use crate::{
+    common::{bitset::Bitset, morton::morton_decode},
+    consts,
+    engine::graphics::{
+        device::{DeviceResource, GfxDevice},
+        gpu_allocator::{Allocation, GpuBufferAllocator},
+    },
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -738,6 +738,12 @@ pub struct VoxelModelFlatGpu {
 
     initialized_data: bool,
     update_tracker: u32,
+}
+
+impl Clone for VoxelModelFlatGpu {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
 }
 
 impl VoxelModelFlatGpu {

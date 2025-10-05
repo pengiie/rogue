@@ -8,7 +8,7 @@ use std::{
 
 use rogue_macros::Resource;
 
-use crate::common::dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable};
+use crate::common::dyn_vec::{DynVecCloneable, TypeInfo, TypeInfoCloneable};
 
 use super::resource::ResMut;
 
@@ -20,7 +20,7 @@ struct EventBank {
     // Monotically increasing id starting from 1.
     event_id_tracker: EventId,
     // One for every other frame.
-    data: [(/*first_event_id_in_vec*/ EventId, DynVec); 2],
+    data: [(/*first_event_id_in_vec*/ EventId, DynVecCloneable); 2],
 }
 
 pub trait Event: Clone + 'static {}
@@ -31,7 +31,7 @@ impl EventBank {
         Self {
             curr_frame_index,
             event_id_tracker: 1,
-            data: array::from_fn(|_| (0, DynVec::new(TypeInfoCloneable::new::<T>()))),
+            data: array::from_fn(|_| (0, DynVecCloneable::new(TypeInfoCloneable::new::<T>()))),
         }
     }
 

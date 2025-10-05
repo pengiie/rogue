@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use hecs::With;
 use rogue_macros::Resource;
 
 use crate::{
@@ -221,12 +220,11 @@ impl Session {
         new_project_path: PathBuf,
         voxel_world: &mut VoxelWorld,
     ) {
-        let mut existing_entities_query = ecs_world.query::<With<(), &GameEntity>>();
+        let mut existing_entities_query = ecs_world.query::<()>().with::<(GameEntity,)>();
         let existing_entities = existing_entities_query
             .into_iter()
             .map(|(entity_id, _)| entity_id)
             .collect::<Vec<_>>();
-        drop(existing_entities_query);
         for id in existing_entities {
             ecs_world.despawn(id);
         }
@@ -310,7 +308,8 @@ impl Session {
             session.should_stop_game = false;
             session.session_state = SessionState::Editor;
             let (editor_camera, editor_transform) = ecs_world
-                .query_one_mut::<(&Camera, &Transform)>(editor.editor_camera_entity.unwrap())
+                .query_one::<(&Camera, &Transform)>(editor.editor_camera_entity.unwrap())
+                .get()
                 .unwrap();
             let editor_camera = editor_camera.clone();
             let editor_transform = editor_transform.clone();

@@ -7,7 +7,6 @@ use std::{
     u32, u64,
 };
 
-use hecs::Entity;
 use log::debug;
 use nalgebra::{allocator, Vector3};
 use rogue_macros::Resource;
@@ -27,9 +26,12 @@ use super::{
 };
 use crate::{
     common::geometry::aabb::AABB,
-    engine::voxel::{
-        thc::{VoxelModelTHC, VoxelModelTHCCompressed},
-        voxel::VoxelModelType,
+    engine::{
+        entity::ecs_world::Entity,
+        voxel::{
+            thc::{VoxelModelTHC, VoxelModelTHCCompressed},
+            voxel::VoxelModelType,
+        },
     },
 };
 use crate::{common::geometry::ray::Ray, engine::voxel::sft_compressed::VoxelModelSFTCompressed};
@@ -347,7 +349,7 @@ impl VoxelWorld {
     }
 
     pub fn trace_world(&self, mut ecs_world: &ECSWorld, mut ray: Ray) -> Option<VoxelTraceInfo> {
-        let mut closest_entity: Option<(f32, hecs::Entity, VoxelModelId, Vector3<u32>)> = None;
+        let mut closest_entity: Option<(f32, Entity, VoxelModelId, Vector3<u32>)> = None;
 
         let mut renderable_model_query = ecs_world.query::<(&Transform, &RenderableVoxelEntity)>();
         for (entity_id, (local_transform, renderable)) in renderable_model_query.iter() {
@@ -779,7 +781,7 @@ pub enum VoxelTraceInfo {
         world_voxel_pos: Vector3<i32>,
     },
     Entity {
-        entity_id: hecs::Entity,
+        entity_id: Entity,
         voxel_model_id: VoxelModelId,
         local_voxel_pos: Vector3<u32>,
     },

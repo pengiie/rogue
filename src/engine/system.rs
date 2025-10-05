@@ -9,6 +9,14 @@ pub trait SystemParam {
     fn from_resource_bank(resource_bank: &ResourceBank) -> Self::Item<'_>;
 }
 
+impl SystemParam for &'_ ResourceBank {
+    type Item<'rb> = &'rb ResourceBank;
+
+    fn from_resource_bank(resource_bank: &ResourceBank) -> Self::Item<'_> {
+        resource_bank
+    }
+}
+
 impl<R> SystemParam for Res<'_, R>
 where
     R: Resource,

@@ -16,6 +16,12 @@ pub struct VoxelModelSFTGpu {
     update_tracker: u32,
 }
 
+impl Clone for VoxelModelSFTGpu {
+    fn clone(&self) -> Self {
+        VoxelModelSFTGpu::new()
+    }
+}
+
 impl VoxelModelGpuImplConcrete for VoxelModelSFTGpu {
     fn new() -> Self {
         Self {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::ser::SerializeMap;
 
 use crate::{
-    common::dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable},
+    common::dyn_vec::{DynVecCloneable, TypeInfo, TypeInfoCloneable},
     engine::physics::{
         box_collider::BoxCollider,
         capsule_collider::CapsuleCollider,
@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct ColliderRegistryAsset {
-    pub colliders: HashMap<ColliderType, DynVec>,
+    pub colliders: HashMap<ColliderType, DynVecCloneable>,
 }
 
 impl Default for ColliderRegistryAsset {
@@ -35,7 +35,7 @@ impl ColliderRegistryAsset {
         let vec = self
             .colliders
             .entry(collider_type)
-            .or_insert(DynVec::new(TypeInfoCloneable::new::<C>()));
+            .or_insert(DynVecCloneable::new(TypeInfoCloneable::new::<C>()));
         vec.push(collider);
     }
 }

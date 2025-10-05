@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use hecs::Without;
 use nalgebra::Vector3;
 use serde::ser::{SerializeMap, SerializeStruct};
 
 use crate::{
     common::{
-        dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable},
+        dyn_vec::{DynVecCloneable, TypeInfo, TypeInfoCloneable},
         vtable,
     },
     engine::{
@@ -28,7 +27,7 @@ use crate::{
 // Spatial hashmap binning colliders per region.
 pub struct ColliderRegistry {
     pub bins: HashMap</*region_pos*/ Vector3<i32>, Vec<(Entity, ColliderId)>>,
-    pub colliders: HashMap<ColliderType, DynVec>,
+    pub colliders: HashMap<ColliderType, DynVecCloneable>,
     collider_vtables: HashMap<ColliderType, *const ()>,
 }
 
@@ -53,7 +52,7 @@ impl ColliderRegistry {
         let vec = self
             .colliders
             .entry(collider_type)
-            .or_insert(DynVec::new(TypeInfoCloneable::new::<C>()));
+            .or_insert(DynVecCloneable::new(TypeInfoCloneable::new::<C>()));
         let index = vec.len();
         vec.push(collider);
         return ColliderId {
@@ -77,7 +76,8 @@ impl ColliderRegistry {
         // to selectively modify colliders.
         self.bins.clear();
         for (entity, (transform, colliders)) in ecs_world
-            .query_mut::<Without<(&Transform, &Colliders), &EntityParent>>()
+            .query_mut::<(&Transform, &Colliders)>()
+            .without::<(EntityParent,)>()
             .into_iter()
         {
             for collider_id in &colliders.colliders {

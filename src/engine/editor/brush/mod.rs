@@ -134,11 +134,8 @@ impl EditorWorldEditing {
                 local_voxel_pos,
             }) => {
                 if self.entity_enabled {
-                    let Ok(mut preview_entity_query) =
-                        ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(*entity_id)
-                    else {
-                        return;
-                    };
+                    let mut preview_entity_query =
+                        ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(*entity_id);
                     let Some((model_local_transform, renderable)) = preview_entity_query.get()
                     else {
                         return;

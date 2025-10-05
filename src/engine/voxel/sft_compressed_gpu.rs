@@ -22,6 +22,12 @@ pub struct VoxelModelSFTCompressedGpu {
     update_tracker: u32,
 }
 
+impl Clone for VoxelModelSFTCompressedGpu {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
 impl VoxelModelSFTCompressedGpu {
     pub fn dealloc(&mut self, allocator: &mut VoxelDataAllocator) {
         if let Some(nodes_alloc) = self.nodes_allocation.take() {

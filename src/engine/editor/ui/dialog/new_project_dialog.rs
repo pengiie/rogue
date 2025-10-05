@@ -1,7 +1,5 @@
 use std::{path::PathBuf, str::FromStr};
 
-use hecs::With;
-
 use crate::{
     engine::{
         asset::repr::project::EditorProjectAsset,

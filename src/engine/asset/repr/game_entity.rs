@@ -1,6 +1,5 @@
 use std::{collections::HashMap, f32, ops::Deref, path::PathBuf, str::FromStr};
 
-use hecs::With;
 use nalgebra::{Translation3, UnitQuaternion, Vector3};
 
 use crate::{

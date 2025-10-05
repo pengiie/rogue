@@ -1,6 +1,5 @@
 use std::{collections::HashMap, f32, ops::Deref, path::PathBuf, str::FromStr};
 
-use hecs::With;
 use nalgebra::{Translation3, UnitQuaternion, Vector3};
 
 use crate::{
@@ -73,14 +72,14 @@ impl EditorProjectAsset {
         collider_registry: &ColliderRegistry,
     ) -> Self {
         let game_entities = ecs_world
-            .query::<With<(), &GameEntity>>()
+            .query::<()>()
+            .with::<(GameEntity,)>()
             .into_iter()
-            .map(|(id, _)| EditorGameEntityAsset::new(ecs_world, &voxel_world.registry, id))
+            .map(|(id, _)| EditorGameEntityAsset::new(&ecs_world, &voxel_world.registry, id))
             .collect::<Vec<_>>();
 
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
         let (mut editor_transform, editor_camera) = editor_camera_query.get().unwrap();
 
         let game_camera_uuid = game_camera.map(|e| {

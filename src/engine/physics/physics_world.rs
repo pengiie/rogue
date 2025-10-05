@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use hecs::Without;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
@@ -16,7 +15,7 @@ use super::{
 use crate::{common::geometry::aabb::AABB, engine::physics::rigid_body::RigidBodyType};
 use crate::{
     common::{
-        dyn_vec::{DynVec, TypeInfo},
+        dyn_vec::{DynVecCloneable, TypeInfo},
         freelist::FreeList,
     },
     engine::{
@@ -97,7 +96,8 @@ impl PhysicsWorld {
         ecs_world: Res<ECSWorld>,
     ) {
         for (entity, (transform, colliders)) in ecs_world
-            .query::<Without<(&Transform, &Colliders), &EntityParent>>()
+            .query::<(&Transform, &Colliders)>()
+            .without::<(EntityParent,)>()
             .into_iter()
         {
             for collider_id in &colliders.colliders {
@@ -126,8 +126,10 @@ impl PhysicsWorld {
             PhysicsTimestep::Fixed(duration) => duration,
         };
 
-        for (entity, (transform, rigid_body)) in
-            ecs_world.query_mut::<Without<(&mut Transform, &mut RigidBody), &EntityParent>>()
+        for (entity, (transform, rigid_body)) in ecs_world
+            .query_mut::<(&mut Transform, &mut RigidBody)>()
+            .without::<(EntityParent,)>()
+            .into_iter()
         {
             if rigid_body.rigid_body_type == RigidBodyType::Dynamic {
                 // Apply gravity.
@@ -163,8 +165,8 @@ impl PhysicsWorld {
                         .query_many_mut::<(&mut Transform, &mut RigidBody), 2>([
                             *entity_a, *entity_b,
                         ]);
-                    let Ok([Ok((transform_a, rigid_body_a)), Ok((transform_b, rigid_body_b))]) =
-                        query.get_disjoint_mut([0, 1])
+                    let [Some((transform_a, rigid_body_a)), Some((transform_b, rigid_body_b))] =
+                        query
                     else {
                         continue;
                     };

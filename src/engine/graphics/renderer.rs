@@ -463,8 +463,9 @@ impl Renderer {
                 );
 
                 // FrameWorldInfo struct
-                if let Some(mut camera_query) = ecs_world.try_get_main_camera(&main_camera) {
-                    let (camera_local_transform, camera) = camera_query.get().unwrap();
+                if let Some((camera_local_transform, camera)) =
+                    ecs_world.get_main_camera(&main_camera).get()
+                {
                     let camera_world_transform = ecs_world
                         .get_world_transform(main_camera.camera().unwrap(), camera_local_transform);
 

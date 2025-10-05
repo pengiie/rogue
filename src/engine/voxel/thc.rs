@@ -8,6 +8,17 @@ use log::debug;
 use nalgebra::Vector3;
 use petgraph::matrix_graph::Zero;
 
+use super::{
+    attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
+    flat::VoxelModelFlat,
+    voxel::{
+        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
+    },
+    voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
+};
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use crate::{
     common::{
         bitset::Bitset,
@@ -25,17 +36,6 @@ use crate::{
         },
         voxel::attachment::{self, PTMaterial},
     },
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
-use super::{
-    attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
-    flat::VoxelModelFlat,
-    voxel::{
-        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
-        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema, VoxelModelTrace, VoxelModelType,
-    },
-    voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
 #[derive(Clone)]
@@ -592,6 +592,12 @@ pub struct VoxelModelTHCGpu {
     update_tracker: u32,
 }
 
+impl Clone for VoxelModelTHCGpu {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
+}
+
 impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
     fn new() -> Self {
         Self {
@@ -918,6 +924,12 @@ pub struct VoxelModelTHCCompressedGpu {
     attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
 
     initialized_model_data: bool,
+}
+
+impl Clone for VoxelModelTHCCompressedGpu {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
 }
 
 impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {

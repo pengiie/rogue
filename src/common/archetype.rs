@@ -1,16 +1,25 @@
 use rogue_macros::generate_tuples;
 use std::{mem::offset_of, u64};
 
+use crate::{
+    common::{
+        dyn_vec::{DynVec, DynVecCloneable, TypeInfoCloneable},
+        freelist::FreeListHandle,
+    },
+    engine::entity::component::Bundle,
+};
+
 use super::dyn_vec::TypeInfo;
 
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.
 /// Useful for storing parallel heterogenous (X, Y, Z) tuples but being able to iterate over just
-/// a specific type, such as X.
+/// a specific type, such as X. Also stored the global index
 #[derive(Clone)]
 pub struct Archetype {
-    types: Vec<TypeInfo>,
-    data: Vec<Vec<u8>>,
-    global_indices: Vec<u64>,
+    types: Vec<TypeInfoCloneable>,
+    borrows: Vec<usize>,
+    data: Vec<DynVecCloneable>,
+    global_indices: Vec<FreeListHandle<()>>,
     size: u64,
     capacity: u64,
 }
@@ -18,18 +27,19 @@ pub struct Archetype {
 impl Archetype {
     pub const NULL_INDEX: u64 = u64::MAX;
 
-    pub fn new(types: Vec<TypeInfo>) -> Self {
+    pub fn new(types: Vec<TypeInfoCloneable>) -> Self {
         let types_len = types.len();
         Self {
-            types,
-            data: (0..types_len).map(|_| Vec::new()).collect(),
+            types: types.clone(),
+            borrows: vec![0; types_len],
+            data: types.iter().map(|ty| DynVecCloneable::new(*ty)).collect(),
             global_indices: Vec::new(),
             size: 0,
             capacity: 0,
         }
     }
 
-    fn get_type_data(&self, type_info: &TypeInfo) -> &Vec<u8> {
+    fn get_type_data(&self, type_info: &TypeInfoCloneable) -> &DynVecCloneable {
         let i = self
             .types
             .iter()
@@ -39,7 +49,7 @@ impl Archetype {
         return &self.data[i];
     }
 
-    fn get_type_data_mut(&mut self, type_info: &TypeInfo) -> &mut Vec<u8> {
+    fn get_type_data_mut(&mut self, type_info: &TypeInfoCloneable) -> &mut DynVecCloneable {
         let i = self
             .types
             .iter()
@@ -49,54 +59,41 @@ impl Archetype {
         return &mut self.data[i];
     }
 
-    pub unsafe fn get_raw(&self, type_info: &TypeInfo, index: u64) -> *const u8 {
+    pub unsafe fn get_raw(&self, type_info: &TypeInfoCloneable, index: u64) -> *const u8 {
         let src_data = self.get_type_data(&type_info);
-        src_data
-            .as_slice()
-            .as_ptr()
-            .offset((type_info.size() as u64 * index) as isize)
+        return src_data.get_unchecked(index as usize).as_ptr();
     }
 
-    unsafe fn insert_raw(&mut self, data: *const u8, type_info: TypeInfo, dst_byte_index: u64) {}
-
-    fn resize(&mut self, additional: u64) {
-        for (type_info, type_data) in self.types.iter().zip(self.data.iter_mut()) {
-            type_data.resize(
-                type_data.len() + (type_info.size() as u64 * additional) as usize,
-                0,
-            );
-        }
-        self.global_indices.resize(
-            self.global_indices.len() + additional as usize,
-            Self::NULL_INDEX,
-        );
-        self.capacity += additional;
+    unsafe fn insert_raw(
+        &mut self,
+        data: *const u8,
+        type_info: TypeInfoCloneable,
+        dst_byte_index: u64,
+    ) {
     }
 
     fn allocate_entry(&mut self) -> u64 {
-        self.resize(1);
         let i = self.size;
         self.size += 1;
         return i;
     }
 
     pub fn remove(&mut self, index: u64) {
-        assert_ne!(self.global_indices[index as usize], Self::NULL_INDEX);
+        assert_ne!(
+            self.global_indices[index as usize],
+            FreeListHandle::DANGLING
+        );
         for (i, data) in self.data.iter_mut().enumerate() {
             let type_info = self.types[i];
-            let ptr = unsafe {
-                data.as_mut_slice()
-                    .as_mut_ptr()
-                    .offset((index * type_info.stride() as u64) as isize)
-            };
+            let ptr = data.get_mut_unchecked(index as usize).as_mut_ptr();
             log::info!("pre drop");
             unsafe { type_info.drop(ptr) };
             log::info!("post drop");
         }
-        self.global_indices[index as usize] = Self::NULL_INDEX;
+        self.global_indices[index as usize] = FreeListHandle::DANGLING;
     }
 
-    pub fn insert<T: ArchetypeStorage>(&mut self, global_id: u64, data: T) -> u64 {
+    pub fn insert<T: ArchetypeStorage>(&mut self, global_id: FreeListHandle<()>, data: T) -> u64 {
         let index = self.allocate_entry();
 
         // Move `data` into our managed arrays.
@@ -111,22 +108,17 @@ impl Archetype {
 
             let dst_data = &mut self.data[i];
 
-            unsafe {
-                let dst_ptr = dst_data
-                    .as_mut_slice()
-                    .as_mut_ptr()
-                    .offset(dst_byte_index as isize);
-                dst_ptr.copy_from_nonoverlapping(*data_ptr, type_info.size() as usize);
-            }
+            let val_bytes = unsafe { std::slice::from_raw_parts(*data_ptr, type_info.size()) };
+            dst_data.push_unchecked(val_bytes);
         }
         std::mem::forget(data);
 
-        self.global_indices[index as usize] = global_id;
+        self.global_indices.push(global_id);
 
         index
     }
 
-    pub fn type_infos(&self) -> &[TypeInfo] {
+    pub fn type_infos(&self) -> &[TypeInfoCloneable] {
         &self.types
     }
 
@@ -183,7 +175,7 @@ impl<'a> ArchetypeIter<'a> {
 }
 
 impl<'a> Iterator for ArchetypeIter<'a> {
-    type Item = (u64, Vec<(TypeInfo, *const u8)>);
+    type Item = (FreeListHandle<()>, Vec<(TypeInfoCloneable, *const u8)>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.i == self.archetype.size as usize {
@@ -191,7 +183,7 @@ impl<'a> Iterator for ArchetypeIter<'a> {
         }
 
         let global_id = self.archetype.global_indices[self.i];
-        if global_id == Archetype::NULL_INDEX {
+        if global_id == FreeListHandle::DANGLING {
             self.i += 1;
             return None;
         }
@@ -223,7 +215,7 @@ impl<'a> ArchetypeIterMut<'a> {
 }
 
 impl<'a> Iterator for ArchetypeIterMut<'a> {
-    type Item = (u64, Vec<(TypeInfo, *mut u8)>);
+    type Item = (FreeListHandle<()>, Vec<(TypeInfoCloneable, *mut u8)>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.i == self.archetype.size as usize {
@@ -231,7 +223,7 @@ impl<'a> Iterator for ArchetypeIterMut<'a> {
         }
 
         let global_id = self.archetype.global_indices[self.i];
-        if global_id == Archetype::NULL_INDEX {
+        if global_id == FreeListHandle::DANGLING {
             self.i += 1;
             return None;
         }

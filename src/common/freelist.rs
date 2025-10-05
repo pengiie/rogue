@@ -8,19 +8,40 @@ use std::{
 use log::debug;
 
 struct FreeListNode<T> {
-    data: std::mem::ManuallyDrop<T>,
+    generation: u32,
+    data: std::mem::MaybeUninit<std::mem::ManuallyDrop<T>>,
+}
+
+impl<T> FreeListNode<T> {
+    // TODO: fprobably assert that ho more that like 2bil elements go in this.
+    pub const NULL_GENERATION_BIT: u32 = 1 << 31;
+
+    pub fn new_null() -> Self {
+        Self {
+            generation: Self::NULL_GENERATION_BIT,
+            data: std::mem::MaybeUninit::uninit(),
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        return (self.generation & Self::NULL_GENERATION_BIT) > 0;
+    }
 }
 
 impl<T: Clone> Clone for FreeListNode<T> {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            generation: self.generation,
+            data: if self.is_null() {
+                std::mem::MaybeUninit::uninit()
+            } else {
+                // Safety: We check if the generation is a null generation first.
+                unsafe { std::mem::MaybeUninit::new(self.data.assume_init_ref().clone()) }
+            },
         }
     }
 }
 
-// TODO: Make a new free list variant that stores free nodes with a separate
-// HashSet so we can easily tell which nodes have been freed or not.
 pub struct FreeList<T> {
     data: Vec<FreeListNode<T>>,
     free: Vec<usize>,
@@ -36,7 +57,8 @@ impl<T: Clone> Clone for FreeList<T> {
 }
 
 pub struct FreeListHandle<T> {
-    index: usize,
+    index: u32,
+    generation: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -44,6 +66,7 @@ impl<T> std::fmt::Debug for FreeListHandle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FreeListHandle")
             .field("index", &self.index())
+            .field("generation", &self.index())
             .field("type", &std::any::type_name::<T>())
             .finish()
     }
@@ -59,7 +82,7 @@ impl<T> Eq for FreeListHandle<T> {}
 
 impl<T> PartialEq for FreeListHandle<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index
+        self.index == other.index && self.generation == other.generation
     }
 }
 
@@ -69,21 +92,53 @@ impl<T> Clone for FreeListHandle<T> {
     fn clone(&self) -> Self {
         Self {
             index: self.index,
+            generation: self.generation,
             _marker: std::marker::PhantomData,
         }
     }
 }
 
 impl<T> FreeListHandle<T> {
-    pub fn new(index: usize) -> Self {
+    pub fn new(index: u32, generation: u32) -> Self {
         Self {
             index,
+            generation,
             _marker: std::marker::PhantomData,
         }
     }
 
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> u32 {
         self.index
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.generation
+    }
+
+    pub const DANGLING: FreeListHandle<T> = FreeListHandle::<T> {
+        index: u32::MAX,
+        generation: u32::MAX,
+        _marker: std::marker::PhantomData,
+    };
+
+    pub fn is_null(&self) -> bool {
+        *self == Self::DANGLING
+    }
+
+    pub fn as_untyped(self) -> FreeListHandle<()> {
+        FreeListHandle::<()> {
+            index: self.index,
+            generation: self.generation,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_typed<R>(self) -> FreeListHandle<R> {
+        FreeListHandle::<R> {
+            index: self.index,
+            generation: self.generation,
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -97,47 +152,80 @@ impl<T> FreeList<T> {
 
     pub fn push(&mut self, val: T) -> FreeListHandle<T> {
         if let Some(next_free) = self.free.pop() {
-            self.data[next_free] = FreeListNode {
-                data: std::mem::ManuallyDrop::new(val),
-            };
-            return FreeListHandle::new(next_free);
+            // Safety, we set the generation on removal after the drop.
+            let generation =
+                self.data[next_free].generation & !FreeListNode::<T>::NULL_GENERATION_BIT;
+            self.data[next_free].data =
+                std::mem::MaybeUninit::new(std::mem::ManuallyDrop::new(val));
+            return FreeListHandle::new(next_free as u32, generation);
         }
 
         self.data.push(FreeListNode {
-            data: std::mem::ManuallyDrop::new(val),
+            generation: 0,
+            data: std::mem::MaybeUninit::new(std::mem::ManuallyDrop::new(val)),
         });
-        return FreeListHandle::new(self.data.len() - 1);
+        return FreeListHandle::new(self.data.len() as u32 - 1, 0);
+    }
+
+    /// Custom constructed handle or previously serialized handle to insert into this freelist.
+    pub fn insert_in_place(&mut self, handle: FreeListHandle<T>, val: T) {
+        if handle.index as usize >= self.data.len() {
+            self.data
+                .resize_with(handle.index as usize + 1, || FreeListNode::new_null());
+        }
+        self.set(handle, val);
     }
 
     pub fn remove(&mut self, handle: FreeListHandle<T>) -> T {
-        assert!(handle.index < self.data.len());
-        self.free.push(handle.index);
-        return unsafe { std::mem::ManuallyDrop::take(&mut self.data[handle.index].data) };
+        assert!((handle.index as usize) < self.data.len());
+        self.free.push(handle.index as usize);
+        let node = &mut self.data[handle.index as usize];
+        assert!(!node.is_null());
+        // Safety: We assert the node is not null.
+        let res = unsafe { std::mem::ManuallyDrop::take(&mut node.data.assume_init_mut()) };
+        node.generation = (node.generation + 1) & FreeListNode::<T>::NULL_GENERATION_BIT;
+        return res;
     }
 
     pub fn is_free(&self, handle: FreeListHandle<T>) -> bool {
-        return self.free.iter().any(|x| *x == handle.index);
+        return self.data[handle.index as usize].is_null();
     }
 
     pub fn get(&self, handle: FreeListHandle<T>) -> Option<&T> {
         if self.is_free(handle) {
             return None;
         }
-        return Some(unsafe { &self.data[handle.index].data });
+        let r = unsafe { self.data[handle.index as usize].data.assume_init_ref() };
+        return Some(r.deref());
     }
 
     pub fn get_mut(&mut self, handle: FreeListHandle<T>) -> Option<&mut T> {
-        assert!(handle.index < self.data.len());
+        assert!((handle.index as usize) < self.data.len());
         if self.is_free(handle) {
             return None;
         }
-        return Some(unsafe { &mut self.data[handle.index].data });
+        let mut r = unsafe { self.data[handle.index as usize].data.assume_init_mut() };
+        return Some(r.deref_mut());
+    }
+
+    pub fn set(&mut self, handle: FreeListHandle<T>, val: T) {
+        assert!((handle.index as usize) < self.data.len());
+        assert!((handle.generation & FreeListNode::<T>::NULL_GENERATION_BIT) == 0);
+        let mut res = &mut self.data[handle.index as usize];
+        res.generation = handle.generation;
+        res.data = std::mem::MaybeUninit::new(std::mem::ManuallyDrop::new(val));
     }
 
     /// If we did push, this is the next free handle that we would be given, this handle is not
     /// valid to use.
     pub fn next_free_handle(&self) -> FreeListHandle<T> {
-        return FreeListHandle::new(*self.free.last().unwrap_or(&self.data.len()));
+        if let Some(free) = self.free.last() {
+            return FreeListHandle::new(
+                *free as u32,
+                self.data[*free].generation & !FreeListNode::<T>::NULL_GENERATION_BIT,
+            );
+        }
+        return FreeListHandle::new(self.data.len() as u32, 0);
     }
 
     pub fn iter(&self) -> FreeListIterator<'_, T> {
@@ -158,9 +246,10 @@ impl<T> FreeList<T> {
 
 impl<T> Drop for FreeList<T> {
     fn drop(&mut self) {
-        for i in 0..self.data.len() {
-            if !self.free.iter().any(|x| *x == i) {
-                unsafe { std::mem::ManuallyDrop::drop(&mut self.data[i].data) };
+        for node in &mut self.data {
+            if !node.is_null() {
+                // Safety: We check it is not null above.
+                unsafe { std::mem::ManuallyDrop::drop(&mut node.data.assume_init_mut()) };
             }
         }
     }
@@ -182,15 +271,17 @@ impl<'a, T> Iterator for FreeListIterator<'a, T> {
             return None;
         }
 
-        if free_list.free.iter().any(|x| *x == self.left) {
+        let node = &free_list.data[self.left];
+        if node.is_null() {
             self.left += 1;
             return self.next();
         }
 
-        let val = unsafe { free_list.data[self.left].data.deref() };
+        // Safety:
+        let val = unsafe { node.data.assume_init_ref() };
         self.left += 1;
 
-        return Some(val);
+        return Some(val.deref());
     }
 }
 
@@ -217,10 +308,11 @@ impl<'a, T> Iterator for FreeListHandleIteratorMut<'a, T> {
             return self.next();
         }
 
-        let val = unsafe { free_list.data[self.left].data.deref_mut() };
-        let handle = FreeListHandle::new(self.left);
+        let node = &mut free_list.data[self.left];
+        let val = unsafe { node.data.assume_init_mut() };
+        let handle = FreeListHandle::new(self.left as u32, node.generation);
         self.left += 1;
 
-        return Some((handle, val));
+        return Some((handle, val.deref_mut()));
     }
 }

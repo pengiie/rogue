@@ -228,16 +228,27 @@ mod tests {
 
     use super::Color;
 
+    // Since our matrices on only go to the 4th decimal place, our epsilon is also the 4th decimal.
+    const EPSILON: f32 = 0.0001;
+
     #[test]
     fn colorspace_to_and_from() {
         let color = Color::<ColorSpaceSrgb>::new(0.5, 0.5, 0.5);
-        assert_eq!(
-            color
-                .into_color_space::<ColorSpaceXYZ>()
-                .into_color_space::<ColorSpaceSrgb>()
-                .xyz
-                .map(|x| x.to_bits()),
-            Vector3::new(0.5, 0.5, 0.5).map(|x: f32| x.to_bits())
-        );
+        for (i, (a, b)) in color
+            .into_color_space::<ColorSpaceXYZ>()
+            .into_color_space::<ColorSpaceSrgb>()
+            .xyz
+            .iter()
+            .zip(Vector3::new(0.5, 0.5, 0.5).iter())
+            .enumerate()
+        {
+            assert!(
+                (*b - *a).abs() < EPSILON,
+                "{} and {} are not the same for component {}",
+                *a,
+                *b,
+                i
+            );
+        }
     }
 }

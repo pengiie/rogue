@@ -3041,8 +3041,7 @@ frame_descriptor_set_group
     ) -> FreeListHandle<VulkanStagingBuffer> {
         let mut staging_buffer_free_list = self.staging_buffers.write();
 
-        for (index, staging_buffer) in staging_buffer_free_list.iter().enumerate() {
-            let handle = FreeListHandle::new(index);
+        for (handle, staging_buffer) in staging_buffer_free_list.iter_with_handle() {
             if self.in_use_staging_buffers.read().contains(&handle) {
                 continue;
             }

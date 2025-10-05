@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::engine::{
     asset::asset::{AssetHandle, AssetPath},
+    entity::component::GameComponent,
     voxel::voxel_registry::VoxelModelId,
 };
 
@@ -56,6 +57,29 @@ impl RenderableVoxelEntity {
     }
 }
 
+impl GameComponent for RenderableVoxelEntity {
+    fn clone_component(&self, ctx: super::component::GameComponentContext<'_>, dst_ptr: *mut u8) {
+        todo!()
+    }
+
+    fn serialize_component(
+        &self,
+        ctx: super::component::GameComponentContext<'_>,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
+
+    fn deserialize_component(
+        &self,
+        ctx: super::component::GameComponentContext<'_>,
+        de: &mut dyn erased_serde::Deserializer,
+        dst_ptr: *mut u8,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct EntityParent {
     pub parent: Entity,
@@ -67,7 +91,7 @@ impl EntityParent {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct EntityChildren {
     pub children: HashSet<Entity>,
 }

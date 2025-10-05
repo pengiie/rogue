@@ -11,7 +11,6 @@ use std::{
 use egui::Color32;
 use egui_dock::DockState;
 use egui_plot::{Plot, PlotPoints};
-use hecs::With;
 use nalgebra::{Quaternion, SimdValue, Translation3, UnitQuaternion, Vector2, Vector3, Vector4};
 
 use crate::{
@@ -334,13 +333,13 @@ pub fn egui_editor_ui(
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let mut game_entity_query =
-                        ecs_world.query::<hecs::Without<&GameEntity, &EntityParent>>();
+                    let mut game_entity_query = ecs_world
+                        .query::<&GameEntity>()
+                        .without::<(EntityParent,)>();
                     let game_entities = game_entity_query
                         .into_iter()
                         .map(|(entity, game_entity)| (entity, game_entity.clone()))
                         .collect::<Vec<_>>();
-                    drop(game_entity_query);
 
                     fn render_entity_label(
                         ui: &mut egui::Ui,
@@ -351,8 +350,11 @@ pub fn egui_editor_ui(
                         game_entity: &GameEntity,
                         events: &mut Events,
                     ) {
-                        let label_id =
-                            egui::Id::new(format!("left_panel_{}_entity_label", entity_id.id()));
+                        let label_id = egui::Id::new(format!(
+                            "left_panel_{}_{}_entity_label",
+                            entity_id.index(),
+                            entity_id.generation()
+                        ));
                         let is_hovering = ui.data(|w| w.get_temp(label_id).unwrap_or(false));
 
                         let mut text = egui::RichText::new(game_entity.name.clone());
@@ -954,19 +956,17 @@ pub fn game_pane(
                 let Some(game_camera_entity) = session.game_camera else {
                     break 'existing_camera "Missing".to_owned();
                 };
-                let Ok(mut q) =
-                    ecs_world.query_one::<With<&GameEntity, &Camera>>(game_camera_entity)
-                else {
-                    break 'existing_camera "Missing (Invalid)".to_owned();
-                };
+                let mut q = ecs_world
+                    .query_one::<&GameEntity>(game_camera_entity)
+                    .with::<(Camera,)>();
                 let Some(game_entity) = q.get() else {
                     break 'existing_camera "Missing (Invalid)".to_owned();
                 };
                 game_entity.name.clone()
             };
             ui.menu_button(existing_camera_name, |ui| {
-                let mut q = ecs_world.query::<With<&GameEntity, &Camera>>();
-                for (entity, game_entity) in q.iter() {
+                let mut q = ecs_world.query::<&GameEntity>().with::<(Camera,)>();
+                for (entity, game_entity) in q.into_iter() {
                     if ui.button(&game_entity.name).clicked() {
                         session.game_camera = Some(entity);
                         ui.close_menu();

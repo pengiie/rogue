@@ -101,17 +101,17 @@ impl Scripts {
     pub fn update_world_state(mut scripts: ResMut<Scripts>, mut ecs_world: ResMut<ECSWorld>) {
         let mut world_state = scripts.world_state.write();
         let mut script_world = &mut world_state.world;
-        script_world.clear();
+        //script_world.clear();
 
-        for (entity, (game_entity, scriptable, transform)) in ecs_world
-            .query_mut::<(&GameEntity, &ScriptableEntity, &Transform)>()
-            .into_iter()
-        {
-            script_world.spawn_at(
-                entity,
-                (game_entity.clone(), scriptable.clone(), transform.clone()),
-            );
-        }
+        //for (entity, (game_entity, scriptable, transform)) in ecs_world
+        //    .query_mut::<(&GameEntity, &ScriptableEntity, &Transform)>()
+        //    .into_iter()
+        //{
+        //    script_world.spawn_at(
+        //        entity,
+        //        (game_entity.clone(), scriptable.clone(), transform.clone()),
+        //    );
+        //}
     }
 
     pub fn update_script_events(mut scripts: ResMut<Scripts>, mut ui: ResMut<UI>) {
@@ -158,7 +158,7 @@ impl Scripts {
     }
 
     pub fn try_load_world_scripts(&mut self, ecs_world: &mut ECSWorld) {
-        for (entity_id, scriptable) in ecs_world.query_mut::<&ScriptableEntity>() {
+        for (entity_id, scriptable) in ecs_world.query::<&ScriptableEntity>().into_iter() {
             for asset_path in &scriptable.scripts {
                 if self.scripts.contains_key(asset_path)
                     || self.to_load_scripts.contains(asset_path)

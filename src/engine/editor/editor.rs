@@ -1,7 +1,6 @@
 use core::f32;
 use std::time::Duration;
 
-use hecs::With;
 use nalgebra::{
     ComplexField, Rotation3, Translation3, Unit, UnitQuaternion, Vector2, Vector3, Vector4,
 };
@@ -162,9 +161,8 @@ impl Editor {
         mut window: ResMut<Window>,
     ) {
         let editor: &mut Editor = &mut editor;
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
         let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
         let editor_camera = &mut editor.editor_camera;
 
@@ -231,9 +229,8 @@ impl Editor {
         mut debug_renderer: ResMut<DebugRenderer>,
     ) {
         let editor: &mut Editor = &mut editor;
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
         let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
         let editor_camera = &mut editor.editor_camera;
 
@@ -279,9 +276,8 @@ impl Editor {
     pub fn switch_to_pan_orbit(&mut self, ecs_world: &mut ECSWorld, window: &mut Window) {
         self.curr_editor_view = EditorView::PanOrbit;
         window.set_curser_lock(false);
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(self.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(self.editor_camera_entity.unwrap());
         let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
         self.editor_camera.rotation_anchor =
             editor_transform.position + editor_transform.forward() * self.editor_camera.distance;
@@ -324,9 +320,8 @@ impl Editor {
             EventEditorZoom::Position { position } => *position,
         };
 
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
         let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
 
         let focus_distance = 16.0;
@@ -393,9 +388,8 @@ impl Editor {
         // Updates the current selected gizmo off of any keybinds.
         editor.gizmo.update_gizmo_selection(&input);
 
-        let mut editor_camera_query = ecs_world
-            .query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap())
-            .unwrap();
+        let mut editor_camera_query =
+            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
         let (mut editor_transform, camera) = editor_camera_query.get().unwrap();
         let editor_camera = &mut editor.editor_camera;
 

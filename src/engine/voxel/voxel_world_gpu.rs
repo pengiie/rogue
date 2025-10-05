@@ -7,11 +7,25 @@ use std::{
     u32, u64,
 };
 
-use hecs::Entity;
 use log::debug;
 use nalgebra::{allocator, Vector3};
 use rogue_macros::Resource;
 
+use super::{
+    attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
+    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
+    flat::VoxelModelFlat,
+    sft::VoxelModelSFT,
+    voxel::{
+        VoxelMaterialSet, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
+    },
+    voxel_allocator::VoxelDataAllocator,
+    voxel_registry::{VoxelModelId, VoxelModelRegistry},
+    voxel_transform::VoxelModelTransform,
+};
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use crate::{
     common::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
@@ -22,7 +36,7 @@ use crate::{
     consts::{self, voxel::VOXEL_METER_LENGTH},
     engine::{
         asset::asset::{AssetHandle, Assets},
-        entity::{ecs_world::ECSWorld, RenderableVoxelEntity},
+        entity::{ecs_world::ECSWorld, query::QueryBorrow, RenderableVoxelEntity},
         event::Events,
         graphics::{
             backend::{
@@ -48,21 +62,6 @@ use crate::{
     },
     session::Session,
     settings::Settings,
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
-use super::{
-    attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
-    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
-    flat::VoxelModelFlat,
-    sft::VoxelModelSFT,
-    voxel::{
-        VoxelMaterialSet, VoxelModel, VoxelModelGpu, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
-        VoxelModelImpl, VoxelModelImplConcrete, VoxelModelSchema,
-    },
-    voxel_allocator::VoxelDataAllocator,
-    voxel_registry::{VoxelModelId, VoxelModelRegistry},
-    voxel_transform::VoxelModelTransform,
 };
 
 #[derive(Resource)]
@@ -343,7 +342,7 @@ impl VoxelWorldGpu {
 
     fn query_voxel_entities<'a>(
         ecs_world: &'a ECSWorld,
-    ) -> hecs::QueryBorrow<'a, (&Transform, &RenderableVoxelEntity)> {
+    ) -> QueryBorrow<'a, (&Transform, &RenderableVoxelEntity)> {
         ecs_world.query()
     }
 

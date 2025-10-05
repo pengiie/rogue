@@ -72,9 +72,7 @@ impl VoxelCursor {
             cursor.selected_entity = None;
         }
         if let Some(entity) = &cursor.selected_entity {
-            let mut query = ecs_world
-                .query_one::<(&Transform, &RenderableVoxelEntity)>(*entity)
-                .unwrap();
+            let mut query = ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(*entity);
             let (entity_transform, entity_renderable) = query.get().unwrap();
             let dimensions = voxel_world
                 .get_dyn_model(entity_renderable.voxel_model_id_unchecked())

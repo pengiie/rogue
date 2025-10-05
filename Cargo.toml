@@ -31,7 +31,6 @@ bytemuck = { version = "1.16.1", features = ["derive"] }
 cfg-if = "1"
 downcast = "0.11.0"
 env_logger = "0.11.3"
-hecs = { version = "0.10.4", features = ["macros"] }
 log = "0.4.21"
 rand = "0.8.5"
 regex = "1.11.0"
@@ -41,6 +40,7 @@ petgraph = "0.6.5"
 pollster = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
+erased-serde = "0.4.8"
 uuid = { version = "1.15.1", features = [ "v4", "bytemuck" ]}
 
 # Math/physics

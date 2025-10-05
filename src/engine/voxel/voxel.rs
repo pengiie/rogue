@@ -4,10 +4,19 @@ use std::{
 };
 
 use downcast::{downcast, Any};
-use hecs::Bundle;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use super::{
+    attachment::{Attachment, AttachmentId, PTMaterial},
+    flat::VoxelModelFlat,
+    voxel_allocator::VoxelDataAllocator,
+    voxel_registry::VoxelModelId,
+    voxel_transform::VoxelModelTransform,
+    voxel_world::VoxelModelFlatEdit,
+};
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::Ray;
 use crate::{
     common::color::{
         Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
@@ -21,16 +30,6 @@ use crate::{
         },
         physics::transform::Transform,
     },
-};
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
-use super::{
-    attachment::{Attachment, AttachmentId, PTMaterial},
-    flat::VoxelModelFlat,
-    voxel_allocator::VoxelDataAllocator,
-    voxel_registry::VoxelModelId,
-    voxel_transform::VoxelModelTransform,
-    voxel_world::VoxelModelFlatEdit,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -127,7 +126,7 @@ pub trait VoxelModelGpuImpl: Send + Sync + Any {
 
     fn deallocate(&mut self, allocator: &mut VoxelDataAllocator);
 }
-pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl {
+pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl + Clone {
     fn new() -> Self;
 }
 

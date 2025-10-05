@@ -40,6 +40,7 @@ impl Player {
         mut window: ResMut<Window>,
         ui: Res<UI>,
     ) {
+        let mut testg_t = ecs_world.query::<(&Transform, &Camera, &Player)>();
         let mut player_query =
             ecs_world.player_query::<(&mut Transform, &mut Camera, &mut Player)>();
         let (_player_entity, (transform, camera, player)) = player_query.player();
@@ -98,7 +99,7 @@ impl Player {
         mut main_camera: ResMut<MainCamera>,
         settings: Res<Settings>,
     ) {
-        if ecs_world.query::<()>().with::<&Player>().iter().len() > 0 {
+        if ecs_world.query::<()>().with::<(Player,)>().iter().len() > 0 {
             panic!("Player already spawned.");
         }
 

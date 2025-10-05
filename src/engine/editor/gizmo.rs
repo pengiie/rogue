@@ -59,10 +59,7 @@ impl EditorGizmo {
             self.dragging_gizmo_axis = None;
         }
 
-        let Ok(mut selected_entity_query) = ecs_world.query_one::<(&Transform)>(selected_entity)
-        else {
-            return;
-        };
+        let mut selected_entity_query = ecs_world.query_one::<(&Transform)>(selected_entity);
         let Some((model_local_transform)) = selected_entity_query.get() else {
             return;
         };
@@ -168,11 +165,8 @@ impl EditorGizmo {
         ecs_world: &ECSWorld,
         editor_camera_transform: &Transform,
     ) {
-        let Ok(mut selected_entity_query) =
-            ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(selected_entity)
-        else {
-            return;
-        };
+        let mut selected_entity_query =
+            ecs_world.query_one::<(&Transform, &RenderableVoxelEntity)>(selected_entity);
         let Ok(mut model_local_transform) = ecs_world.get::<(&mut Transform)>(selected_entity)
         else {
             return;

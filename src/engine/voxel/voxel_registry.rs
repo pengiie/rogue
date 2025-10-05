@@ -7,7 +7,7 @@ use std::{
 use crate::{
     common::{
         archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
-        dyn_vec::TypeInfo,
+        dyn_vec::{TypeInfo, TypeInfoCloneable},
         freelist::{FreeList, FreeListHandle},
     },
     engine::{
@@ -31,28 +31,30 @@ use super::{
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct VoxelModelId {
-    pub id: u64,
+    pub handle: FreeListHandle<VoxelModelInfo>,
 }
 
 impl VoxelModelId {
-    pub fn new(id: u64) -> Self {
-        Self { id }
+    pub fn new(handle: FreeListHandle<VoxelModelInfo>) -> Self {
+        Self { handle }
     }
 
     pub fn air() -> Self {
-        Self { id: 0x0000_FFFEu64 }
+        Self {
+            handle: FreeListHandle::new(0x0000_FFFE, 0),
+        }
     }
 
     pub fn is_air(&self) -> bool {
-        self.id == 0x0000_FFFEu64
+        self.handle.index() == 0x0000_FFFE
     }
 
     pub fn null() -> Self {
-        Self { id: u64::MAX }
+        Self::new(FreeListHandle::DANGLING)
     }
 
     pub fn is_null(&self) -> bool {
-        self.id == u64::MAX
+        self.handle.is_null()
     }
 }
 
@@ -67,21 +69,17 @@ pub struct VoxelModelInfo {
     pub asset_path: Option<AssetPath>,
 }
 
-#[derive(Clone)]
 pub struct VoxelModelRegistry {
     /// Each archetype is (VoxelModel<T>, VoxelModelGpu<T::Gpu>).
     /// The key is the (TypeId::of::<T>()) and the value is (Archetype, TypeId::of::<T::Gpu>())
     renderable_voxel_model_archtypes: HashMap<TypeId, (Archetype, TypeId)>,
     /// Each archetype is (VoxelModel<T>)
     standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
-    // TODO: Create FreeList alloc generic impl and replace this with it so we can also unload
-    // voxel models.
     pub voxel_model_info: FreeList<VoxelModelInfo>,
 
     // Maps model_type to the vtable for dyn VoxelModelImpl and
     // maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
     type_vtables: HashMap<TypeId, *mut ()>,
-    id_counter: u64,
 }
 
 impl VoxelModelRegistry {
@@ -91,24 +89,15 @@ impl VoxelModelRegistry {
             standalone_voxel_model_archtypes: HashMap::new(),
             voxel_model_info: FreeList::new(),
             type_vtables: HashMap::new(),
-            id_counter: 0,
         }
     }
 
     pub fn get_model_info(&self, id: VoxelModelId) -> Option<&VoxelModelInfo> {
-        self.voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+        self.voxel_model_info.get(id.handle)
     }
 
     pub fn get_model_info_mut(&mut self, id: VoxelModelId) -> Option<&mut VoxelModelInfo> {
-        self.voxel_model_info
-            .get_mut(FreeListHandle::new(id.id as usize))
-    }
-
-    pub fn next_id(&mut self) -> VoxelModelId {
-        let id = self.id_counter;
-        self.id_counter += 1;
-        VoxelModelId { id }
+        self.voxel_model_info.get_mut(id.handle)
     }
 
     pub fn set_voxel_model_asset_path(
@@ -117,14 +106,18 @@ impl VoxelModelRegistry {
         asset_path: Option<AssetPath>,
     ) {
         self.voxel_model_info
-            .get_mut(FreeListHandle::new(voxel_model_id.id as usize))
+            .get_mut(voxel_model_id.handle)
             .unwrap()
             .asset_path = asset_path;
     }
 
+    pub fn peek_next_id(&self) -> VoxelModelId {
+        VoxelModelId::new(self.voxel_model_info.next_free_handle())
+    }
+
     /// Noop if model is already unloaded or doesn't exist.
     pub fn unload_model(&mut self, id: VoxelModelId, voxel_allocator: &mut VoxelDataAllocator) {
-        let info_handle = FreeListHandle::new(id.id as usize);
+        let info_handle = id.handle;
         let Some(info) = self.voxel_model_info.get(info_handle) else {
             return;
         };
@@ -164,20 +157,20 @@ impl VoxelModelRegistry {
             VoxelModelType::SFTCompressed => Box::new(VoxelModelSFTCompressedGpu::new()),
         };
         let model_type_info = match voxel_model_any.model_type {
-            VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlat>(),
-            VoxelModelType::THC => TypeInfo::new::<VoxelModelTHC>(),
-            VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressed>(),
-            VoxelModelType::SFT => TypeInfo::new::<VoxelModelSFT>(),
-            VoxelModelType::SFTCompressed => TypeInfo::new::<VoxelModelSFTCompressed>(),
+            VoxelModelType::Flat => TypeInfoCloneable::new::<VoxelModelFlat>(),
+            VoxelModelType::THC => TypeInfoCloneable::new::<VoxelModelTHC>(),
+            VoxelModelType::THCCompressed => TypeInfoCloneable::new::<VoxelModelTHCCompressed>(),
+            VoxelModelType::SFT => TypeInfoCloneable::new::<VoxelModelSFT>(),
+            VoxelModelType::SFTCompressed => TypeInfoCloneable::new::<VoxelModelSFTCompressed>(),
         };
         let gpu_type_info = match voxel_model_any.model_type {
-            VoxelModelType::Flat => TypeInfo::new::<VoxelModelFlatGpu>(),
-            VoxelModelType::THC => TypeInfo::new::<VoxelModelTHCGpu>(),
-            VoxelModelType::THCCompressed => TypeInfo::new::<VoxelModelTHCCompressedGpu>(),
-            VoxelModelType::SFT => TypeInfo::new::<VoxelModelSFTGpu>(),
-            VoxelModelType::SFTCompressed => TypeInfo::new::<VoxelModelSFTCompressedGpu>(),
+            VoxelModelType::Flat => TypeInfoCloneable::new::<VoxelModelFlatGpu>(),
+            VoxelModelType::THC => TypeInfoCloneable::new::<VoxelModelTHCGpu>(),
+            VoxelModelType::THCCompressed => TypeInfoCloneable::new::<VoxelModelTHCCompressedGpu>(),
+            VoxelModelType::SFT => TypeInfoCloneable::new::<VoxelModelSFTGpu>(),
+            VoxelModelType::SFTCompressed => TypeInfoCloneable::new::<VoxelModelSFTCompressedGpu>(),
         };
-        let id = self.next_id();
+        let id = self.peek_next_id();
 
         // Extract fat pointers for this voxel model T's implementation of VoxelModelImpl and
         // T::Gpu's VoxelModelGpuImpl.
@@ -211,21 +204,21 @@ impl VoxelModelRegistry {
 
         let archetype_index = match voxel_model_any.model_type {
             VoxelModelType::Flat => archetype.insert(
-                id.id,
+                id.handle.as_untyped(),
                 (
                     *voxel_model_any.model.downcast::<VoxelModelFlat>().unwrap(),
                     *voxel_model_gpu.downcast::<VoxelModelFlatGpu>().unwrap(),
                 ),
             ),
             VoxelModelType::THC => archetype.insert(
-                id.id,
+                id.handle.as_untyped(),
                 (
                     *voxel_model_any.model.downcast::<VoxelModelTHC>().unwrap(),
                     *voxel_model_gpu.downcast::<VoxelModelTHCGpu>().unwrap(),
                 ),
             ),
             VoxelModelType::THCCompressed => archetype.insert(
-                id.id,
+                id.handle.as_untyped(),
                 (
                     *voxel_model_any
                         .model
@@ -237,14 +230,14 @@ impl VoxelModelRegistry {
                 ),
             ),
             VoxelModelType::SFT => archetype.insert(
-                id.id,
+                id.handle.as_untyped(),
                 (
                     *voxel_model_any.model.downcast::<VoxelModelSFT>().unwrap(),
                     *voxel_model_gpu.downcast::<VoxelModelSFTGpu>().unwrap(),
                 ),
             ),
             VoxelModelType::SFTCompressed => archetype.insert(
-                id.id,
+                id.handle.as_untyped(),
                 (
                     *voxel_model_any
                         .model
@@ -279,9 +272,9 @@ impl VoxelModelRegistry {
         T: VoxelModelImplConcrete,
     {
         let voxel_model_gpu = VoxelModelGpu::new(T::Gpu::new());
-        let model_type_info = TypeInfo::new::<T>();
-        let gpu_type_info = TypeInfo::new::<T::Gpu>();
-        let id = self.next_id();
+        let model_type_info = TypeInfoCloneable::new::<T>();
+        let gpu_type_info = TypeInfoCloneable::new::<T::Gpu>();
+        let id = self.peek_next_id();
 
         // Extract fat pointers for this voxel model T's implementation of VoxelModelImpl and
         // T::Gpu's VoxelModelGpuImpl.
@@ -313,7 +306,7 @@ impl VoxelModelRegistry {
                 )
             });
         let archetype_index = archetype.insert(
-            id.id,
+            id.handle.as_untyped(),
             (voxel_model.into_model(), voxel_model_gpu.into_model_gpu()),
         );
 
@@ -333,7 +326,7 @@ impl VoxelModelRegistry {
     pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImpl {
         let model_info = self
             .voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+            .get(id.handle)
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -370,7 +363,7 @@ impl VoxelModelRegistry {
     pub fn get_model<'a, T: VoxelModelImpl>(&'a self, id: VoxelModelId) -> &'a T {
         let model_info = self
             .voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+            .get(id.handle)
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -400,7 +393,7 @@ impl VoxelModelRegistry {
     pub fn get_dyn_model_mut<'a>(&'a mut self, id: VoxelModelId) -> &'a mut dyn VoxelModelImpl {
         let model_info = self
             .voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+            .get(id.handle)
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -440,7 +433,7 @@ impl VoxelModelRegistry {
     ) -> (&'a dyn VoxelModelImpl, &'a dyn VoxelModelGpuImpl) {
         let model_info = self
             .voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+            .get(id.handle)
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -498,7 +491,7 @@ impl VoxelModelRegistry {
     ) -> &'a mut dyn VoxelModelGpuImpl {
         let model_info = self
             .voxel_model_info
-            .get(FreeListHandle::new(id.id as usize))
+            .get(id.handle)
             .expect("Voxel model id is invalid");
 
         let archetype = if model_info.gpu_type.is_none() {
@@ -572,6 +565,17 @@ impl VoxelModelRegistry {
     }
 }
 
+impl Clone for VoxelModelRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            renderable_voxel_model_archtypes: self.renderable_voxel_model_archtypes.clone(),
+            standalone_voxel_model_archtypes: self.standalone_voxel_model_archtypes.clone(),
+            voxel_model_info: self.voxel_model_info.clone(),
+            type_vtables: self.type_vtables.clone(),
+        }
+    }
+}
+
 pub struct RenderableVoxelModelIter<'a> {
     archetype_iters: Vec<(*mut (), *mut (), ArchetypeIter<'a>)>,
     current_archetype_index: usize,
@@ -615,7 +619,9 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIter<'a> {
         };
 
         Some((
-            VoxelModelId { id: global_id },
+            VoxelModelId {
+                handle: global_id.as_typed(),
+            },
             (voxel_model_ref, voxel_model_gpu_ref),
         ))
     }
@@ -664,7 +670,9 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
         };
 
         Some((
-            VoxelModelId { id: global_id },
+            VoxelModelId {
+                handle: global_id.as_typed(),
+            },
             (voxel_model_ref, voxel_model_gpu_ref),
         ))
     }
