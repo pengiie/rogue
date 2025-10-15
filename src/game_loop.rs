@@ -6,7 +6,7 @@ use crate::{
         asset::{self, asset::Assets},
         debug::DebugRenderer,
         editor::editor::{Editor, EditorView},
-        entity::scripting::Scripts,
+        entity::{ecs_world::ECSWorld, scripting::Scripts},
         event::Events,
         graphics::{device::DeviceResource, pass::ui::UIPass, renderer::Renderer},
         input::Input,
@@ -99,6 +99,8 @@ pub fn game_loop(app: &App) {
         }
         SessionState::GamePaused => todo!(),
     }
+
+    app.run_system(ECSWorld::run_queued_despawns);
 
     // ------- VOXEL WORLD -------
     app.run_system(VoxelWorld::update_post_physics);

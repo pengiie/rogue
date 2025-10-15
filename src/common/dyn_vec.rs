@@ -502,6 +502,12 @@ impl TypeInfo {
         (self.drop_fn)(data);
     }
 
+    pub fn layout(&self, count: usize) -> std::alloc::Layout {
+        assert!(count > 0);
+        let stride = if count == 0 { self.size } else { self.stride() };
+        std::alloc::Layout::from_size_align(stride * count, self.alignment).unwrap()
+    }
+
     pub fn alignment(&self) -> usize {
         self.alignment
     }

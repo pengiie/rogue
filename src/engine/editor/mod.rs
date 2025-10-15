@@ -1,4 +1,5 @@
 pub mod brush;
+pub mod clipboard;
 pub mod editor;
 
 // Use `editor` in module name to make file more searchable.

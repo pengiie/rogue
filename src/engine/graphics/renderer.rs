@@ -485,10 +485,15 @@ impl Renderer {
                     let rot_matrix_3x3 = transformation_matrix.fixed_resize::<3, 3>(0.0);
                     writer
                         .write_uniform_mat3("u_frame.world_info.camera.rotation", &rot_matrix_3x3);
-                    writer.write_uniform("u_frame.world_info.camera.fov", camera.fov());
-                    writer
-                        .write_uniform("u_frame.world_info.camera.near_plane", camera.near_plane());
-                    writer.write_uniform("u_frame.world_info.camera.far_plane", camera.far_plane());
+                    writer.write_uniform::<f32>("u_frame.world_info.camera.fov", camera.fov());
+                    writer.write_uniform::<f32>(
+                        "u_frame.world_info.camera.near_plane",
+                        camera.near_plane(),
+                    );
+                    writer.write_uniform::<f32>(
+                        "u_frame.world_info.camera.far_plane",
+                        camera.far_plane(),
+                    );
                 } else {
                     log::error!("Main camera doesn't exist.");
                     writer.write_uniform_mat4(
@@ -503,9 +508,9 @@ impl Renderer {
                         "u_frame.world_info.camera.rotation",
                         &Matrix3::zeros(),
                     );
-                    writer.write_uniform("u_frame.world_info.camera.fov", 0.0);
-                    writer.write_uniform("u_frame.world_info.camera.near_plane", 0.0);
-                    writer.write_uniform("u_frame.world_info.camera.far_plane", 0.0);
+                    writer.write_uniform::<f32>("u_frame.world_info.camera.fov", 0.0);
+                    writer.write_uniform::<f32>("u_frame.world_info.camera.near_plane", 0.0);
+                    writer.write_uniform::<f32>("u_frame.world_info.camera.far_plane", 0.0);
                 }
                 // Every minute is a rotation.
                 let rot_t = time.start_time().elapsed().as_secs_f32() / 60.0;

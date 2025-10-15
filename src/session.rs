@@ -21,6 +21,7 @@ use crate::{
         },
         editor::editor::Editor,
         entity::{
+            component::GameComponentContext,
             ecs_world::{ECSWorld, Entity},
             scripting::Scripts,
             GameEntity, RenderableVoxelEntity,
@@ -299,7 +300,10 @@ impl Session {
             session.should_start_game = false;
             session.session_state = SessionState::Game;
             main_camera.set_camera(session.game_camera.as_ref().unwrap().clone(), "game_camera");
-            session.editor_ecs_world = Some(ecs_world.clone_game_entities());
+            session.editor_ecs_world = Some(ecs_world.clone_game_entities(GameComponentContext {
+                voxel_world: &mut voxel_world,
+                physics_world: &mut physics_world,
+            }));
             scripts.run_setup(&mut ecs_world, &assets, &mut ui);
             physics_world.reset_last_timestep();
         }

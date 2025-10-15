@@ -18,7 +18,10 @@ use crate::{
     consts,
     engine::{
         asset::{asset::AssetPath, repr::settings::SettingsAsset},
-        editor::ui::dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog,
+        editor::ui::{
+            asset_browser::EditorAssetBrowserState,
+            dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog,
+        },
         event::Events,
         physics::{collider_registry::ColliderId, physics_world::PhysicsWorld},
         voxel::{voxel_registry::VoxelModelId, voxel_world_gpu::VoxelWorldGpu},
@@ -141,59 +144,6 @@ pub struct EditorNewProjectDialog {
     pub last_file_name: (String, /*valid_dir=*/ bool, /*error=*/ String),
 }
 
-pub struct EditorAssetBrowserState {
-    pub sub_path: PathBuf,
-    pub needs_reload: bool,
-    pub contents: Vec<EditorAssetBrowserAsset>,
-}
-
-impl EditorAssetBrowserState {
-    pub fn reload(&mut self, project_assets_dir: &Path) {
-        let reload_dir = project_assets_dir.join(&self.sub_path);
-        let Ok(iter) = std::fs::read_dir(&reload_dir) else {
-            log::error!("Failed to read: {}", reload_dir.to_string_lossy());
-            return;
-        };
-
-        self.contents.clear();
-        for item in iter {
-            let Ok(item) = item else {
-                continue;
-            };
-
-            log::info!(
-                "is dir {}, for path {:?}",
-                item.path().is_dir(),
-                item.path()
-            );
-            self.contents.push(EditorAssetBrowserAsset {
-                file_sub_path: item
-                    .path()
-                    .strip_prefix(&project_assets_dir)
-                    .unwrap()
-                    .to_owned(),
-                is_dir: item.path().is_dir(),
-            });
-        }
-        self.contents.sort_by(|a, b| {
-            if a.is_dir && !b.is_dir {
-                return std::cmp::Ordering::Less;
-            }
-
-            if !a.is_dir && b.is_dir {
-                return std::cmp::Ordering::Greater;
-            }
-
-            a.file_sub_path.cmp(&b.file_sub_path)
-        });
-    }
-}
-
-pub struct EditorAssetBrowserAsset {
-    pub file_sub_path: PathBuf,
-    pub is_dir: bool,
-}
-
 impl EditorUIState {
     pub fn new() -> Self {
         let terrain_dialog_channel = std::sync::mpsc::channel();
@@ -225,11 +175,7 @@ impl EditorUIState {
                 model_id: VoxelModelId::null(),
             },
 
-            asset_browser: EditorAssetBrowserState {
-                sub_path: PathBuf::new(),
-                needs_reload: true,
-                contents: Vec::new(),
-            },
+            asset_browser: EditorAssetBrowserState::new(),
             texture_map: HashMap::new(),
             initialized_icons: false,
             right_pane_state: EditorTab::EntityProperties,

@@ -166,7 +166,7 @@ impl PhysicsWorld {
                             *entity_a, *entity_b,
                         ]);
                     let [Some((transform_a, rigid_body_a)), Some((transform_b, rigid_body_b))] =
-                        query
+                        query.get()
                     else {
                         continue;
                     };

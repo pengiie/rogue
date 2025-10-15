@@ -2,7 +2,10 @@ use log::debug;
 use nalgebra::{Isometry3, Matrix4};
 use rogue_macros::Resource;
 
-use crate::{consts, engine::entity::ecs_world::Entity};
+use crate::{
+    consts,
+    engine::entity::{component::GameComponent, ecs_world::Entity},
+};
 
 use super::renderer;
 
@@ -76,5 +79,33 @@ impl Camera {
 
     pub fn far_plane(&self) -> f32 {
         self.far_plane
+    }
+}
+
+impl GameComponent for Camera {
+    fn clone_component(
+        &self,
+        ctx: &mut crate::engine::entity::component::GameComponentContext<'_>,
+        dst_ptr: *mut u8,
+    ) {
+        // Safety: dst_ptr should be allocated with the memory layout for this type.
+        unsafe { (dst_ptr as *mut Self).write(self.clone()) };
+    }
+
+    fn serialize_component(
+        &self,
+        ctx: crate::engine::entity::component::GameComponentContext<'_>,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
+
+    fn deserialize_component(
+        &self,
+        ctx: crate::engine::entity::component::GameComponentContext<'_>,
+        de: &mut dyn erased_serde::Deserializer,
+        dst_ptr: *mut u8,
+    ) -> erased_serde::Result<()> {
+        todo!()
     }
 }

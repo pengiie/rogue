@@ -193,12 +193,12 @@ impl ComponentArchetype {
         return i;
     }
 
-    pub fn insert<T: Bundle>(&mut self, entity_id: Entity, data: T) -> usize {
+    pub fn insert(&mut self, entity_id: Entity, data: Vec<(TypeInfo, *const u8)>) -> usize {
         let index = self.allocate_entry();
         let new_allocation = index >= self.size;
 
         // Move `data` into our managed arrays.
-        let mut data_info = data.type_info();
+        let mut data_info = data;
         data_info.sort_by(|(type_info_a, _), (type_info_b, _)| type_info_a.cmp(type_info_b));
         for (i, (type_info, data_ptr)) in data_info.iter().enumerate() {
             let mut dst_data = &mut self.data[i];
@@ -210,7 +210,6 @@ impl ComponentArchetype {
                 unsafe { dst_data.write_unchecked(index, *data_ptr) };
             }
         }
-        std::mem::forget(data);
 
         if new_allocation {
             self.global_indices.push(entity_id);

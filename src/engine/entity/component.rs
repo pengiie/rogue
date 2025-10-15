@@ -13,13 +13,13 @@ use crate::{
 };
 
 pub struct GameComponentContext<'a> {
-    voxel_world: &'a mut VoxelWorld,
-    physics_world: &'a mut PhysicsWorld,
+    pub voxel_world: &'a mut VoxelWorld,
+    pub physics_world: &'a mut PhysicsWorld,
 }
 
 /// Implements serialization and cloning.
 pub trait GameComponent {
-    fn clone_component(&self, ctx: GameComponentContext<'_>, dst_ptr: *mut u8);
+    fn clone_component(&self, ctx: &mut GameComponentContext<'_>, dst_ptr: *mut u8);
 
     fn serialize_component(
         &self,

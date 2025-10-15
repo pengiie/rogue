@@ -8,7 +8,7 @@ use std::{
 
 use rogue_macros::Resource;
 
-use crate::common::dyn_vec::{DynVecCloneable, TypeInfo, TypeInfoCloneable};
+use crate::common::dyn_vec::{DynVec, DynVecCloneable, TypeInfo, TypeInfoCloneable};
 
 use super::resource::ResMut;
 
@@ -20,22 +20,19 @@ struct EventBank {
     // Monotically increasing id starting from 1.
     event_id_tracker: EventId,
     // One for every other frame.
-    data: [(/*first_event_id_in_vec*/ EventId, DynVecCloneable); 2],
+    data: [(/*first_event_id_in_vec*/ EventId, DynVec); 2],
 }
 
-pub trait Event: Clone + 'static {}
-impl<T: Clone + 'static> Event for T {}
-
 impl EventBank {
-    pub fn new<T: Event>(curr_frame_index: u32) -> Self {
+    pub fn new<T: 'static>(curr_frame_index: u32) -> Self {
         Self {
             curr_frame_index,
             event_id_tracker: 1,
-            data: array::from_fn(|_| (0, DynVecCloneable::new(TypeInfoCloneable::new::<T>()))),
+            data: array::from_fn(|_| (0, DynVec::new(TypeInfo::new::<T>()))),
         }
     }
 
-    pub fn push<T: Event>(&mut self, event: T) {
+    pub fn push<T: 'static>(&mut self, event: T) {
         let event_id = self.event_id_tracker;
         let (first_event_id, vec) = &mut self.data[self.curr_frame_index as usize];
         if vec.is_empty() {
@@ -51,13 +48,13 @@ impl EventBank {
     }
 }
 
-pub struct EventReader<T: Event> {
+pub struct EventReader<T> {
     last_event_id: EventId,
     // Marker since the event id is specific to the event type.
     marker: std::marker::PhantomData<T>,
 }
 
-impl<T: Event> EventReader<T> {
+impl<T: 'static> EventReader<T> {
     /// Will read double events in the case that the producer runs before this reader in the game
     /// loop. Keep that in mind :p.
     pub fn new() -> Self {
@@ -81,7 +78,7 @@ impl<T: Event> EventReader<T> {
     }
 }
 
-pub struct EventReaderIter<'a, 'b, T: Event> {
+pub struct EventReaderIter<'a, 'b, T: 'static> {
     event_reader: &'b mut EventReader<T>,
     event_bank: Option<&'a EventBank>,
     curr_event_id: EventId,
@@ -89,7 +86,7 @@ pub struct EventReaderIter<'a, 'b, T: Event> {
     marker: std::marker::PhantomData<&'a T>,
 }
 
-impl<'a, 'b, T: Event> Iterator for EventReaderIter<'a, 'b, T> {
+impl<'a, 'b, T> Iterator for EventReaderIter<'a, 'b, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -127,7 +124,6 @@ impl<'a, 'b, T: Event> Iterator for EventReaderIter<'a, 'b, T> {
 #[derive(Resource)]
 pub struct Events {
     banks: HashMap<TypeId, EventBank>,
-    event_type_info: HashMap<TypeId, TypeInfo>,
     // Alternating index between 0 and 1.
     curr_frame_index: u32,
 }
@@ -136,7 +132,6 @@ impl Events {
     pub fn new() -> Self {
         Self {
             banks: HashMap::new(),
-            event_type_info: HashMap::new(),
             curr_frame_index: 0,
         }
     }
@@ -152,13 +147,8 @@ impl Events {
         }
     }
 
-    pub fn push<T: Event>(&mut self, event: T) {
-        let type_id = TypeId::of::<T>();
-        let type_info = self
-            .event_type_info
-            .entry(type_id)
-            .or_insert(TypeInfo::new::<T>())
-            .clone();
+    pub fn push<T: 'static>(&mut self, event: T) {
+        let type_id = std::any::TypeId::of::<T>();
         let event_bank = self
             .banks
             .entry(type_id)

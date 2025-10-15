@@ -2035,7 +2035,7 @@ impl VulkanResourceManager {
         // descriptor set global uniform buffer counters.
         let mut descriptor_sets = self.descriptor_sets.write();
         let mut to_remove_handles = Vec::new();
-        for (handle, descriptor_set) in descriptor_sets.iter_with_handle() {
+        for (handle, descriptor_set) in descriptor_sets.iter_with_handle_mut() {
             if descriptor_set.usage_score.should_delete() {
                 to_remove_handles.push(handle);
             }
@@ -3041,7 +3041,7 @@ frame_descriptor_set_group
     ) -> FreeListHandle<VulkanStagingBuffer> {
         let mut staging_buffer_free_list = self.staging_buffers.write();
 
-        for (handle, staging_buffer) in staging_buffer_free_list.iter_with_handle() {
+        for (handle, staging_buffer) in staging_buffer_free_list.iter_with_handle_mut() {
             if self.in_use_staging_buffers.read().contains(&handle) {
                 continue;
             }

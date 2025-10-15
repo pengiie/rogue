@@ -1,4 +1,4 @@
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -15,9 +15,13 @@ use crate::common::geometry::obb::OBB;
 use crate::common::vtable;
 use crate::engine::entity::archetype::ComponentArchetype;
 use crate::engine::entity::component::{
-    Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent,
+    Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentContext,
 };
-use crate::engine::entity::query::{Query, QueryBorrow, QueryItem, QueryItemRef, QueryOne};
+use crate::engine::entity::query::{
+    Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne,
+};
+use crate::engine::event::{EventReader, Events};
+use crate::engine::resource::ResMut;
 use crate::{
     engine::{
         graphics::camera::{Camera, MainCamera},
@@ -30,10 +34,13 @@ use crate::{
 
 pub type Entity = FreeListHandle<EntityInfo>;
 
+pub struct EventEntityDespawn(pub Entity);
+
+#[derive(Debug)]
 pub struct EntityInfo {
-    components: Vec<TypeId>,
+    pub components: Vec<TypeInfo>,
     // Index of the archetype
-    archetype_ptr: usize,
+    pub archetype_ptr: usize,
     // Index in the archetype
     pub index: usize,
 }
@@ -45,6 +52,7 @@ pub struct ECSWorld {
     pub component_archetypes: HashMap<TypeId, Vec</*archetype_index*/ usize>>,
     pub entities: FreeList<EntityInfo>,
     pub game_component_vtables: HashMap<TypeId, *const ()>,
+    pub despawn_event_reader: EventReader<EventEntityDespawn>,
 }
 
 impl ECSWorld {
@@ -54,14 +62,26 @@ impl ECSWorld {
             component_archetypes: HashMap::new(),
             entities: FreeList::new(),
             game_component_vtables: HashMap::new(),
+            despawn_event_reader: EventReader::new(),
         };
 
         // Makes these components cloneable and serializable in the project.
+        // Would be nice to dynamically register sure, but that is overhead on every call and makes
+        // finding which components are being serialized and persisted for a project easier.
+        // Grep match words: "register game components", "game component register".
+        ecs.register_game_component::<GameEntity>();
+        ecs.register_game_component::<EntityParent>();
+        ecs.register_game_component::<EntityChildren>();
         ecs.register_game_component::<Transform>();
         ecs.register_game_component::<RenderableVoxelEntity>();
+        ecs.register_game_component::<Camera>();
+        ecs.register_game_component::<RigidBody>();
+        ecs.register_game_component::<Colliders>();
 
         ecs
     }
+
+    pub fn run_queued_despawns(ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {}
 
     fn register_game_component<C: GameComponent + 'static>(&mut self) {
         let type_id = std::any::TypeId::of::<C>();
@@ -129,17 +149,28 @@ impl ECSWorld {
     }
 
     pub fn spawn<B: Bundle + 'static>(&mut self, bundle: B) -> Entity {
-        let mut type_ids = B::component_type_ids();
-        type_ids.sort();
-        let mut type_infos = B::component_type_infos();
-        type_infos.sort();
+        let entity = self.spawn_raw(bundle.type_info());
+        std::mem::forget(bundle);
+        return entity;
+    }
+
+    pub fn spawn_raw(&mut self, mut data: Vec<(TypeInfo, *const u8)>) -> Entity {
+        data.sort_by(|(type_info_a, _), (type_info_b, _)| type_info_a.cmp(type_info_b));
+        let type_infos = data
+            .iter()
+            .map(|(type_info, _)| type_info.clone())
+            .collect::<Vec<_>>();
+        let type_ids = type_infos
+            .iter()
+            .map(|type_info| type_info.type_id())
+            .collect::<Vec<_>>();
 
         let entity_id = self.entities.next_free_handle();
-        let (archetype_ptr, archetype) = self.get_or_create_archetype(type_infos);
-        let archetype_index = archetype.insert(entity_id, bundle);
+        let (archetype_ptr, archetype) = self.get_or_create_archetype(type_infos.clone());
+        let archetype_index = archetype.insert(entity_id, data);
 
         let pushed_entity_id = self.entities.push(EntityInfo {
-            components: type_ids.clone(),
+            components: type_infos,
             archetype_ptr,
             index: archetype_index,
         });
@@ -158,12 +189,12 @@ impl ECSWorld {
         let entity_info = self.entities.get_mut(entity_id).unwrap();
         assert!(entity_info.components.is_sorted());
         let old_archetype = &mut self.archetypes[entity_info.archetype_ptr];
-        let old_type_ids = entity_info.components.clone();
+        let old_type_infos = entity_info.components.clone();
 
         // Check if this component is already in the current entity's archetype.
-        if old_type_ids
+        if old_type_infos
             .into_iter()
-            .find(|type_id| *type_id == component_type_id)
+            .find(|type_info| type_info.type_id == component_type_id)
             .is_some()
         {
             // Replace the old component.
@@ -190,7 +221,7 @@ impl ECSWorld {
         let (new_archetype_ptr, mut new_archetype) = Self::get_or_create_archetype_static(
             &mut self.archetypes,
             &mut self.component_archetypes,
-            new_type_infos,
+            new_type_infos.clone(),
         );
 
         let component_ptr = std::ptr::from_mut(&mut component);
@@ -203,13 +234,96 @@ impl ECSWorld {
         // `old_archetype` is not mutated after getting the data ptrs.
         entity_info.index = unsafe { new_archetype.insert_raw(entity_id, new_ptrs) };
         entity_info.archetype_ptr = new_archetype_ptr;
-        entity_info.components = new_type_ids;
+        entity_info.components = new_type_infos;
 
         return Ok(());
     }
 
-    pub fn clone_game_entities(&self) -> ECSWorld {
-        todo!()
+    /// Clones any entity in the world with a GameEntity component. Only clones components which
+    /// implement the `GameComponent` trait. This also preserves the same entity ids to keep
+    /// references coherent.
+    pub fn clone_game_entities(&self, mut ctx: GameComponentContext) -> ECSWorld {
+        let ctx = &mut ctx;
+        let mut new_world = ECSWorld::new();
+        new_world.game_component_vtables = self.game_component_vtables.clone();
+
+        for (entity, entity_info) in self.entities.iter_with_handle() {
+            if entity_info
+                .components
+                .iter()
+                .find(|ty| ty.type_id == TypeId::of::<GameEntity>())
+                .is_none()
+            {
+                continue;
+            }
+
+            let entity_game_components = entity_info
+                .components
+                .iter()
+                .filter_map(|type_info| {
+                    self.game_component_vtables
+                        .contains_key(&type_info.type_id)
+                        .then_some(type_info.clone())
+                })
+                .collect::<Vec<_>>();
+            assert!(entity_game_components.is_sorted());
+
+            let src_archetype = self.find_archetype(entity);
+            let src_data = entity_game_components
+                .iter()
+                .map(|type_info| unsafe {
+                    (
+                        type_info,
+                        src_archetype.get_raw(type_info, entity_info.index).as_ptr(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let cloned_data = src_data
+                .iter()
+                .map(|(type_info, src_data)| {
+                    let game_component_vtable =
+                        self.game_component_vtables.get(&type_info.type_id).unwrap();
+                    let game_component_ptr = unsafe {
+                        std::mem::transmute::<(*const u8, *const ()), *const dyn GameComponent>((
+                            *src_data as *const u8,
+                            *game_component_vtable as *const (),
+                        ))
+                    };
+                    let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
+                    // Safety: We free the pointers after the data is copied to the new archetype.
+                    let clone_dst_layout = type_info.layout(1);
+                    let clone_dst = unsafe { std::alloc::alloc(clone_dst_layout) };
+                    assert!(!clone_dst.is_null());
+                    game_component.clone_component(ctx, clone_dst);
+                    (clone_dst, clone_dst_layout)
+                })
+                .collect::<Vec<_>>();
+
+            let (archetype_ptr, archetype) =
+                new_world.get_or_create_archetype(entity_game_components.clone());
+            let archetype_index = unsafe {
+                archetype.insert_raw(
+                    entity,
+                    cloned_data.iter().map(|(ptr, _)| *ptr).collect::<Vec<_>>(),
+                )
+            };
+
+            for (cloned_ptr, cloned_dst_layout) in cloned_data {
+                // Safety: We check it is not null, and it is allocated above.
+                unsafe { std::alloc::dealloc(cloned_ptr, cloned_dst_layout) };
+            }
+
+            new_world.entities.insert_in_place(
+                entity,
+                EntityInfo {
+                    components: entity_game_components,
+                    archetype_ptr,
+                    index: archetype_index,
+                },
+            );
+        }
+
+        return new_world;
     }
 
     pub fn query_mut<Q: Query>(&mut self) -> QueryBorrow<Q> {
@@ -244,8 +358,8 @@ impl ECSWorld {
     pub fn query_many_mut<Q: Query, const C: usize>(
         &self,
         entities: [Entity; C],
-    ) -> [Option<Q::Item<'_>>; C] {
-        todo!()
+    ) -> QueryMany<Q, C> {
+        QueryMany::new(self, entities)
     }
 
     pub fn remove_one<C: 'static>(&mut self, entity: Entity) {

@@ -99,7 +99,7 @@ impl Transform {
 impl GameComponent for Transform {
     fn clone_component(
         &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
+        ctx: &mut crate::engine::entity::component::GameComponentContext<'_>,
         dst_ptr: *mut u8,
     ) {
         let dst_ptr = dst_ptr as *mut Transform;

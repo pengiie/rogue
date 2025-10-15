@@ -368,3 +368,94 @@ impl<Q: Query> Drop for QueryOne<'_, Q> {
         }
     }
 }
+
+pub struct QueryMany<'a, Q: Query, const C: usize> {
+    ecs_world: &'a ECSWorld,
+    entities: [Entity; C],
+    borrows: Vec<&'a Cell<ComponentTypeBorrow>>,
+    with: HashSet<TypeId>,
+    without: HashSet<TypeId>,
+    marker: std::marker::PhantomData<&'a Q>,
+}
+
+impl<'a, Q: Query, const C: usize> QueryMany<'a, Q, C> {
+    pub fn new(ecs_world: &'a ECSWorld, entities: [Entity; C]) -> Self {
+        let mut set = HashSet::new();
+        for entity in &entities {
+            if set.contains(entity) {
+                panic!("Each entity queried must be unique.");
+            }
+            set.insert(*entity);
+        }
+
+        Self {
+            ecs_world,
+            entities,
+            with: Q::collect_type_ids().into_iter().collect::<HashSet<_>>(),
+            without: HashSet::new(),
+            borrows: Vec::new(),
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn with<W: ComponentMatchClause>(mut self) -> Self {
+        for id in W::component_type_ids().into_iter() {
+            self.with.insert(id);
+            assert!(!self.without.contains(&id));
+        }
+        self
+    }
+
+    pub fn without<W: ComponentMatchClause>(mut self) -> Self {
+        for id in W::component_type_ids().into_iter() {
+            self.without.insert(id);
+            assert!(!self.with.contains(&id));
+        }
+        self
+    }
+
+    /// Must be called at most once. Returns None if the entity doesn't satisfy the query.
+    pub fn get(&mut self) -> [Option<Q::Item<'a>>; C] {
+        assert!(self.borrows.is_empty());
+        let mut archetype_indices = HashSet::new();
+        let mut items = [const { None }; C];
+        'entity_loop: for (i, entity) in self.entities.iter().enumerate() {
+            let Some(entity_info) = self.ecs_world.entities.get(*entity) else {
+                continue;
+            };
+            archetype_indices.insert(entity_info.archetype_ptr);
+
+            let archetype = &self.ecs_world.archetypes[entity_info.archetype_ptr];
+            for type_id in &self.with {
+                if !archetype.has_type_id(*type_id) {
+                    continue 'entity_loop;
+                }
+            }
+            for type_info in &archetype.types {
+                if self.without.contains(&type_info.type_id) {
+                    continue 'entity_loop;
+                }
+            }
+
+            let item = Q::fetch(archetype, entity_info.index);
+            items[i] = Some(item);
+        }
+
+        // Collect borrows
+        for archetype_index in archetype_indices {
+            let archetype = &self.ecs_world.archetypes[archetype_index];
+            self.borrows.extend(Q::collect_borrows(archetype));
+        }
+
+        return items;
+    }
+}
+
+impl<Q: Query, const C: usize> Drop for QueryMany<'_, Q, C> {
+    fn drop(&mut self) {
+        for borrow in &self.borrows {
+            let b = borrow.get();
+            borrow.set(b.unborrow());
+        }
+    }
+}

@@ -24,10 +24,12 @@ use crate::{
         editor::{
             events::EventEditorZoom,
             ui::{
+                asset_browser::asset_browser_ui,
                 dialog::{
                     new_project_dialog::new_project_dialog,
                     new_voxel_model_dialog::new_voxel_model_dialog_ui,
                 },
+                entity_hierarchy::entity_hierarchy_ui,
                 entity_properties::entity_properties_pane,
                 stats::stats_pane,
                 user_settings::user_pane,
@@ -48,10 +50,7 @@ use crate::{
             rigid_body::RigidBody,
             transform::Transform,
         },
-        ui::{
-            gui::Egui, EditorAssetBrowserState, EditorNewProjectDialog, EditorTab, EditorUIState,
-            UI,
-        },
+        ui::{gui::Egui, EditorNewProjectDialog, EditorTab, EditorUIState, UI},
         voxel::{
             factory::VoxelModelFactory,
             flat::VoxelModelFlat,
@@ -72,7 +71,9 @@ use crate::{
 
 use super::editor::{Editor, EditorView};
 
+pub mod asset_browser;
 pub mod dialog;
+pub mod entity_hierarchy;
 pub mod entity_properties;
 pub mod stats;
 pub mod user_settings;
@@ -298,149 +299,15 @@ pub fn egui_editor_ui(
         .default_width(300.0)
         .max_width(500.0)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(
-                    egui::RichText::new("Inspector").size(20.0),
-                ));
-                ui.menu_button("Add", |ui| {
-                    if ui.button("Empty").clicked() {
-                        ecs_world.spawn((
-                            GameEntity::new("new_entity"),
-                            Transform::with_translation(Translation3::from(
-                                editor.editor_camera.rotation_anchor,
-                            )),
-                        ));
-                    }
-                    if ui.button("Cube").clicked() {
-                        let model_id = voxel_world.register_renderable_voxel_model(
-                            "entity",
-                            VoxelModelFactory::create_cuboid(
-                                Vector3::new(32, 32, 32),
-                                editor.world_editing.color.clone(),
-                            ),
-                        );
-                        ecs_world.spawn((
-                            GameEntity::new("new_entity"),
-                            Transform::with_translation(Translation3::from(
-                                editor.editor_camera.rotation_anchor,
-                            )),
-                            RenderableVoxelEntity::new(model_id),
-                        ));
-                    }
+            ui.vertical(|ui| {
+                let mut available_rect = ui.available_rect_before_wrap();
+                available_rect.set_height(available_rect.height() / 2.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(available_rect), |ui| {
+                    entity_hierarchy_ui(ui, ecs_world, editor, voxel_world, ui_state, events);
                 });
+                ui.separator();
+                asset_browser_ui(ui, session, ui_state);
             });
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let mut game_entity_query = ecs_world
-                        .query::<&GameEntity>()
-                        .without::<(EntityParent,)>();
-                    let game_entities = game_entity_query
-                        .into_iter()
-                        .map(|(entity, game_entity)| (entity, game_entity.clone()))
-                        .collect::<Vec<_>>();
-
-                    fn render_entity_label(
-                        ui: &mut egui::Ui,
-                        editor: &mut Editor,
-                        ecs_world: &mut ECSWorld,
-                        ui_state: &mut EditorUIState,
-                        entity_id: Entity,
-                        game_entity: &GameEntity,
-                        events: &mut Events,
-                    ) {
-                        let label_id = egui::Id::new(format!(
-                            "left_panel_{}_{}_entity_label",
-                            entity_id.index(),
-                            entity_id.generation()
-                        ));
-                        let is_hovering = ui.data(|w| w.get_temp(label_id).unwrap_or(false));
-
-                        let mut text = egui::RichText::new(game_entity.name.clone());
-                        if is_hovering {
-                            text = text.background_color(egui::Color32::from_white_alpha(2));
-                        }
-                        if editor.selected_entity.is_some()
-                            && editor.selected_entity.unwrap() == entity_id
-                        {
-                            text = text.background_color(egui::Color32::from_white_alpha(3));
-                        }
-                        let mut label = ui.add(egui::Label::new(text).truncate());
-
-                        ui.data_mut(|w| w.insert_temp(label_id, label.hovered()));
-                        if label.hovered() {
-                            editor.hovered_entity = Some(entity_id);
-                        }
-                        if label.clicked() {
-                            if let Some(new_child) = ui_state.selecting_new_parent.take() {
-                                ecs_world.set_parent(new_child, entity_id);
-                            } else {
-                                editor.selected_entity = Some(entity_id);
-                            }
-                        }
-
-                        if label.double_clicked_by(egui::PointerButton::Secondary) {
-                            events.push(EventEditorZoom::Entity {
-                                target_entity: entity_id,
-                            });
-                        }
-                    };
-
-                    for (entity_id, game_entity) in game_entities {
-                        render_entity_label(
-                            ui,
-                            editor,
-                            ecs_world,
-                            ui_state,
-                            entity_id,
-                            &game_entity,
-                            events,
-                        );
-
-                        fn render_children(
-                            ui: &mut egui::Ui,
-                            editor: &mut Editor,
-                            ecs_world: &mut ECSWorld,
-                            ui_state: &mut EditorUIState,
-                            events: &mut Events,
-                            entity_id: Entity,
-                        ) {
-                            let Ok(children_query) = ecs_world.get::<&EntityChildren>(entity_id)
-                            else {
-                                return;
-                            };
-                            let children = children_query.children.clone();
-                            drop(children_query);
-                            ui.horizontal(|ui| {
-                                ui.add_space(12.0);
-                                ui.vertical(|ui| {
-                                    for child in children {
-                                        let child_game_entity = ecs_world.get::<&GameEntity>(child);
-                                        if child_game_entity.is_err() {
-                                            continue;
-                                        }
-                                        let ge =
-                                            child_game_entity.as_ref().unwrap().deref().clone();
-                                        drop(child_game_entity);
-                                        render_entity_label(
-                                            ui, editor, ecs_world, ui_state, child, &ge, events,
-                                        );
-                                        render_children(
-                                            ui, editor, ecs_world, ui_state, events, child,
-                                        );
-                                    }
-                                });
-                            });
-                        };
-
-                        render_children(ui, editor, ecs_world, ui_state, events, entity_id);
-                    }
-                });
-            //ui.label(egui::RichText::new("Performance:").size(8.0));
-            //ui.label(format!("FPS: {}", debug_state.fps));
-            //ui.label(format!("Frame time: {}ms", debug_state.delta_time_ms));
-            //ui.label(format!("Voxel data allocation: {}", total_allocation_str));
         })
         .response
         .rect

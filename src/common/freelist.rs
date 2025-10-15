@@ -235,7 +235,14 @@ impl<T> FreeList<T> {
         }
     }
 
-    pub fn iter_with_handle(&mut self) -> FreeListHandleIteratorMut<'_, T> {
+    pub fn iter_with_handle(&self) -> FreeListIteratorHandle<'_, T> {
+        FreeListIteratorHandle {
+            free_list: self,
+            left: 0,
+        }
+    }
+
+    pub fn iter_with_handle_mut(&mut self) -> FreeListHandleIteratorMut<'_, T> {
         FreeListHandleIteratorMut {
             free_list: std::ptr::from_mut(self),
             left: 0,
@@ -282,6 +289,35 @@ impl<'a, T> Iterator for FreeListIterator<'a, T> {
         self.left += 1;
 
         return Some(val.deref());
+    }
+}
+
+pub struct FreeListIteratorHandle<'a, T> {
+    free_list: &'a FreeList<T>,
+    left: usize,
+}
+
+impl<'a, T> Iterator for FreeListIteratorHandle<'a, T> {
+    type Item = (FreeListHandle<T>, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let free_list = self.free_list;
+        if free_list.data.is_empty() || self.left >= free_list.data.len() {
+            return None;
+        }
+
+        let node = &free_list.data[self.left];
+        if node.is_null() {
+            self.left += 1;
+            return self.next();
+        }
+
+        // Safety:
+        let val = unsafe { node.data.assume_init_ref() };
+        let handle = FreeListHandle::new(self.left as u32, node.generation);
+        self.left += 1;
+
+        return Some((handle, val.deref()));
     }
 }
 
