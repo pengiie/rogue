@@ -5,11 +5,12 @@ use nalgebra::{Translation3, Vector3};
 use crate::engine::{
     editor::{editor::Editor, events::EventEditorZoom},
     entity::{
+        component::GameComponentCloneContext,
         ecs_world::{ECSWorld, Entity},
         EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
     },
     event::Events,
-    physics::transform::Transform,
+    physics::{physics_world::PhysicsWorld, transform::Transform},
     ui::EditorUIState,
     voxel::{factory::VoxelModelFactory, voxel_world::VoxelWorld},
 };
@@ -21,6 +22,7 @@ pub fn entity_hierarchy_ui(
     voxel_world: &mut VoxelWorld,
     ui_state: &mut EditorUIState,
     events: &mut Events,
+    physics_world: &mut PhysicsWorld,
 ) {
     ui.horizontal(|ui| {
         ui.add(egui::Label::new(
@@ -49,7 +51,7 @@ pub fn entity_hierarchy_ui(
                     Transform::with_translation(Translation3::from(
                         editor.editor_camera.rotation_anchor,
                     )),
-                    RenderableVoxelEntity::new(model_id),
+                    RenderableVoxelEntity::new(None, false, model_id),
                 ));
             }
         });
@@ -75,9 +77,20 @@ pub fn entity_hierarchy_ui(
                     entity_id,
                     &game_entity,
                     events,
+                    voxel_world,
+                    physics_world,
                 );
 
-                render_children(ui, editor, ecs_world, ui_state, events, entity_id);
+                render_children(
+                    ui,
+                    editor,
+                    ecs_world,
+                    ui_state,
+                    events,
+                    entity_id,
+                    voxel_world,
+                    physics_world,
+                );
             }
         });
     //ui.label(egui::RichText::new("Performance:").size(8.0));
@@ -94,6 +107,8 @@ fn render_children(
     ui_state: &mut EditorUIState,
     events: &mut Events,
     entity_id: Entity,
+    voxel_world: &mut VoxelWorld,
+    physics_world: &mut PhysicsWorld,
 ) {
     let Ok(children_query) = ecs_world.get::<&EntityChildren>(entity_id) else {
         return;
@@ -110,8 +125,27 @@ fn render_children(
                 }
                 let ge = child_game_entity.as_ref().unwrap().deref().clone();
                 drop(child_game_entity);
-                render_entity_label(ui, editor, ecs_world, ui_state, child, &ge, events);
-                render_children(ui, editor, ecs_world, ui_state, events, child);
+                render_entity_label(
+                    ui,
+                    editor,
+                    ecs_world,
+                    ui_state,
+                    child,
+                    &ge,
+                    events,
+                    voxel_world,
+                    physics_world,
+                );
+                render_children(
+                    ui,
+                    editor,
+                    ecs_world,
+                    ui_state,
+                    events,
+                    child,
+                    voxel_world,
+                    physics_world,
+                );
             }
         });
     });
@@ -126,6 +160,8 @@ fn render_entity_label(
     entity_id: Entity,
     game_entity: &GameEntity,
     events: &mut Events,
+    voxel_world: &mut VoxelWorld,
+    physics_world: &mut PhysicsWorld,
 ) {
     let label_id = egui::Id::new(format!(
         "left_panel_{}_{}_entity_label",
@@ -159,14 +195,23 @@ fn render_entity_label(
 
     label.context_menu(|ui| {
         if ui.button("Copy").clicked() {
-            todo!();
+            log::error!("TODOOOOOOOOOOOO Enityt copying is not implement yet!!!!!");
+            ui.close_menu();
         }
         if ui.button("Duplicate").clicked() {
-            todo!();
+            editor.selected_entity = Some(ecs_world.duplicate(
+                entity_id,
+                GameComponentCloneContext {
+                    voxel_world,
+                    collider_registry: &mut physics_world.colliders,
+                },
+            ));
+            ui.close_menu();
         }
         if ui.button("Delete").clicked() {
             ecs_world.despawn(entity_id);
             editor.selected_entity = None;
+            ui.close_menu();
         }
     });
 

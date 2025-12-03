@@ -13,7 +13,7 @@ use crate::{
             attachment::{
                 Attachment, AttachmentInfoMap, AttachmentMap, BuiltInMaterial, PTMaterial,
             },
-            cursor::{VoxelEditEntityInfo, VoxelEditInfo},
+            voxel_registry::VoxelModelId,
             voxel_world::{VoxelEdit, VoxelTraceInfo, VoxelWorld},
         },
     },
@@ -272,4 +272,23 @@ impl EditorWorldEditing {
             }
         }
     }
+}
+
+pub struct VoxelEditInfo {
+    // Minimum bottom-down-left origin.
+    pub world_voxel_position: Vector3<i32>,
+    // Length in voxels of the edit.
+    pub world_voxel_length: Vector3<u32>,
+    // Known attachment map so we can skip checking that for each voxel.
+    pub attachment_map: AttachmentInfoMap,
+}
+
+pub struct VoxelEditEntityInfo {
+    pub model_id: VoxelModelId,
+    // Minimum bottom-down-left origin.
+    pub local_voxel_pos: Vector3<i32>,
+    // Length in voxels of the edit.
+    pub voxel_length: Vector3<u32>,
+    // Known attachment map so we can skip checking that for each voxel.
+    pub attachment_map: AttachmentInfoMap,
 }

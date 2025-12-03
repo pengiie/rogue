@@ -275,6 +275,18 @@ impl DynVecCloneable {
         return self.size == 0;
     }
 
+    /// Clones the element at the specified index and returns the index of the new cloned element.
+    pub fn clone_element(&mut self, index: usize) -> usize {
+        let src_ptr = unsafe { self.data.offset((self.type_info.stride() * index) as isize) };
+        let cloned_data = unsafe { (self.type_info.clone_fn)(src_ptr.as_ptr()) };
+        let cloned_data_bytes = unsafe {
+            std::slice::from_raw_parts(std::ptr::from_ref(&cloned_data as &u8), self.type_info.size)
+        };
+        let index = self.len();
+        self.push_unchecked(cloned_data_bytes);
+        return index;
+    }
+
     fn grow(&mut self, grow_amount: usize) {
         let new_capacity = self.capacity + grow_amount;
 
@@ -407,6 +419,8 @@ impl TypeInfoCloneable {
             std::ptr::drop_in_place(ptr as *mut T);
         }
 
+        /// Returns Box ptr is correctly aligned for this type and can be safety interpreted as a
+        /// pointer to this type, it is just erased to a u8.
         unsafe fn clone_fn<T: Clone>(ptr: *const u8) -> Box<u8> {
             let cloned_box = Box::new((ptr as *const T).as_ref().unwrap().clone());
             return Box::from_raw(Box::into_raw(cloned_box) as *mut u8);
@@ -427,6 +441,12 @@ impl TypeInfoCloneable {
 
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    pub fn layout(&self, count: usize) -> std::alloc::Layout {
+        assert!(count > 0);
+        let stride = if count == 0 { self.size } else { self.stride() };
+        std::alloc::Layout::from_size_align(stride * count, self.alignment).unwrap()
     }
 
     pub unsafe fn drop(&self, data: *mut u8) {

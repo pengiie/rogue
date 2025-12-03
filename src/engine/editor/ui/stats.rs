@@ -12,7 +12,7 @@ use crate::{
         voxel::{voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
-    session::Session,
+    session::EditorSession,
 };
 
 pub fn stats_pane(
@@ -22,7 +22,7 @@ pub fn stats_pane(
     voxel_world: &mut VoxelWorld,
     voxel_world_gpu: &mut VoxelWorldGpu,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
     time: &Time,
 ) {

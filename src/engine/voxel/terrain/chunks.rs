@@ -12,12 +12,10 @@ use log::debug;
 use nalgebra::{zero, SimdValue, Vector2, Vector3};
 use rogue_macros::Resource;
 
+use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::ray::{Ray, RayDDA};
 use crate::{
-    common::{
-        color::Color,
-        morton,
-        ring_queue::RingQueue,
-    },
+    common::{color::Color, morton, ring_queue::RingQueue},
     consts,
     engine::{
         asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
@@ -39,11 +37,9 @@ use crate::{
         },
         window::time::Timer,
     },
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::{Ray, RayDDA};
 
 #[derive(Hash, PartialEq, Eq)]
 pub struct ChunkTicket {
@@ -243,10 +239,7 @@ impl VoxelRegionLeafNode {
     }
 
     pub fn new_air() -> Self {
-        Self::Existing {
-            uuid: uuid::Uuid::new_v4(),
-            model: None,
-        }
+        Self::Empty
     }
 
     pub fn is_empty(&self) -> bool {
@@ -359,14 +352,14 @@ impl VoxelChunks {
         &mut self,
         assets: &mut Assets,
         registry: &VoxelModelRegistry,
-        session: &Session,
+        session: &EditorSession,
     ) {
         assert!(!self.is_saving());
 
         let Some(project_dir) = &session.project_save_dir else {
             return;
         };
-        let Some(terrain_dir) = &session.terrain_dir else {
+        let Some(terrain_dir) = &session.project.terrain_asset_path else {
             return;
         };
         for region_pos in self.edited_regions.drain() {
@@ -476,11 +469,11 @@ impl VoxelChunks {
         &mut self,
         chunk_pos: Vector3<i32>,
         assets: &mut Assets,
-        session: &Session,
+        session: &EditorSession,
     ) {
         let Some(chunk_node) = self.get_chunk_node(chunk_pos) else {
             let chunk_region = Self::chunk_to_region_pos(&chunk_pos);
-            if let Some(terrain_dir) = &session.terrain_dir {
+            if let Some(terrain_dir) = &session.project.terrain_asset_path {
                 if !self.waiting_io_regions.contains_key(&chunk_region) {
                     let region_asset_handle =
                         assets.load_asset::<VoxelChunkRegionData>(VoxelChunks::region_asset_path(
@@ -515,12 +508,13 @@ impl VoxelChunks {
                     let chunk_asset_handle =
                         assets.load_asset::<VoxelModelSFTCompressed>(Self::chunk_asset_path(
                             session.project_save_dir.clone().unwrap(),
-                            session.terrain_dir.clone().unwrap(),
+                            session.project.terrain_asset_path.clone().unwrap(),
                             uuid,
                         ));
                     self.waiting_io_chunks.insert(chunk_pos, chunk_asset_handle);
                     return;
                 };
+
                 if self.renderable_chunks.try_load_chunk(&chunk_pos, *model_id) {
                     Self::try_update_chunk_normal(&mut self.renderable_chunks, &chunk_pos);
                 }
@@ -538,7 +532,7 @@ impl VoxelChunks {
             project_dir,
             format!(
                 "{}::region_{}_{}_{}::rog",
-                terrain_dir_path.asset_path.unwrap(),
+                &terrain_dir_path.asset_path.unwrap().asset_path,
                 region_pos.x,
                 region_pos.y,
                 region_pos.z
@@ -556,13 +550,13 @@ impl VoxelChunks {
             project_dir,
             format!(
                 "{}::chunk_{}::rvox",
-                terrain_dir_path.asset_path.unwrap(),
+                &terrain_dir_path.asset_path.unwrap().asset_path,
                 uuid.to_string()
             ),
         )
     }
 
-    pub fn process_waiting_io_regions(&mut self, assets: &mut Assets, session: &Session) {
+    pub fn process_waiting_io_regions(&mut self, assets: &mut Assets, session: &EditorSession) {
         let mut to_remove_waiting_regions = Vec::new();
         for (region_pos, asset_handle) in self.waiting_io_regions.iter() {
             let status = assets.get_asset_status(asset_handle);
@@ -599,7 +593,7 @@ impl VoxelChunks {
                     if let VoxelRegionLeafNode::Existing { uuid, model } = chunk_node {
                         assert!(model.is_none(), "We shouldn't be loading this chunk if it already has an existing model.");
                         let chunk_asset_handle = assets.load_asset::<VoxelModelSFTCompressed>(
-                            Self::chunk_asset_path(session.project_save_dir.clone().unwrap(), session.terrain_dir.clone().expect("If the region was loaded then a directory for the terrain must exist."), uuid),
+                            Self::chunk_asset_path(session.project_save_dir.clone().unwrap(), session.project.terrain_asset_path.clone().expect("If the region was loaded then a directory for the terrain must exist."), uuid),
                         );
                         self.waiting_io_chunks.insert(chunk_pos, chunk_asset_handle);
                     }
@@ -737,7 +731,7 @@ impl VoxelChunks {
         &mut self,
         assets: &mut Assets,
         registry: &mut VoxelModelRegistry,
-        session: &Session,
+        session: &EditorSession,
     ) {
         let mut to_remove_handles = Vec::new();
         for handle in self.waiting_save_handles.iter() {

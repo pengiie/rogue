@@ -12,6 +12,7 @@ use crate::{
     },
     engine::{
         asset::{asset::AssetPath, repr::voxel::any::VoxelModelAnyAsset},
+        entity::RenderableVoxelEntity,
         voxel::voxel_allocator::VoxelDataAllocator,
     },
 };
@@ -67,6 +68,15 @@ pub struct VoxelModelInfo {
     // The index within the archetype the model is assigned to.
     archetype_index: u64,
     pub asset_path: Option<AssetPath>,
+}
+
+pub struct VoxelModelTypeInfo {
+    // Vtable to VoxelModelImpl.
+    model_impl_vtable: *mut (),
+    model_type_info: TypeInfoCloneable,
+    // Vtable to VoxelModelGpuImpl.
+    model_gpu_impl_vtable: *mut (),
+    model_gpu_type_info: TypeInfo,
 }
 
 pub struct VoxelModelRegistry {
@@ -141,6 +151,24 @@ impl VoxelModelRegistry {
                 .remove(info.archetype_index);
         }
         self.voxel_model_info.remove(info_handle);
+    }
+
+    fn convert_model<T: VoxelModelImplConcrete, C: VoxelModelImplConcrete + for<'a> From<&'a T>>(
+        &mut self,
+        renderable_voxel_model: &mut RenderableVoxelEntity,
+        info: &VoxelModelInfo,
+        original_id: VoxelModelId,
+    ) {
+        //let converted_model = C::from(voxel_world.registry.get_model::<T>(original_id));
+        //let converted_model_id = voxel_world
+        //    .registry
+        //    .register_renderable_voxel_model(&info.name, VoxelModel::new(converted_model));
+        //voxel_world
+        //    .registry
+        //    .set_voxel_model_asset_path(converted_model_id, info.asset_path.clone());
+        //renderable_voxel_model.set_model(converted_model_id);
+
+        ////voxel_world.to_update_normals.insert(converted_model_id);
     }
 
     // TODO: Add more methods to the Impl so we don't have like 50 match statements.

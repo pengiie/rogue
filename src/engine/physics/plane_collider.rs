@@ -2,7 +2,8 @@ use nalgebra::{Rotation3, UnitQuaternion, Vector2, Vector3};
 
 use super::{capsule_collider::CapsuleCollider, transform::Transform};
 use crate::common::geometry::aabb::AABB;
-use crate::engine::physics::collider::{Collider, ColliderConcrete, ColliderType, CollisionInfo};
+use crate::engine::physics::collider::{Collider, ColliderMethods, ContactManifold, ContactPair};
+use crate::engine::voxel::voxel_world::VoxelWorld;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -24,35 +25,10 @@ impl Default for PlaneCollider {
 
 impl PlaneCollider {}
 
-impl ColliderConcrete for PlaneCollider {
-    fn concrete_collider_type() -> ColliderType {
-        ColliderType::Plane
-    }
-}
-
 impl Collider for PlaneCollider {
-    fn test_collision(
-        &self,
-        other: &dyn Collider,
-        transform_a: &Transform,
-        transform_b: &Transform,
-    ) -> Option<CollisionInfo> {
-        match other.collider_type() {
-            ColliderType::Capsule => {
-                let capsule = other.downcast_ref::<CapsuleCollider>().unwrap();
+    const NAME: &str = "PlaneCollider";
 
-                Some(CollisionInfo {
-                    penetration_depth: Vector3::zeros(),
-                    contact_points_a: todo!(),
-                    contact_points_b: todo!(),
-                })
-            }
-            _ => None,
-            ColliderType::Null | ColliderType::Plane => None,
-        }
-    }
-
-    fn aabb(&self, world_transform: &Transform) -> AABB {
+    fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB {
         let rot = UnitQuaternion::from_rotation_matrix(
             &Rotation3::rotation_between(&Vector3::y(), &self.normal)
                 .unwrap_or(Rotation3::identity()),
@@ -63,7 +39,17 @@ impl Collider for PlaneCollider {
         return AABB::new_two_point(min, max);
     }
 
-    fn collider_type(&self) -> ColliderType {
-        ColliderType::Plane
+    fn serialize_collider(
+        &self,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
+
+    unsafe fn deserialize_collider(
+        de: &mut dyn erased_serde::Deserializer,
+        dst_ptr: *mut u8,
+    ) -> erased_serde::Result<()> {
+        todo!()
     }
 }

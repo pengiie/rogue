@@ -4,8 +4,11 @@ use nalgebra::{UnitQuaternion, Vector3};
 
 use crate::common::geometry::aabb::AABB;
 use crate::engine::editor::ui::dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog;
+use crate::engine::event::Events;
+use crate::engine::physics::collider_component::EntityColliders;
 use crate::engine::voxel::sft::VoxelModelSFT;
 use crate::engine::voxel::sft_compressed::VoxelModelSFTCompressed;
+use crate::engine::voxel::voxel_events::EventVoxelRenderableEntityLoad;
 use crate::{
     engine::{
         asset::{
@@ -22,7 +25,6 @@ use crate::{
         physics::{
             box_collider::BoxCollider,
             capsule_collider::CapsuleCollider,
-            collider::{ColliderType, Colliders},
             collider_registry::ColliderId,
             physics_world::{self, PhysicsWorld},
             plane_collider::PlaneCollider,
@@ -38,7 +40,7 @@ use crate::{
             voxel_world::VoxelWorld,
         },
     },
-    session::Session,
+    session::EditorSession,
 };
 
 fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
@@ -148,8 +150,9 @@ pub fn entity_properties_pane(
     voxel_world: &mut VoxelWorld,
     physics_world: &mut PhysicsWorld,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
+    events: &mut Events,
     scripts: &mut Scripts,
 ) {
     'existing_model_dialog_rx: {
@@ -194,11 +197,11 @@ pub fn entity_properties_pane(
                 );
                 voxel_world
                     .registry
-                    .set_voxel_model_asset_path(model_id, Some(asset_path));
+                    .set_voxel_model_asset_path(model_id, Some(asset_path.clone()));
                 if let Ok(mut renderable) = ecs_world
                     .get::<&mut RenderableVoxelEntity>(ui_state.open_model_dialog.associated_entity)
                 {
-                    renderable.set_id(model_id);
+                    renderable.set_model(Some(asset_path.asset_path.unwrap()), model_id);
                 }
                 voxel_world.to_update_normals.insert(model_id);
             }
@@ -302,7 +305,7 @@ pub fn entity_properties_pane(
                     ui.close_menu();
                 }
                 if ui.button("Colliders").clicked() {
-                    ecs_world.insert_one(*selected_entity, Colliders::new());
+                    ecs_world.insert_one(*selected_entity, EntityColliders::new());
                     ui.close_menu();
                 }
             });
@@ -331,6 +334,7 @@ pub fn entity_properties_pane(
                 voxel_world,
                 session,
                 assets,
+                events,
                 selected_entity,
             );
             camera_component(ui, ui_state, ecs_world, session, selected_entity);
@@ -360,7 +364,10 @@ pub fn entity_properties_pane(
                     if scriptable.scripts.is_empty() {
                     } else {
                         for asset_path in &scriptable.scripts {
-                            if ui.label(asset_path.asset_path.as_ref().unwrap()).clicked() {}
+                            if ui
+                                .label(&asset_path.asset_path.as_ref().unwrap().asset_path)
+                                .clicked()
+                            {}
                         }
                     }
                 });
@@ -530,7 +537,8 @@ fn convert_model<T: VoxelModelImplConcrete, C: VoxelModelImplConcrete + for<'a> 
     voxel_world
         .registry
         .set_voxel_model_asset_path(converted_model_id, info.asset_path.clone());
-    renderable_voxel_model.set_id(converted_model_id);
+    renderable_voxel_model.set_model(None, converted_model_id);
+
     voxel_world.to_update_normals.insert(converted_model_id);
 }
 
@@ -641,8 +649,9 @@ fn renderable_component(
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,
     voxel_world: &mut VoxelWorld,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
+    events: &mut Events,
     selected_entity: &Entity,
 ) {
     let mut remove_renderable = false;
@@ -654,20 +663,23 @@ fn renderable_component(
                 ui.label("Voxel model:");
 
                 // User selected model name with submenu.
-                let text = if let Some(model_id) = renderable_voxel_model.voxel_model_id() {
-                    let info = voxel_world.registry.get_model_info(model_id).unwrap();
-                    info.asset_path
-                        .as_ref()
-                        .map(|path| {
-                            format!(
-                                "/{}",
-                                path.path()
-                                    .strip_prefix(&session.project_assets_dir().unwrap())
-                                    .unwrap()
-                                    .to_string_lossy()
-                            )
-                        })
-                        .unwrap_or("In memory (unsaved)".to_string())
+                let text = if let Some(asset_path) = renderable_voxel_model.model_asset_path() {
+                    let status = if renderable_voxel_model.voxel_model_id().is_none() {
+                        " (Unloaded)".to_owned()
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{}{}",
+                        asset_path
+                            .as_relative_path()
+                            .to_string_lossy()
+                            .strip_prefix(".")
+                            .unwrap(),
+                        status
+                    )
+                } else if renderable_voxel_model.voxel_model_id().is_some() {
+                    "In memory (unsaved)".to_owned()
                 } else {
                     "None".to_owned()
                 };
@@ -684,9 +696,14 @@ fn renderable_component(
                     if ui.button("Choose existing").clicked() {
                         let send = ui_state.open_model_dialog.tx_file_name.clone();
                         ui_state.open_model_dialog.associated_entity = *selected_entity;
+                        let asset_dir = session
+                            .project_assets_dir()
+                            .expect("Project directory should exist if this is clicked.")
+                            .clone();
                         std::thread::spawn(|| {
                             pollster::block_on(async move {
                                 let file = rfd::AsyncFileDialog::new()
+                                    .set_directory(asset_dir)
                                     .add_filter("RVox", &["rvox"])
                                     .pick_file()
                                     .await;
@@ -748,10 +765,27 @@ fn renderable_component(
                     // the models resizing rules.
                     if ui
                         .add_enabled(model_info_exists, egui::Button::new("Resize/Rebound"))
-                        .on_hover_text("Move around and resize the model bounds.")
+                        .on_hover_text(
+                            "Move around and resize the model bounds. Model must be dynamic.",
+                        )
                         .clicked()
                     {
                         // TODO: Edit the model bounds.
+                    }
+
+                    let has_asset_path = renderable_voxel_model.model_asset_path().is_some();
+                    if ui
+                        .add_enabled(has_asset_path, egui::Button::new("Reload"))
+                        .on_hover_text(
+                            "Reloads the model for this entity from the defined asset path.",
+                        )
+                        .clicked()
+                    {
+                        events.push(EventVoxelRenderableEntityLoad {
+                            entity: *selected_entity,
+                            reload: true,
+                        });
+                        ui.close_menu();
                     }
                 });
             });
@@ -795,7 +829,7 @@ fn camera_component(
     ui: &mut egui::Ui,
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,
-    session: &mut Session,
+    session: &mut EditorSession,
     selected_entity: &Entity,
 ) {
     let mut remove_camera = false;
@@ -811,19 +845,10 @@ fn camera_component(
     }
     if remove_camera {
         ecs_world.remove_one::<Camera>(*selected_entity);
-        if Some(*selected_entity) == session.game_camera {
-            session.game_camera = None;
+        if Some(*selected_entity) == session.project.game_camera {
+            session.project.game_camera = None;
         }
     } // End Camera
-}
-
-fn collider_type_to_str(collider_type: ColliderType) -> &'static str {
-    return match collider_type {
-        ColliderType::Null => "Null (oops)",
-        ColliderType::Capsule => "Capsule",
-        ColliderType::Plane => "Plane",
-        ColliderType::Box => "Box",
-    };
 }
 
 fn capsule_collider_ui(
@@ -961,7 +986,7 @@ fn colliders_component(
     selected_entity: &Entity,
 ) {
     let mut remove_colliders = false;
-    if let Ok(mut colliders) = ecs_world.get::<&mut Colliders>(*selected_entity) {
+    if let Ok(mut colliders) = ecs_world.get::<&mut EntityColliders>(*selected_entity) {
         component_widget(ui, "Colliders", Some(&mut remove_colliders), |ui| {
             ui.menu_button("Add collider", |ui| {
                 if ui.button("Capsule collider").clicked() {
@@ -991,10 +1016,14 @@ fn colliders_component(
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for collider_id in colliders.colliders.iter() {
+                        let collider_name = physics_world
+                            .colliders
+                            .collider_names
+                            .get(&collider_id.collider_type)
+                            .map_or("UnregisteredCollider (uh oh)", |s| s);
                         let mut text = egui::RichText::new(format!(
                             "{} collider #{}",
-                            collider_type_to_str(collider_id.collider_type),
-                            collider_id.index
+                            collider_name, collider_id.index
                         ));
                         if let Some(selected_collider_id) = &ui_state.selected_collider {
                             if collider_id == selected_collider_id {
@@ -1008,23 +1037,34 @@ fn colliders_component(
                 });
             ui.separator();
             ui.label("Currently selected collider:");
+
+            // If the selected entity was switched, ensure the selected collider is as well.
+            if let Some(selected_collider) = &ui_state.selected_collider {
+                if colliders
+                    .colliders
+                    .iter()
+                    .find(|id| *id == selected_collider)
+                    .is_none()
+                {
+                    ui_state.selected_collider = None;
+                }
+            }
+
             match &ui_state.selected_collider {
                 Some(collider_id) => {
+                    let collider_name = physics_world
+                        .colliders
+                        .collider_names
+                        .get(&collider_id.collider_type)
+                        .map_or("UnregisteredCollider (uh oh)", |s| s);
                     let mut text = egui::RichText::new(format!(
                         "{} collider #{}",
-                        collider_type_to_str(collider_id.collider_type),
-                        collider_id.index
+                        collider_name, collider_id.index
                     ));
-                    match collider_id.collider_type {
-                        ColliderType::Null => {}
-                        ColliderType::Capsule => {
-                            capsule_collider_ui(collider_id, physics_world, ui);
-                        }
-                        ColliderType::Plane => {
-                            plane_collider_ui(collider_id, physics_world, ui);
-                        }
-                        ColliderType::Box => box_collider_ui(collider_id, physics_world, ui),
-                    }
+                    physics_world
+                        .colliders
+                        .get_collider_dyn(collider_id)
+                        .collider_component_ui(ui);
                 }
                 None => {
                     ui.label("None selected");
@@ -1034,6 +1074,6 @@ fn colliders_component(
         });
     }
     if remove_colliders {
-        ecs_world.remove_one::<Colliders>(*selected_entity);
+        ecs_world.remove_one::<EntityColliders>(*selected_entity);
     } // End colliders
 }

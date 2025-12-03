@@ -12,7 +12,13 @@ use super::{
     rigid_body::{ForceType, RigidBody},
     transform::Transform,
 };
-use crate::{common::geometry::aabb::AABB, engine::physics::rigid_body::RigidBodyType};
+use crate::{
+    common::geometry::{aabb::AABB, shape::Shape},
+    engine::{
+        physics::{collider_component::EntityColliders, rigid_body::RigidBodyType},
+        voxel::voxel_world::VoxelWorld,
+    },
+};
 use crate::{
     common::{
         dyn_vec::{DynVecCloneable, TypeInfo},
@@ -25,12 +31,12 @@ use crate::{
             ecs_world::{ECSWorld, Entity},
             EntityChildren, EntityParent,
         },
-        physics::{collider::Colliders, collider_registry::ColliderRegistry},
+        physics::collider_registry::ColliderRegistry,
         resource::{Res, ResMut},
         voxel::terrain::chunks::VoxelChunks,
         window::time::Instant,
     },
-    session::Session,
+    session::EditorSession,
 };
 
 pub enum PhysicsTimestep {
@@ -96,7 +102,7 @@ impl PhysicsWorld {
         ecs_world: Res<ECSWorld>,
     ) {
         for (entity, (transform, colliders)) in ecs_world
-            .query::<(&Transform, &Colliders)>()
+            .query::<(&Transform, &EntityColliders)>()
             .without::<(EntityParent,)>()
             .into_iter()
         {
@@ -108,7 +114,7 @@ impl PhysicsWorld {
     }
 
     pub fn validate_colliders_exist(&self, ecs_world: &mut ECSWorld) {
-        for (entity, colliders) in ecs_world.query_mut::<&Colliders>().into_iter() {
+        for (entity, colliders) in ecs_world.query_mut::<&EntityColliders>().into_iter() {
             for collider_id in &colliders.colliders {
                 assert!(self.colliders.contains_id(collider_id));
             }
@@ -118,6 +124,7 @@ impl PhysicsWorld {
     pub fn do_physics_update(
         mut physics_world: ResMut<PhysicsWorld>,
         mut ecs_world: ResMut<ECSWorld>,
+        voxel_world: Res<VoxelWorld>,
     ) {
         let timestep = match physics_world.settings.timestep {
             PhysicsTimestep::Max(duration) => {
@@ -144,8 +151,10 @@ impl PhysicsWorld {
 
         physics_world
             .colliders
-            .update_entity_collider_positions(&mut ecs_world);
+            .update_entity_collider_positions(&mut ecs_world, &voxel_world);
 
+        // Broad phase detection
+        let mut broad_phase_collisions = Vec::new();
         let mut tested_collision = HashSet::new();
         for (_, bin) in physics_world.colliders.bins.iter() {
             for (entity_a, collider_id_a) in bin {
@@ -171,44 +180,24 @@ impl PhysicsWorld {
                         continue;
                     };
 
+                    let world_transform_a = ecs_world.get_world_transform(*entity_a, &transform_a);
+                    let world_transform_b = ecs_world.get_world_transform(*entity_a, &transform_b);
+
                     let collider_a = physics_world.colliders.get_collider_dyn(collider_id_a);
                     let collider_b = physics_world.colliders.get_collider_dyn(collider_id_b);
-                    let Some(collision_info) =
-                        collider_a.test_collision(collider_b, &transform_a, &transform_b)
-                    else {
-                        continue;
-                    };
-                    if collision_info.penetration_depth.norm_squared() == 0.0 {
-                        continue;
+                    let could_collide = collider_a
+                        .aabb(&world_transform_a, &voxel_world)
+                        .intersects_aabb(&collider_b.aabb(&world_transform_b, &voxel_world));
+                    if could_collide {
+                        broad_phase_collisions
+                            .push([(entity_a, collider_a), (entity_b, collider_b)])
                     }
-
-                    let normal = collision_info.penetration_depth.normalize();
-                    let relative_velocity = rigid_body_b.velocity() - rigid_body_a.velocity();
-                    let relative_velocity_along_normal = relative_velocity.dot(&normal);
-
-                    let restitution = rigid_body_a.restitution.min(rigid_body_b.restitution);
-                    let inv_mass_a = rigid_body_a.inv_mass();
-                    let inv_mass_b = rigid_body_b.inv_mass();
-
-                    let impulse = -((1.0 + restitution) * relative_velocity_along_normal)
-                        / (inv_mass_a + inv_mass_b);
-                    let impulse_vec = impulse * normal;
-
-                    // Apply the normal velocity.
-                    rigid_body_a.velocity -= inv_mass_a * impulse_vec;
-                    rigid_body_b.velocity += inv_mass_b * impulse_vec;
-
-                    const POSITION_CORRECTION_FACTOR: f32 = 0.8;
-                    // Correct position so objects are no longer penetrating.
-                    let weighting_a =
-                        POSITION_CORRECTION_FACTOR * (inv_mass_a / (inv_mass_a + inv_mass_b));
-                    let weighting_b =
-                        POSITION_CORRECTION_FACTOR * (inv_mass_b / (inv_mass_a + inv_mass_b));
-                    transform_a.position -= weighting_a * collision_info.penetration_depth;
-                    transform_b.position += weighting_b * collision_info.penetration_depth;
                 }
             }
         }
+
+        // Narrow-phase contact point generation.
+        for [(entity_a, collider_a), (entity_b, collider_b)] in broad_phase_collisions {}
 
         physics_world.last_timestep = physics_world.last_timestep + timestep;
     }

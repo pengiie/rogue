@@ -4,7 +4,6 @@ use super::resource::ResourceBank;
 
 pub mod attachment;
 pub mod chunk_generator;
-pub mod cursor;
 pub mod factory;
 pub mod flat;
 pub mod material;
@@ -16,6 +15,7 @@ pub mod terrain;
 pub mod thc;
 pub mod voxel;
 pub mod voxel_allocator;
+pub mod voxel_events;
 pub mod voxel_registry;
 pub mod voxel_transform;
 pub mod voxel_world;

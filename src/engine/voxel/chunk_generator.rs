@@ -10,12 +10,11 @@ use crate::{
         self,
         voxel::{VOXELS_PER_METER, VOXEL_METER_LENGTH},
     },
-    engine::voxel::attachment::BuiltInMaterial,
+    engine::{editor::brush::VoxelEditInfo, voxel::attachment::BuiltInMaterial},
 };
 
 use super::{
     attachment::{Attachment, AttachmentMap, PTMaterial},
-    cursor::VoxelEditInfo,
     flat::VoxelModelFlat,
     voxel_world::VoxelWorld,
 };

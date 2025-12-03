@@ -515,7 +515,11 @@ impl Renderer {
                 // Every minute is a rotation.
                 let rot_t = time.start_time().elapsed().as_secs_f32() / 60.0;
                 let sun_rot = UnitQuaternion::new(Vector3::z() * rot_t * f32::consts::TAU);
-                writer.write_uniform("u_frame.world_info.sun_dir", sun_rot * Vector3::y());
+                //writer.write_uniform("u_frame.world_info.sun_dir", sun_rot * Vector3::y());
+                writer.write_uniform::<Vector3<f32>>(
+                    "u_frame.world_info.sun_dir",
+                    Vector3::new(-1.0, -1.0, 0.0).normalize(),
+                );
 
                 // Voxel entity bindings
                 writer.write_binding(

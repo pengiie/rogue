@@ -15,8 +15,6 @@ use super::{
     voxel_transform::VoxelModelTransform,
     voxel_world::VoxelModelFlatEdit,
 };
-use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
 use crate::{
     common::color::{
         Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
@@ -31,6 +29,8 @@ use crate::{
         physics::transform::Transform,
     },
 };
+use crate::{common::geometry::aabb::AABB, engine::physics::voxel_collider::VoxelModelCollider};
+use crate::{common::geometry::ray::Ray, engine::physics::voxel_collider::VoxelModelColliderData};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum VoxelModelType {
@@ -86,6 +86,10 @@ pub trait VoxelModelImpl: Send + Sync + Any {
     }
     fn schema(&self) -> VoxelModelSchema;
     fn length(&self) -> Vector3<u32>;
+
+    fn physics_model(&self) -> VoxelModelColliderData {
+        unimplemented!()
+    }
 
     fn volume(&self) -> u64 {
         self.length().map(|x| x as u64).product()

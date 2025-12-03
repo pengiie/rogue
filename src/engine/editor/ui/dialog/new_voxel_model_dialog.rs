@@ -17,7 +17,7 @@ use crate::{
         ui::EditorUIState,
         voxel::{factory::VoxelModelFactory, voxel::VoxelModelType, voxel_world::VoxelWorld},
     },
-    session::Session,
+    session::EditorSession,
 };
 
 pub struct EditorNewVoxelModelDialog {
@@ -52,7 +52,7 @@ pub fn new_voxel_model_dialog_ui(
     ctx: &egui::Context,
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
     voxel_world: &mut VoxelWorld,
 ) {
@@ -191,11 +191,11 @@ pub fn new_voxel_model_dialog_ui(
                     );
                     voxel_world
                         .registry
-                        .set_voxel_model_asset_path(model_id, Some(asset_path));
+                        .set_voxel_model_asset_path(model_id, Some(asset_path.clone()));
                     if let Ok(mut renderable) =
                         ecs_world.get::<&mut RenderableVoxelEntity>(dialog.associated_entity)
                     {
-                        renderable.set_id(model_id);
+                        renderable.set_model(Some(asset_path.asset_path.unwrap()), model_id);
                     }
                     force_close = true;
                 }

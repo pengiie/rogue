@@ -29,7 +29,6 @@ pub struct ComponentArchetype {
     size: usize,
     // temporary counte for ids, will ikmplement free hashset later for removing so we reuse.
     temp: usize,
-    capacity: usize,
 }
 
 impl ComponentArchetype {
@@ -46,14 +45,12 @@ impl ComponentArchetype {
             global_indices: Vec::new(),
             size: 0,
             temp: 0,
-            capacity: 0,
         }
     }
 
-    pub fn get_entity(&self, index: usize) -> Entity {
+    pub fn get_entity(&self, index: usize) -> Option<Entity> {
         let entity = self.global_indices[index];
-        assert!(!entity.is_null());
-        return entity;
+        return (!entity.is_null()).then_some(entity);
     }
 
     fn get_type_index(&self, type_id: &TypeId) -> usize {
@@ -226,7 +223,7 @@ impl ComponentArchetype {
     }
 
     pub fn len(&self) -> usize {
-        self.size
+        self.global_indices.len()
     }
 }
 

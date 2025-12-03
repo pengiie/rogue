@@ -11,7 +11,7 @@ use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{
-    asset::repr::settings::SettingsAsset,
+    asset::repr::settings::UserSettingsAsset,
     graphics::{backend::GfxPresentMode, renderer::Antialiasing},
 };
 
@@ -71,14 +71,10 @@ pub struct Settings {
 
     pub graphics: GraphicsSettings,
     pub frame_rate_cap: u32,
-
-    // Setting for now since I don't like moving my player all the time.
-    pub player_position: Vector3<f32>,
-    pub player_rotation: Vector3<f32>,
 }
 
-impl From<&SettingsAsset> for Settings {
-    fn from(s: &SettingsAsset) -> Self {
+impl From<&UserSettingsAsset> for Settings {
+    fn from(s: &UserSettingsAsset) -> Self {
         Self {
             camera_fov: consts::FRAC_PI_2,
             mouse_sensitivity: s.mouse_sensitivity,
@@ -93,20 +89,16 @@ impl From<&SettingsAsset> for Settings {
 
             graphics: GraphicsSettings::default(),
             frame_rate_cap: 200,
-            player_position: s.player_position,
-            player_rotation: s.player_rotation,
         }
     }
 }
 
-impl From<&Settings> for SettingsAsset {
+impl From<&Settings> for UserSettingsAsset {
     fn from(s: &Settings) -> Self {
         Self {
             mouse_sensitivity: s.mouse_sensitivity,
             controller_sensitivity: s.controller_sensitity,
             chunk_render_distance: s.chunk_render_distance,
-            player_position: s.player_position,
-            player_rotation: s.player_rotation,
         }
     }
 }

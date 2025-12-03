@@ -65,7 +65,7 @@ use crate::{
             window::Window,
         },
     },
-    session::{Session, SessionState},
+    session::{EditorSession, SessionState},
     settings::Settings,
 };
 
@@ -136,7 +136,7 @@ pub fn egui_editor_ui(
     physics_world: &mut PhysicsWorld,
     mut editor: &mut Editor,
     mut ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
     window: &mut Window,
     time: &Time,
@@ -207,9 +207,15 @@ pub fn egui_editor_ui(
                 ui.menu_button("Help", |ui| {
                     ui.label("Good luck :)");
                 });
+
+                if let Some(project_dir) = &session.project_save_dir {
+                    ui.label(format!("{}", project_dir.to_string_lossy()));
+                } else {
+                    ui.label("Please perform File -> New to start a project.");
+                }
             });
+
             if session.project_save_dir.is_none() {
-                ui.label("Please perform File -> New to start a project.");
                 return;
             }
 
@@ -303,7 +309,15 @@ pub fn egui_editor_ui(
                 let mut available_rect = ui.available_rect_before_wrap();
                 available_rect.set_height(available_rect.height() / 2.0);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(available_rect), |ui| {
-                    entity_hierarchy_ui(ui, ecs_world, editor, voxel_world, ui_state, events);
+                    entity_hierarchy_ui(
+                        ui,
+                        ecs_world,
+                        editor,
+                        voxel_world,
+                        ui_state,
+                        events,
+                        physics_world,
+                    );
                 });
                 ui.separator();
                 asset_browser_ui(ui, session, ui_state);
@@ -333,6 +347,7 @@ pub fn egui_editor_ui(
                 assets,
                 &time,
                 &mut scripts,
+                events,
                 settings,
             );
         })
@@ -360,7 +375,7 @@ pub fn egui_editor_ui(
     return content_padding;
 }
 
-fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUIState) {
+fn bottom_editor_pane(ui: &mut egui::Ui, session: &EditorSession, state: &mut EditorUIState) {
     let Some(project_dir) = &session.project_save_dir else {
         return;
     };
@@ -371,18 +386,9 @@ fn bottom_editor_pane(ui: &mut egui::Ui, session: &Session, state: &mut EditorUI
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui: &mut egui::Ui| {
-            // TODO: Redo asset browser.
-            //ui.horizontal(|ui| {
-            //    ui.label(egui::RichText::new("Asset Browser").size(18.0));
-            //    ui.label(egui::RichText::new("|").size(16.0));
-            //    ui.label(
-            //        egui::RichText::new(format!(
-            //            "{}/",
-            //            state.asset_browser.sub_path.to_string_lossy()
-            //        ))
-            //        .size(14.0),
-            //    );
-            //});
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Asset Browser").size(18.0));
+            });
             //ui.horizontal(|ui| {
             //    let is_at_root = state.asset_browser.sub_path.to_string_lossy() != "./";
             //    if ui
@@ -476,7 +482,7 @@ fn world_pane(
     voxel_world: &mut VoxelWorld,
     mut assets: &mut Assets,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
 ) {
     'terrain_dialog_rx: {
         match ui_state.terrain_dialog.rx_file_name.try_recv() {
@@ -506,7 +512,7 @@ fn world_pane(
                 };
                 let is_dir_empty = read.count() == 0;
 
-                session.terrain_dir = Some(path);
+                session.project.terrain_asset_path = Some(path);
                 voxel_world.chunks.clear();
             }
             Err(_) => {}
@@ -521,7 +527,7 @@ fn world_pane(
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Terrain directory:");
-            let text = if let Some(terrain_dir) = &session.terrain_dir {
+            let text = if let Some(terrain_dir) = &session.project.terrain_asset_path {
                 format!(
                     "/{}",
                     terrain_dir
@@ -663,10 +669,11 @@ fn right_editor_pane(
     voxel_world_gpu: &mut VoxelWorldGpu,
     physics_world: &mut PhysicsWorld,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
     time: &Time,
     scripts: &mut Scripts,
+    events: &mut Events,
     settings: &mut Settings,
 ) {
     ui.horizontal(|ui| {
@@ -741,6 +748,7 @@ fn right_editor_pane(
                     ui_state,
                     session,
                     assets,
+                    events,
                     scripts,
                 );
             }
@@ -812,7 +820,7 @@ pub fn game_pane(
     editor: &mut Editor,
     voxel_world: &mut VoxelWorld,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
 ) {
     let content = |ui: &mut egui::Ui| {
@@ -820,7 +828,7 @@ pub fn game_pane(
         ui.horizontal(|ui| {
             ui.label("Main camera:");
             let existing_camera_name = 'existing_camera: {
-                let Some(game_camera_entity) = session.game_camera else {
+                let Some(game_camera_entity) = session.game_camera() else {
                     break 'existing_camera "Missing".to_owned();
                 };
                 let mut q = ecs_world
@@ -835,7 +843,7 @@ pub fn game_pane(
                 let mut q = ecs_world.query::<&GameEntity>().with::<(Camera,)>();
                 for (entity, game_entity) in q.into_iter() {
                     if ui.button(&game_entity.name).clicked() {
-                        session.game_camera = Some(entity);
+                        session.project.game_camera = Some(entity);
                         ui.close_menu();
                     }
                 }

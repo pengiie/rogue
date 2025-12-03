@@ -34,7 +34,7 @@ public float3 sample_sky(Ray ray) {
   const float3 dark_blue = float3(0.4, 0.5, 0.75);
   const float3 light_blue = float3(0.6, 0.78, 0.98);
 
-  let sun_dir = u_frame.world_info.sun_dir;
+  let sun_dir = normalize(float3(1.0, 1.0, 0.0));
   let t = saturate(sun_dir.y * 2.0);
 
   let sun_l = dot(ray.dir, normalize(sun_dir));

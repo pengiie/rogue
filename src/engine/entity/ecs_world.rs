@@ -5,6 +5,8 @@ use std::ptr::NonNull;
 use std::{collections::HashSet, ops::Deref};
 
 use rogue_macros::Resource;
+use serde::ser::{SerializeSeq, SerializeStruct};
+use uuid::Uuid;
 
 use super::{
     scripting::ScriptableEntity, EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
@@ -13,28 +15,32 @@ use crate::common::dyn_vec::TypeInfo;
 use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::common::geometry::obb::OBB;
 use crate::common::vtable;
+use crate::engine::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
+use crate::engine::asset::repr::project::ProjectSceneDeserializeContext;
 use crate::engine::entity::archetype::ComponentArchetype;
 use crate::engine::entity::component::{
-    Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentContext,
+    Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentCloneContext,
+    GameComponentDeserializeContext, GameComponentDeserializeFnPtr, GameComponentMethods,
+    GameComponentSerializeContext,
 };
+use crate::engine::entity::ecs_world;
 use crate::engine::entity::query::{
     Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne,
 };
 use crate::engine::event::{EventReader, Events};
+use crate::engine::physics::collider_component::EntityColliders;
 use crate::engine::resource::ResMut;
-use crate::{
-    engine::{
-        graphics::camera::{Camera, MainCamera},
-        physics::{collider::Colliders, rigid_body::RigidBody, transform::Transform},
-        system::SystemParam,
-        voxel::{voxel::VoxelModelImpl, voxel_world::VoxelWorld},
-    },
-    game::entity::player::Player,
+use crate::engine::{
+    graphics::camera::{Camera, MainCamera},
+    physics::{rigid_body::RigidBody, transform::Transform},
+    system::SystemParam,
+    voxel::{voxel::VoxelModelImpl, voxel_world::VoxelWorld},
 };
 
 pub type Entity = FreeListHandle<EntityInfo>;
-
 pub struct EventEntityDespawn(pub Entity);
+
+type GameComponentMethodsVtablePtr = *const ();
 
 #[derive(Debug)]
 pub struct EntityInfo {
@@ -51,7 +57,10 @@ pub struct ECSWorld {
     // Makes it easier to see what archetypes are required for a type.
     pub component_archetypes: HashMap<TypeId, Vec</*archetype_index*/ usize>>,
     pub entities: FreeList<EntityInfo>,
-    pub game_component_vtables: HashMap<TypeId, *const ()>,
+    pub game_component_vtables: HashMap<TypeId, GameComponentMethodsVtablePtr>,
+    pub game_component_deserialize_fns: HashMap<TypeId, GameComponentDeserializeFnPtr>,
+    pub game_component_type_info: HashMap</*GameComponent::NAME*/ String, TypeInfo>,
+    pub game_component_names: HashMap<TypeId, /*GameComponent::NAME*/ String>,
     pub despawn_event_reader: EventReader<EventEntityDespawn>,
 }
 
@@ -62,6 +71,9 @@ impl ECSWorld {
             component_archetypes: HashMap::new(),
             entities: FreeList::new(),
             game_component_vtables: HashMap::new(),
+            game_component_deserialize_fns: HashMap::new(),
+            game_component_type_info: HashMap::new(),
+            game_component_names: HashMap::new(),
             despawn_event_reader: EventReader::new(),
         };
 
@@ -76,9 +88,28 @@ impl ECSWorld {
         ecs.register_game_component::<RenderableVoxelEntity>();
         ecs.register_game_component::<Camera>();
         ecs.register_game_component::<RigidBody>();
-        ecs.register_game_component::<Colliders>();
+        ecs.register_game_component::<EntityColliders>();
 
         ecs
+    }
+
+    /// Returns a serde serializable object which holds references to the required data structures
+    /// to serialize the world.
+    pub fn serialize_world<'a>(
+        &'a self,
+        ctx: &'a GameComponentSerializeContext<'a>,
+    ) -> ECSWorldSerializable<'a> {
+        ECSWorldSerializable {
+            ecs_world: self,
+            ctx,
+        }
+    }
+
+    pub fn deserialize_world<'a, D: serde::Deserializer<'a>>(
+        ctx: &mut GameComponentCloneContext<'_>,
+        ser: D,
+    ) -> Result<Self, D::Error> {
+        todo!();
     }
 
     pub fn run_queued_despawns(ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {}
@@ -96,10 +127,21 @@ impl ECSWorld {
         // should be okay right? Use `without_provenance_mut` since this ptr isn't actually
         // associated with a memory allocation.
         let null = unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut::<C>(0x1234)) };
-        let dyn_ref = unsafe { null.as_ref() } as &dyn GameComponent;
+        let dyn_ref = unsafe { null.as_ref() } as &dyn GameComponentMethods;
         // Safety: This reference is in fact a dyn ref.
-        let vtable_ptr = unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn GameComponent) };
+        let vtable_ptr = unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn GameComponentMethods) };
         self.game_component_vtables.insert(type_id, vtable_ptr);
+        let de_f = C::deserialize_component;
+        self.game_component_deserialize_fns.insert(type_id, de_f);
+
+        let old = self
+            .game_component_type_info
+            .insert(C::NAME.to_owned(), TypeInfo::new::<C>());
+        assert!(old.is_none(),
+                "{} game component has a duplicate GameComponent::NAME with another already registered component.", 
+                std::any::type_name::<C>());
+        self.game_component_names
+            .insert(type_id, C::NAME.to_owned());
     }
 
     pub fn get_or_create_archetype_static<'a>(
@@ -149,11 +191,12 @@ impl ECSWorld {
     }
 
     pub fn spawn<B: Bundle + 'static>(&mut self, bundle: B) -> Entity {
-        let entity = self.spawn_raw(bundle.type_info());
+        let entity = self.spawn_raw(unsafe { bundle.type_info() });
         std::mem::forget(bundle);
         return entity;
     }
 
+    /// Takes ownership of the given raw data and spawns an entity with it.
     pub fn spawn_raw(&mut self, mut data: Vec<(TypeInfo, *const u8)>) -> Entity {
         data.sort_by(|(type_info_a, _), (type_info_b, _)| type_info_a.cmp(type_info_b));
         let type_infos = data
@@ -242,7 +285,7 @@ impl ECSWorld {
     /// Clones any entity in the world with a GameEntity component. Only clones components which
     /// implement the `GameComponent` trait. This also preserves the same entity ids to keep
     /// references coherent.
-    pub fn clone_game_entities(&self, mut ctx: GameComponentContext) -> ECSWorld {
+    pub fn clone_game_entities(&self, mut ctx: GameComponentCloneContext) -> ECSWorld {
         let ctx = &mut ctx;
         let mut new_world = ECSWorld::new();
         new_world.game_component_vtables = self.game_component_vtables.clone();
@@ -284,10 +327,10 @@ impl ECSWorld {
                     let game_component_vtable =
                         self.game_component_vtables.get(&type_info.type_id).unwrap();
                     let game_component_ptr = unsafe {
-                        std::mem::transmute::<(*const u8, *const ()), *const dyn GameComponent>((
-                            *src_data as *const u8,
-                            *game_component_vtable as *const (),
-                        ))
+                        std::mem::transmute::<
+                            (*const u8, GameComponentMethodsVtablePtr),
+                            *const dyn GameComponentMethods,
+                        >((*src_data, *game_component_vtable))
                     };
                     let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
                     // Safety: We free the pointers after the data is copied to the new archetype.
@@ -326,6 +369,27 @@ impl ECSWorld {
         return new_world;
     }
 
+    unsafe fn clone_component(
+        src_data: *const u8,
+        type_info: &TypeInfo,
+        vtable_ptr: GameComponentMethodsVtablePtr,
+        ctx: &mut GameComponentCloneContext<'_>,
+    ) -> (*mut u8, std::alloc::Layout) {
+        let game_component_ptr = unsafe {
+            std::mem::transmute::<
+                (*const u8, GameComponentMethodsVtablePtr),
+                *const dyn GameComponentMethods,
+            >((src_data, vtable_ptr))
+        };
+        let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
+        // Safety: We free the pointers after the data is copied to the new archetype.
+        let clone_dst_layout = type_info.layout(1);
+        let clone_dst = unsafe { std::alloc::alloc(clone_dst_layout) };
+        assert!(!clone_dst.is_null());
+        game_component.clone_component(ctx, clone_dst);
+        (clone_dst, clone_dst_layout)
+    }
+
     pub fn query_mut<Q: Query>(&mut self) -> QueryBorrow<Q> {
         return self.query();
     }
@@ -353,6 +417,12 @@ impl ECSWorld {
         let entity_info = self.entities.get(entity).unwrap();
         assert!(entity_info.components.is_sorted());
         return &self.archetypes[entity_info.archetype_ptr];
+    }
+
+    pub fn find_archetype_mut(&mut self, entity: Entity) -> &mut ComponentArchetype {
+        let entity_info = self.entities.get(entity).unwrap();
+        assert!(entity_info.components.is_sorted());
+        return &mut self.archetypes[entity_info.archetype_ptr];
     }
 
     pub fn query_many_mut<Q: Query, const C: usize>(
@@ -437,16 +507,107 @@ impl ECSWorld {
     //    return new;
     //}
 
-    pub fn player_query<'a, Q: Query>(&'a self) -> PlayerQuery<Q> {
-        PlayerQuery::new(self.query::<Q>().with::<(Player,)>() as QueryBorrow<'a, Q>)
-    }
-
     pub fn contains(&self, entity: Entity) -> bool {
         todo!()
     }
 
+    pub fn duplicate(
+        &mut self,
+        entity: Entity,
+        mut clone_ctx: GameComponentCloneContext<'_>,
+    ) -> Entity {
+        let new_entity_id = self.entities.next_free_handle();
+
+        let entity_info = self
+            .entities
+            .get(entity)
+            .expect("Tried to duplicate entity that does not exist.");
+        assert!(entity_info.components.is_sorted());
+
+        let entity_game_components = entity_info
+            .components
+            .iter()
+            .filter_map(|type_info| {
+                self.game_component_vtables
+                    .contains_key(&type_info.type_id)
+                    .then_some(type_info.clone())
+            })
+            .collect::<Vec<_>>();
+        assert!(entity_game_components.is_sorted());
+
+        let src_archetype = &mut self.archetypes[entity_info.archetype_ptr];
+        let src_data = entity_game_components
+            .iter()
+            .map(|type_info| unsafe {
+                (
+                    type_info,
+                    src_archetype.get_raw(type_info, entity_info.index).as_ptr(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let cloned_data =
+            src_data
+                .iter()
+                .map(|(type_info, src_data)| {
+                    // Safety: We free the pointers after the data is copied to the new archetype.
+                    let clone_dst_layout = type_info.layout(1);
+                    let clone_dst = unsafe { std::alloc::alloc(clone_dst_layout) };
+                    assert!(!clone_dst.is_null());
+
+                    // Handle special case of duplicating by changing the name.
+                    if type_info.type_id == std::any::TypeId::of::<GameEntity>() {
+                        let game_entity_component = unsafe {
+                            &*std::mem::transmute::<*const u8, *const GameEntity>(*src_data)
+                        };
+                        let new_game_entity = game_entity_component.duplicate();
+                        unsafe { (clone_dst as *mut GameEntity).write(new_game_entity) };
+                    } else {
+                        let game_component_vtable =
+                            self.game_component_vtables.get(&type_info.type_id).unwrap();
+                        let game_component_ptr = unsafe {
+                            std::mem::transmute::<
+                                (*const u8, *const ()),
+                                *const dyn GameComponentMethods,
+                            >((*src_data, *game_component_vtable))
+                        };
+                        let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
+                        game_component.clone_component(&mut clone_ctx, clone_dst);
+                    }
+
+                    (clone_dst, clone_dst_layout)
+                })
+                .collect::<Vec<_>>();
+
+        // Since cloneable components may differ than total components for some reason.
+        let (dst_archetype_ptr, dst_archetype) =
+            self.get_or_create_archetype(entity_game_components.clone());
+        let archetype_index = unsafe {
+            dst_archetype.insert_raw(
+                new_entity_id,
+                cloned_data.iter().map(|(ptr, _)| *ptr).collect::<Vec<_>>(),
+            )
+        };
+
+        for (cloned_ptr, cloned_dst_layout) in cloned_data {
+            // Safety: We check it is not null, and it is allocated above.
+            unsafe { std::alloc::dealloc(cloned_ptr, cloned_dst_layout) };
+        }
+
+        self.entities.push(EntityInfo {
+            components: entity_game_components,
+            archetype_ptr: dst_archetype_ptr,
+            index: archetype_index,
+        });
+
+        return new_entity_id;
+    }
+
     pub fn despawn(&mut self, entity: Entity) {
-        todo!()
+        let entity_info = self.entities.get(entity).unwrap();
+        assert!(entity_info.components.is_sorted());
+        let archetype = &mut self.archetypes[entity_info.archetype_ptr];
+        archetype.remove(entity_info.index);
+        self.entities.remove(entity);
     }
 
     pub fn get_main_camera(&self, main_camera: &MainCamera) -> QueryOne<'_, (&Transform, &Camera)> {
@@ -491,6 +652,82 @@ impl ECSWorld {
 
         return curr_transform;
     }
+
+    /// Clones a game entity into a standalone struct containing and all of its components implementing the `GameComponent` trait.
+    pub fn create_game_entity_asset(
+        &self,
+        entity_id: Entity,
+        ctx: &mut GameComponentCloneContext<'_>,
+    ) -> WorldGameEntityAsset {
+        let entity_info = self.entities.get(entity_id).unwrap();
+        debug_assert!(entity_info.components.is_sorted());
+        let archetype = &self.archetypes[entity_info.archetype_ptr];
+
+        let mut asset_game_entity = None;
+        let mut asset_parent = None;
+        let mut asset_children = Vec::new();
+        let mut asset_components = HashMap::new();
+        for type_info in &archetype.types {
+            if type_info == &TypeInfo::new::<GameEntity>() {
+                asset_game_entity = Some(
+                    archetype
+                        .get::<GameEntity>(type_info, entity_info.index)
+                        .clone(),
+                );
+                continue;
+            }
+            if type_info == &TypeInfo::new::<EntityParent>() {
+                let parent_id = archetype
+                    .get::<EntityParent>(&TypeInfo::new::<EntityParent>(), entity_info.index)
+                    .parent;
+                asset_parent = Some(self.get_game_entity_uuid(parent_id));
+                continue;
+            }
+            if type_info == &TypeInfo::new::<EntityChildren>() {
+                let children = &archetype
+                    .get::<EntityChildren>(&TypeInfo::new::<EntityChildren>(), entity_info.index)
+                    .children;
+                asset_children.extend(
+                    children
+                        .iter()
+                        .map(|child_id| self.get_game_entity_uuid(*child_id)),
+                );
+                continue;
+            }
+
+            let Some(vtable_ptr) = self.game_component_vtables.get(&type_info.type_id) else {
+                continue;
+            };
+            // Safety: We only use this pointer as a reference.
+            let src_data = unsafe { archetype.get_raw(&type_info, entity_info.index).as_ptr() };
+            let (asset_component_data, dst_layout) =
+                unsafe { Self::clone_component(src_data, type_info, *vtable_ptr, ctx) };
+            asset_components.insert(type_info.type_id, unsafe {
+                WorldGameComponentAsset::new(*type_info, asset_component_data)
+            });
+        }
+        let game_entity =
+            asset_game_entity.expect("Provided entity id doesn't have a GameEntity component.");
+
+        WorldGameEntityAsset {
+            name: game_entity.name,
+            uuid: game_entity.uuid,
+            parent: asset_parent,
+            children: asset_children,
+            components: asset_components,
+        }
+    }
+
+    fn get_game_entity_uuid(&self, entity_id: Entity) -> Uuid {
+        let entity_info = self.entities.get(entity_id).unwrap();
+        debug_assert!(entity_info.components.is_sorted());
+        let archetype = &self.archetypes[entity_info.archetype_ptr];
+        let game_entity =
+            archetype.get::<GameEntity>(&TypeInfo::new::<GameEntity>(), entity_info.index);
+        game_entity.uuid.clone()
+    }
+
+    pub fn spawn_prefab(asset: &WorldGameEntityAsset) {}
 }
 
 pub struct PlayerQuery<'a, Q: Query>(QueryBorrow<'a, Q>);
@@ -512,5 +749,465 @@ impl<'a, Q: Query> PlayerQuery<'a, Q> {
             panic!("More than one player spawned?");
         }
         self.0.iter().next()
+    }
+}
+
+pub struct ProjectSceneEntitiesVisitor<'a, 'b> {
+    pub ctx: &'b mut ProjectSceneDeserializeContext<'a>,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for &mut ProjectSceneEntitiesVisitor<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        de.deserialize_seq(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for &mut ProjectSceneEntitiesVisitor<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("entity array")
+    }
+
+    fn visit_seq<A>(mut self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut entity_visitor = EntityVisitor { ctx: self.ctx };
+        loop {
+            let Some(_) = seq.next_element_seed(&mut entity_visitor)? else {
+                break;
+            };
+        }
+
+        Ok(())
+    }
+}
+
+pub struct ECSWorldSerializable<'a> {
+    ecs_world: &'a ECSWorld,
+    ctx: &'a GameComponentSerializeContext<'a>,
+}
+
+impl serde::Serialize for ECSWorldSerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = se.serialize_struct("Scene", 1)?;
+        s.serialize_field("entities", &ECSWorldEntitiesSerializable { world: self })?;
+        s.end()
+    }
+}
+
+pub struct ECSWorldEntitiesSerializable<'a> {
+    world: &'a ECSWorldSerializable<'a>,
+}
+
+impl serde::Serialize for ECSWorldEntitiesSerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut archetypes: HashSet<usize> = HashSet::new();
+        let mut game_component_count = 0;
+        for (name, ty) in self.world.ecs_world.game_component_type_info.iter() {
+            game_component_count += 1;
+            let Some(indices) = self.world.ecs_world.component_archetypes.get(&ty.type_id) else {
+                continue;
+            };
+            archetypes.extend(indices.iter().map(|i| *i));
+        }
+
+        let mut archetypes = Vec::from_iter(archetypes.into_iter());
+
+        /// Borrow game component types for each archetype we will iterate over for the rest of the
+        /// function.
+        let mut borrows = Vec::new();
+        for index in &archetypes {
+            let archetype = &self.world.ecs_world.archetypes[*index];
+            for ty in archetype.type_infos() {
+                borrows.push(archetype.borrow_type(&ty.type_id));
+            }
+        }
+
+        let mut seq = se.serialize_seq(None)?;
+        for archetype_ptr in archetypes {
+            let archetype = &self.world.ecs_world.archetypes[archetype_ptr];
+            let has_game_entity = archetype
+                .type_infos()
+                .iter()
+                .find(|type_info| type_info.type_id == std::any::TypeId::of::<GameEntity>())
+                .is_some();
+            if !has_game_entity {
+                continue;
+            }
+
+            let game_component_indices = archetype
+                .types
+                .iter()
+                .enumerate()
+                .filter_map(|(i, type_info)| {
+                    (self
+                        .world
+                        .ecs_world
+                        .game_component_vtables
+                        .contains_key(&type_info.type_id))
+                    .then_some(i)
+                })
+                .collect::<Vec<_>>();
+            for i in 0..archetype.len() {
+                let Some(entity) = archetype.get_entity(i) else {
+                    continue;
+                };
+
+                seq.serialize_element(&ECSWorldSceneEntitySerializable {
+                    sup: self.world,
+                    archetype,
+                    archetype_index: i,
+                    game_component_type_indices: &game_component_indices,
+                    entity,
+                })?;
+            }
+        }
+        // We can now safely stop borrowing the archetype types we are using.
+        for borrow in borrows {
+            let b = borrow.get();
+            borrow.set(b.unborrow());
+        }
+        seq.end()
+    }
+}
+
+struct ECSWorldSceneEntitySerializable<'a> {
+    sup: &'a ECSWorldSerializable<'a>,
+    archetype: &'a ComponentArchetype,
+    // Index within the archetype where this entity's component data is.
+    archetype_index: usize,
+    entity: Entity,
+    game_component_type_indices: &'a [usize],
+}
+
+impl serde::Serialize for ECSWorldSceneEntitySerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = se.serialize_struct("Entity", 1)?;
+        s.serialize_field(
+            "components",
+            &ECSWorldSceneEntityComponentsSerializable { sup: self },
+        );
+        s.end()
+    }
+}
+
+struct ECSWorldSceneEntityComponentsSerializable<'a> {
+    sup: &'a ECSWorldSceneEntitySerializable<'a>,
+}
+
+impl serde::Serialize for ECSWorldSceneEntityComponentsSerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = se.serialize_seq(Some(self.sup.game_component_type_indices.len()))?;
+
+        for index in self.sup.game_component_type_indices {
+            let type_info = &self.sup.archetype.type_infos()[*index];
+            seq.serialize_element(&ECSWorldSceneEntityGameComponentSerializable {
+                sup: self.sup,
+                type_info,
+            })?;
+        }
+        seq.end()
+    }
+}
+
+struct ECSWorldSceneEntityGameComponentSerializable<'a> {
+    sup: &'a ECSWorldSceneEntitySerializable<'a>,
+    type_info: &'a TypeInfo,
+}
+
+impl serde::Serialize for ECSWorldSceneEntityGameComponentSerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = se.serialize_struct("GameComponent", 2)?;
+        s.serialize_field(
+            "name",
+            self.sup
+                .sup
+                .ecs_world
+                .game_component_names
+                .get(&self.type_info.type_id)
+                .expect("Type should be a game component, must have filtered wrong."),
+        )?;
+        s.serialize_field(
+            "data",
+            &ECSWorldSceneEntityGameComponentDataSerializable { sup: self },
+        )?;
+        s.end()
+    }
+}
+
+struct ECSWorldSceneEntityGameComponentDataSerializable<'a> {
+    sup: &'a ECSWorldSceneEntityGameComponentSerializable<'a>,
+}
+
+impl serde::Serialize for ECSWorldSceneEntityGameComponentDataSerializable<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // TODO: Serialize the game component data by getting
+        // &dyn GameComponent then calling serialize with ctx. Then time to deserialize,
+        // ehhfshfhsHShfshfshfhsfsh maybe i do audio in the meantime i mean who knows.
+        let ecs_world = self.sup.sup.sup.ecs_world;
+        let archetype = self.sup.sup.archetype;
+        let ctx = self.sup.sup.sup.ctx;
+        let src_data = unsafe {
+            archetype
+                .get_raw(self.sup.type_info, self.sup.sup.archetype_index)
+                .as_ptr()
+        };
+        let game_component = {
+            let game_component_vtable = ecs_world
+                .game_component_vtables
+                .get(&self.sup.type_info.type_id)
+                .unwrap();
+            let game_component_ptr = unsafe {
+                std::mem::transmute::<
+                    (*const u8, GameComponentMethodsVtablePtr),
+                    *const dyn GameComponentMethods,
+                >((src_data, *game_component_vtable))
+            };
+
+            unsafe { game_component_ptr.as_ref().unwrap() }
+        };
+        let mut erased_se = <dyn erased_serde::Serializer>::erase(se);
+        // Ignore this result since the one we actually care about is stored in the serializer.
+        let _ = game_component.serialize_component(ctx, &mut erased_se);
+        erased_se.result()
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum EntityField {
+    Components,
+}
+
+/// Visits the entity data and spawn the entity within the ctx ecs.
+struct EntityVisitor<'a, 'b: 'a> {
+    pub ctx: &'a mut ProjectSceneDeserializeContext<'b>,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityVisitor<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: [&str; 1] = ["components"];
+        de.deserialize_struct("Entity", &FIELDS, self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for &mut EntityVisitor<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("entity Struct")
+    }
+
+    fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut components_visitor = EntityComponentsVisitor { ctx: self.ctx };
+
+        let mut component_data = None;
+        while let Some(key) = map.next_key::<EntityField>()? {
+            match key {
+                EntityField::Components => {
+                    if component_data.is_some() {
+                        return Err(serde::de::Error::duplicate_field("components"));
+                    }
+                    component_data = Some(map.next_value_seed(&mut components_visitor)?);
+                }
+            }
+        }
+
+        let Some(component_data) = component_data else {
+            return Err(serde::de::Error::custom(
+                "Scene does not contain an `components` field.",
+            ));
+        };
+
+        self.ctx.ecs_world.spawn_raw(component_data);
+
+        Ok(())
+    }
+}
+
+struct EntityComponentsVisitor<'a, 'b> {
+    pub ctx: &'a mut ProjectSceneDeserializeContext<'b>,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityComponentsVisitor<'_, '_> {
+    type Value = Vec<(TypeInfo, *const u8)>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for &mut EntityComponentsVisitor<'_, '_> {
+    type Value = Vec<(TypeInfo, *const u8)>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("expected Array with components")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut raw_component_data = Vec::new();
+        let mut visitor = EntityComponentStructVisitor {
+            ctx: self.ctx,
+            raw_component_data: &mut raw_component_data,
+        };
+        while let Some(_) = seq.next_element_seed(&mut visitor)? {}
+        Ok(raw_component_data)
+    }
+}
+
+struct EntityComponentStructVisitor<'a, 'b> {
+    ctx: &'a mut ProjectSceneDeserializeContext<'b>,
+    raw_component_data: &'a mut Vec<(TypeInfo, *const u8)>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum EntityComponentStructField {
+    Name,
+    Data,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityComponentStructVisitor<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: [&str; 2] = ["name", "data"];
+        de.deserialize_struct("Component", &FIELDS, self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for &mut EntityComponentStructVisitor<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("entity Struct")
+    }
+
+    fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut component_data_visitor = EntityComponentStructDataVisitor {
+            ctx: self.ctx,
+            game_component_de_method: None,
+            dst_ptr: std::ptr::null_mut(),
+        };
+
+        let mut name = None;
+        let mut data = None;
+        while let Some(key) = map.next_key::<EntityComponentStructField>()? {
+            match key {
+                EntityComponentStructField::Name => {
+                    if name.is_some() {
+                        return Err(serde::de::Error::duplicate_field("name"));
+                    }
+                    name = Some(map.next_value::<String>()?);
+                }
+                EntityComponentStructField::Data => {
+                    let Some(name) = &name else {
+                        return Err(serde::de::Error::custom(
+                            "Expect `name` to come before `data`.",
+                        ));
+                    };
+                    if data.is_some() {
+                        return Err(serde::de::Error::duplicate_field("data"));
+                    }
+
+                    let type_info = component_data_visitor.ctx.ecs_world.game_component_type_info.get(name)
+                        .unwrap_or_else(|| panic!("Tried to deserialize component with GameComponent::NAME `{}` but there it is not registered in the ECSWorld, cant get type info.", name));
+                    component_data_visitor.dst_ptr =
+                        unsafe { std::alloc::alloc(type_info.layout(1)) };
+                    if component_data_visitor.dst_ptr.is_null() {
+                        panic!("Failed to allocate game component");
+                    }
+
+                    let de_fn = component_data_visitor.ctx.ecs_world.game_component_deserialize_fns.get(&type_info.type_id)
+                        .unwrap_or_else(|| panic!("Tried to deserialize component with GameComponent::NAME `{}` but there it is not registered in the ECSWorld, cant get deserialize fn.", name));
+                    component_data_visitor.game_component_de_method = Some(*de_fn);
+
+                    map.next_value_seed(&mut component_data_visitor)?;
+                    data = Some(component_data_visitor.dst_ptr);
+                    // Make null again to catch any accidental second uses.
+                    component_data_visitor.dst_ptr = std::ptr::null_mut();
+                }
+            }
+        }
+
+        let name = name.ok_or_else(|| serde::de::Error::missing_field("name"))?;
+        let data = data.ok_or_else(|| serde::de::Error::missing_field("data"))?;
+
+        let type_info = self.ctx.ecs_world.game_component_type_info.get(&name).ok_or_else(|| serde::de::Error::custom(format!("Provided component name `{}` doesn't map to any registered GameComponent type.", name)))?;
+        self.raw_component_data.push((type_info.clone(), data));
+
+        Ok(())
+    }
+}
+
+struct EntityComponentStructDataVisitor<'a, 'b> {
+    ctx: &'a mut ProjectSceneDeserializeContext<'b>,
+    game_component_de_method: Option<GameComponentDeserializeFnPtr>,
+    dst_ptr: *mut u8,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityComponentStructDataVisitor<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut erased_de = <dyn erased_serde::Deserializer>::erase(de);
+        unsafe {
+            // GameComponent::deserialize_component(..)
+            (self.game_component_de_method.unwrap())(
+                self.ctx.component_ctx,
+                &mut erased_de,
+                self.dst_ptr,
+            )
+            .map_err(|err| serde::de::Error::custom(err))
+        }?;
+        Ok(())
     }
 }

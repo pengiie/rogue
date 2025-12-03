@@ -5,15 +5,17 @@ use nalgebra::{
     AbstractRotation, Isometry, Isometry3, Matrix4, Point3, Quaternion, Rotation3, Translation3,
     Unit, UnitQuaternion, Vector, Vector3,
 };
+use rogue_macros::game_component;
 
 use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::obb::OBB;
 use crate::common::geometry::ray::Ray;
-use crate::engine::entity::component::GameComponent;
+use crate::engine::entity::component::{GameComponent, GameComponentSerializeContext};
 use crate::{consts, engine::entity::ecs_world::ECSWorld};
 
 /// Transform relative to the world-space or parent transform if one exists.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[game_component(name = "Transform")]
 pub struct Transform {
     pub position: Vector3<f32>,
     pub rotation: UnitQuaternion<f32>,
@@ -30,7 +32,6 @@ impl Transform {
     }
 
     pub fn with_translation(translation: Translation3<f32>) -> Self {
-        log::info!("with trans {:?}", translation);
         Self {
             position: translation.vector,
             rotation: UnitQuaternion::identity(),
@@ -92,38 +93,10 @@ impl Transform {
         let min = self.position - half_length;
         let max = self.position + half_length;
 
-        OBB::new(AABB::new_two_point(min, max), self.rotation, half_length)
-    }
-}
-
-impl GameComponent for Transform {
-    fn clone_component(
-        &self,
-        ctx: &mut crate::engine::entity::component::GameComponentContext<'_>,
-        dst_ptr: *mut u8,
-    ) {
-        let dst_ptr = dst_ptr as *mut Transform;
-        // Safety: dst_ptr should be allocated with the memory layout for this type.
-        unsafe { dst_ptr.write(self.clone()) };
-    }
-
-    fn serialize_component(
-        &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
-        ser: &mut dyn erased_serde::Serializer,
-    ) -> erased_serde::Result<()> {
-        erased_serde::Serialize::erased_serialize(self, ser)
-    }
-
-    fn deserialize_component(
-        &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
-        de: &mut dyn erased_serde::Deserializer,
-        dst_ptr: *mut u8,
-    ) -> erased_serde::Result<()> {
-        let dst_ptr = dst_ptr as *mut Transform;
-        // Safety: dst_ptr should be allocated with the memory layout for this type.
-        unsafe { dst_ptr.write(erased_serde::deserialize(de)?) };
-        Ok(())
+        OBB::new(
+            AABB::new_two_point(min, max),
+            self.rotation,
+            Vector3::zeros(),
+        )
     }
 }

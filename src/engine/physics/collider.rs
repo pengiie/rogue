@@ -1,91 +1,196 @@
 use nalgebra::Vector3;
 
 use crate::common::geometry::aabb::AABB;
-use crate::engine::entity::component::GameComponent;
+use crate::engine::entity::component::{GameComponent, GameComponentSerializeContext};
+use crate::engine::entity::ecs_world::Entity;
+use crate::engine::physics::collider_registry::ColliderRegistry;
+use crate::engine::voxel::voxel_world::VoxelWorld;
 use crate::engine::{
     debug::DebugRenderer,
     physics::{collider_registry::ColliderId, transform::Transform},
 };
 
-pub struct CollisionInfo {
-    // Normal is facing away from the first object and towards the second object.
-    pub penetration_depth: Vector3<f32>,
-    // The world-space contact points of the first collider.
-    pub contact_points_a: Vec<Vector3<f32>>,
-    // The world-space contact points of the second collider.
-    pub contact_points_b: Vec<Vector3<f32>>,
+pub struct ContactPoint {
+    position: Vector3<f32>,
 }
 
-pub trait ColliderConcrete {
-    fn concrete_collider_type() -> ColliderType;
+pub struct ContactManifold {
+    points: Vec<ContactPoint>,
+    normal: Vector3<f32>,
 }
 
-pub trait Collider: downcast::Any {
-    fn test_collision(
+/// Output from the narrow phase step.
+pub struct ContactPair {
+    manifold: ContactManifold,
+    entity_a: Entity,
+    collider_a: ColliderId,
+    entity_b: Entity,
+    collider_b: ColliderId,
+}
+
+pub type ColliderDeserializeFnPtr = unsafe fn(
+    /*de: */ &mut dyn erased_serde::Deserializer,
+    /*dst_ptr: */ *mut u8,
+) -> erased_serde::Result<()>;
+
+pub trait ColliderIntersectionTest<Marker> {
+    fn run(
         &self,
-        other: &dyn Collider,
-        transform_a: &Transform,
-        transform_b: &Transform,
-    ) -> Option<CollisionInfo>;
-    fn aabb(&self, world_transform: &Transform) -> AABB;
-    fn collider_type(&self) -> ColliderType;
-
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {}
+        collider_id_a: ColliderId,
+        collider_id_b: ColliderId,
+        entity_transform_a: &Transform,
+        entity_transform_b: &Transform,
+        collider_registry: &ColliderRegistry,
+    ) -> Option<ContactManifold>;
 }
 
-downcast::downcast!(dyn Collider);
-
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Colliders {
-    pub colliders: Vec<ColliderId>,
-}
-
-impl Default for Colliders {
-    fn default() -> Self {
-        Self::new()
+impl<F, A: Collider, B: Collider> ColliderIntersectionTest<(A, B)> for F
+where
+    F: Fn(&A, &B, &Transform, &Transform) -> Option<ContactManifold>,
+{
+    fn run(
+        &self,
+        collider_id_a: ColliderId,
+        collider_id_b: ColliderId,
+        entity_transform_a: &Transform,
+        entity_transform_b: &Transform,
+        collider_registry: &ColliderRegistry,
+    ) -> Option<ContactManifold> {
+        let collider_a = collider_registry.get_collider::<A>(&collider_id_a);
+        let collider_b = collider_registry.get_collider::<B>(&collider_id_a);
+        self(
+            collider_a,
+            collider_b,
+            entity_transform_a,
+            entity_transform_b,
+        )
     }
 }
 
-impl Colliders {
-    pub fn new() -> Self {
+type ColliderIntersectionTestErasedFn = fn(
+    run_fn_ptr: *const (),
+    collider_id_a: ColliderId,
+    collider_id_b: ColliderId,
+    entity_transform_a: &Transform,
+    entity_transform_b: &Transform,
+    collider_registry: &ColliderRegistry,
+) -> Option<ContactManifold>;
+
+pub struct ColliderIntersectionTestCaller {
+    run_fn: ColliderIntersectionTestErasedFn,
+    run_fn_ptr: *const (),
+}
+
+impl ColliderIntersectionTestCaller {
+    pub fn new<F, Marker>(run_fn: F) -> Self
+    where
+        F: ColliderIntersectionTest<Marker> + 'static,
+    {
+        fn run_erased<F, Marker>(
+            run_fn_ptr: *const (),
+            collider_id_a: ColliderId,
+            collider_id_b: ColliderId,
+            entity_transform_a: &Transform,
+            entity_transform_b: &Transform,
+            collider_registry: &ColliderRegistry,
+        ) -> Option<ContactManifold>
+        where
+            F: ColliderIntersectionTest<Marker> + 'static,
+        {
+            // Safety: i hope its safe :)
+            let run_fn = unsafe { &*(run_fn_ptr as *const F) };
+            run_fn.run(
+                collider_id_a,
+                collider_id_b,
+                entity_transform_a,
+                entity_transform_b,
+                collider_registry,
+            )
+        };
+        let run_fn_ptr = std::ptr::from_ref(&run_fn);
         Self {
-            colliders: Vec::new(),
+            run_fn: run_erased::<F, Marker>,
+            run_fn_ptr: run_fn_ptr as *const (),
         }
     }
+
+    pub fn run_erased(
+        &self,
+        collider_id_a: ColliderId,
+        collider_id_b: ColliderId,
+        entity_transform_a: &Transform,
+        entity_transform_b: &Transform,
+        collider_registry: &ColliderRegistry,
+    ) -> Option<ContactManifold> {
+        (self.run_fn)(
+            self.run_fn_ptr,
+            collider_id_a,
+            collider_id_b,
+            entity_transform_a,
+            entity_transform_b,
+            collider_registry,
+        )
+    }
 }
 
-impl GameComponent for Colliders {
-    fn clone_component(
-        &self,
-        ctx: &mut crate::engine::entity::component::GameComponentContext<'_>,
-        dst_ptr: *mut u8,
-    ) {
-        // Safety: dst_ptr should be allocated with the memory layout for this type.
-        unsafe { (dst_ptr as *mut Self).write(self.clone()) };
-    }
+pub trait Collider: Clone + 'static {
+    /// Name used for collider identification in collision tests and serialiation,
+    /// must be unique between registered collider types.
+    const NAME: &str;
 
-    fn serialize_component(
+    fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB;
+
+    // Type erased serialization.
+    fn serialize_collider(
         &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
         ser: &mut dyn erased_serde::Serializer,
-    ) -> erased_serde::Result<()> {
-        todo!()
-    }
-
-    fn deserialize_component(
-        &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
+    ) -> erased_serde::Result<()>;
+    unsafe fn deserialize_collider(
         de: &mut dyn erased_serde::Deserializer,
         dst_ptr: *mut u8,
-    ) -> erased_serde::Result<()> {
-        todo!()
+    ) -> erased_serde::Result<()>;
+
+    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {}
+    fn collider_component_ui(&self, ui: &mut egui::Ui) {
+        ui.label(format!(
+            "`Collider::collider_component_ui` has not been implemented for `{}`",
+            std::any::type_name::<Self>()
+        ));
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash, serde::Serialize, serde::Deserialize, Debug)]
-pub enum ColliderType {
-    Null,
-    Capsule,
-    Plane,
-    Box,
+pub trait ColliderMethods: downcast::Any {
+    fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB;
+
+    // Type erased serialization.
+    fn serialize_collider(
+        &self,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()>;
+
+    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer);
+    fn collider_component_ui(&self, ui: &mut egui::Ui);
 }
+
+impl<T: Collider> ColliderMethods for T {
+    fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB {
+        Collider::aabb(self, world_transform, voxel_world)
+    }
+
+    fn serialize_collider(
+        &self,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        Collider::serialize_collider(self, ser)
+    }
+
+    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
+        Collider::render_debug(self, world_transform, debug_renderer);
+    }
+
+    fn collider_component_ui(&self, ui: &mut egui::Ui) {
+        Collider::collider_component_ui(self, ui);
+    }
+}
+
+downcast::downcast!(dyn ColliderMethods);

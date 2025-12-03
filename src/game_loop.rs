@@ -13,11 +13,10 @@ use crate::{
         physics::physics_world::PhysicsWorld,
         system::System,
         ui::UI,
-        voxel::{cursor::VoxelCursor, voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
+        voxel::{voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
-    game::entity::player::Player,
-    session::{Session, SessionState},
+    session::{EditorSession, SessionState},
 };
 
 pub fn game_loop(app: &App) {
@@ -41,7 +40,7 @@ pub fn game_loop(app: &App) {
 
     // Starts and stops the game, running Scripts::on_setup.
     // Manages project asset loading.
-    app.run_system(Session::update);
+    app.run_system(EditorSession::update);
 
     // ------- ASSETS --------
 
@@ -77,7 +76,7 @@ pub fn game_loop(app: &App) {
         app.run_system(Editor::update_camera_animations);
     }
 
-    let session_state = app.get_resource::<Session>().session_state;
+    let session_state = app.get_resource::<EditorSession>().session_state;
     match session_state {
         SessionState::Editor => {}
         SessionState::Game => {

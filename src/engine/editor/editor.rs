@@ -7,8 +7,11 @@ use nalgebra::{
 use rogue_macros::Resource;
 
 use crate::common::geometry::ray::Ray;
+use crate::engine::asset::repr::editor_settings::EditorUserSettingsAsset;
+use crate::engine::editor::clipboard::Clipboard;
 use crate::engine::editor::events::EventEditorZoom;
 use crate::engine::event::{EventReader, Events};
+use crate::session::ProjectEditorSettings;
 use crate::{
     common::{animate::Animation, color::Color},
     consts::{
@@ -30,7 +33,7 @@ use crate::{
             keyboard::{self, Key, Modifier},
             mouse, Input,
         },
-        physics::{capsule_collider, collider::Colliders, transform::Transform},
+        physics::{capsule_collider, transform::Transform},
         resource::{Res, ResMut},
         ui::UI,
         voxel::{
@@ -39,7 +42,6 @@ use crate::{
                 PTMaterial,
             },
             chunk_generator::ChunkGenerator,
-            cursor::{VoxelEditEntityInfo, VoxelEditInfo},
             voxel_world::{self, VoxelEdit, VoxelTraceInfo, VoxelWorld},
         },
         window::{
@@ -47,8 +49,7 @@ use crate::{
             window::Window,
         },
     },
-    game::entity::player::Player,
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
 
@@ -63,7 +64,10 @@ pub struct Editor {
     last_main_camera: Option<(Entity, String)>,
     pub editor_camera_entity: Option<Entity>,
     pub editor_camera: EditorCamera,
+
     pub curr_editor_view: EditorView,
+
+    pub clipboard: Clipboard,
 
     pub saved_ecs_state: Option<ECSWorld>,
     pub is_active: bool,
@@ -97,20 +101,26 @@ impl EditorTerrainGeneration {
 
 pub struct EditorCameraMarker;
 
+/// Handles all of the editor state.
 impl Editor {
-    pub fn new() -> Self {
+    pub fn new(editor_settings: ProjectEditorSettings) -> Self {
         let mut is_inactive = std::env::var("ROGUE_EDITOR")
             .map(|var| var.eq_ignore_ascii_case("off"))
             .unwrap_or(false);
 
         Self {
             last_main_camera: None,
-            editor_camera: EditorCamera::new(),
+            editor_camera: EditorCamera::from_pos_anchor(
+                editor_settings.editor_camera_transform.position,
+                editor_settings.editor_rotation_anchor,
+            ),
             editor_camera_entity: None,
             saved_ecs_state: None,
             is_active: !is_inactive,
             initialized: false,
             curr_editor_view: EditorView::PanOrbit,
+
+            clipboard: Clipboard::new(),
 
             focus_event_reader: EventReader::new(),
 
@@ -126,27 +136,29 @@ impl Editor {
         }
     }
 
+    pub fn editor_settings(&self, ecs_world: &ECSWorld) -> ProjectEditorSettings {
+        let mut editor_camera_transform = ecs_world
+            .query_one::<&Transform>(self.editor_camera_entity.unwrap())
+            .get()
+            .unwrap();
+
+        ProjectEditorSettings {
+            editor_camera_transform: editor_camera_transform.clone(),
+            editor_camera: self.editor_camera.camera.clone(),
+            editor_rotation_anchor: self.editor_camera.rotation_anchor,
+        }
+    }
+
+    /// Spawns the editor camera
     pub fn init_editor_session(
         &mut self,
-        session: &mut Session,
+        session: &mut EditorSession,
         main_camera: &mut MainCamera,
         ecs_world: &mut ECSWorld,
     ) {
         assert!(self.editor_camera_entity.is_none());
-
-        let last_session = &session.project;
-        session.terrain_dir = last_session.terrain_asset_path.clone();
-
-        let mut camera_pos = Vector3::new(5.0, 5.0, 4.9);
-        let mut camera_fov = f32::consts::FRAC_PI_2;
-        let mut anchor_pos = Vector3::new(0.0, 0.0, 0.0);
-        camera_pos = last_session.editor_camera_transform.transform.position;
-        anchor_pos = last_session.rotation_anchor;
-        camera_fov = last_session.editor_camera.camera.fov();
-
-        self.editor_camera = EditorCamera::from_pos_anchor(camera_pos, anchor_pos);
         self.editor_camera_entity =
-            Some(ecs_world.spawn((Camera::new(camera_fov), Transform::new())));
+            Some(ecs_world.spawn((self.editor_camera.camera.clone(), Transform::new())));
 
         self.initialized = true;
     }
@@ -302,7 +314,7 @@ impl Editor {
         mut ui: ResMut<UI>,
         mut debug_renderer: ResMut<DebugRenderer>,
         mut main_camera: ResMut<MainCamera>,
-        session: Res<Session>,
+        session: Res<EditorSession>,
         events: Res<Events>,
     ) {
         let Some(zoom_event) = editor.focus_event_reader.read(&events).last() else {
@@ -345,7 +357,7 @@ impl Editor {
         mut ui: ResMut<UI>,
         mut debug_renderer: ResMut<DebugRenderer>,
         mut main_camera: ResMut<MainCamera>,
-        session: Res<Session>,
+        session: Res<EditorSession>,
         mut events: ResMut<Events>,
     ) {
         let editor: &mut Editor = &mut editor;
@@ -357,7 +369,7 @@ impl Editor {
         }
 
         if input.is_key_pressed(Key::G) {
-            if let Some(game_camera) = &session.game_camera {
+            if let Some(game_camera) = &session.project.game_camera {
                 main_camera.set_camera(*game_camera, "Game view");
             }
         }
@@ -576,7 +588,7 @@ impl Editor {
         mut ecs_world: ResMut<ECSWorld>,
         mut input: ResMut<Input>,
         mut window: ResMut<Window>,
-        mut session: ResMut<Session>,
+        mut session: ResMut<EditorSession>,
     ) {
         if editor.is_active && !editor.initialized {
             editor.init_editor_session(&mut session, &mut main_camera, &mut ecs_world);
@@ -589,15 +601,9 @@ impl Editor {
                 if let Some(last_camera) = editor.last_main_camera.clone() {
                     main_camera.set_camera(last_camera.0, &last_camera.1);
                     editor.is_active = false;
-                } else {
-                    let mut player_query = ecs_world.query::<&Player>();
-                    if let Some((player_entity, player)) = player_query.into_iter().next() {
-                        editor.is_active = false;
-                        main_camera.set_camera(player_entity, "player_cam");
-                        window.set_curser_lock(!player.paused);
-                    } else {
-                        log::warn!("No camera to switch to from the editor.");
-                    }
+                }
+                {
+                    log::warn!("No camera to switch to from the editor.");
                 }
             } else {
                 // Switch to editor mode.
@@ -613,10 +619,13 @@ impl Editor {
     }
 }
 
+/// Controls for the editor camera
 pub struct EditorCamera {
     pub rotation_anchor: Vector3<f32>,
     pub euler: Vector3<f32>,
     pub distance: f32,
+    /// Camera used to spawn the editor camera.
+    pub camera: Camera,
 }
 
 impl EditorCamera {
@@ -625,6 +634,7 @@ impl EditorCamera {
             rotation_anchor: Vector3::zeros(),
             euler: Vector3::zeros(),
             distance: 1.0,
+            camera: Camera::new(90.0),
         }
     }
 
@@ -642,6 +652,7 @@ impl EditorCamera {
             rotation_anchor: anchor_pos,
             euler,
             distance,
+            camera: Camera::new(Camera::FOV_90),
         }
     }
 }

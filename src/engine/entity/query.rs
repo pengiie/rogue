@@ -283,7 +283,10 @@ impl<'a, Q: Query> Iterator for QueryIter<'a, Q> {
             return self.next();
         }
 
-        let entity = archetype.get_entity(self.curr_index);
+        let Some(entity) = archetype.get_entity(self.curr_index) else {
+            self.curr_index += 1;
+            return self.next();
+        };
         let query_item = Q::fetch(archetype, self.curr_index);
         self.curr_index += 1;
         return Some((entity, query_item));

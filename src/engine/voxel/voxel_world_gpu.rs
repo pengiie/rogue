@@ -13,7 +13,6 @@ use rogue_macros::Resource;
 
 use super::{
     attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
-    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
     flat::VoxelModelFlat,
     sft::VoxelModelSFT,
     voxel::{
@@ -60,7 +59,7 @@ use crate::{
         },
         window::time::Stopwatch,
     },
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
 

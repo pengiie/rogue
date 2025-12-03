@@ -7,14 +7,14 @@ use crate::{
         ui::EditorUIState,
         voxel::voxel_world::VoxelWorld,
     },
-    session::Session,
+    session::EditorSession,
 };
 
 pub fn new_project_dialog(
     ctx: &egui::Context,
     ui_state: &mut EditorUIState,
     ecs_world: &mut ECSWorld,
-    session: &mut Session,
+    session: &mut EditorSession,
     voxel_world: &mut VoxelWorld,
 ) {
     if let Some(new_project_dialog) = &mut ui_state.new_project_dialog {
@@ -77,7 +77,7 @@ pub fn new_project_dialog(
                         break 'is_path_valid false;
                     };
                     if read.count() > 0 {
-                        error = "Directory must be empty.".to_owned();
+                        error = "Warning: Directory is not empty.".to_owned();
                         //break 'is_path_valid false;
                     }
 
@@ -95,7 +95,8 @@ pub fn new_project_dialog(
                     .add_enabled(is_valid, egui::Button::new("Create"))
                     .clicked()
                 {
-                    session.new_project(ecs_world, path.unwrap(), voxel_world);
+                    //session.new_project(ecs_world, path.unwrap(), voxel_world);
+                    session.project_save_dir = Some(path.unwrap());
                     force_close = true;
                 }
             });

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 use nalgebra::Vector3;
 use serde::ser::{SerializeMap, SerializeStruct};
@@ -9,54 +9,173 @@ use crate::{
         vtable,
     },
     engine::{
-        asset::repr::collider::ColliderRegistryAsset,
         entity::{
             ecs_world::{ECSWorld, Entity},
             EntityParent,
         },
         physics::{
-            box_collider::BoxCollider,
+            box_collider::{self, BoxCollider},
             capsule_collider::CapsuleCollider,
-            collider::{Collider, ColliderConcrete, ColliderType, Colliders},
+            collider::{
+                Collider, ColliderDeserializeFnPtr, ColliderIntersectionTest,
+                ColliderIntersectionTestCaller, ColliderMethods,
+            },
+            collider_component::EntityColliders,
             transform::Transform,
         },
-        voxel::terrain::chunks::VoxelChunks,
+        voxel::{terrain::chunks::VoxelChunks, voxel_world::VoxelWorld},
     },
 };
+
+// The Collider::NAME lexographically sorted so a < b.
+#[derive(Hash, PartialEq, Eq)]
+struct ColliderIntersectionPair {
+    a: TypeId,
+    b: TypeId,
+}
+
+impl ColliderIntersectionPair {
+    pub fn new(mut collider_a: TypeId, mut collider_b: TypeId) -> Self {
+        // Swap to ensure name A is less than name B lexographically.
+        if collider_a.cmp(&collider_b) != std::cmp::Ordering::Less {
+            std::mem::swap(&mut collider_a, &mut collider_b);
+        }
+        Self {
+            a: collider_a,
+            b: collider_b,
+        }
+    }
+}
+
+type ColliderMethodsVtablePtr = *const ();
 
 // Spatial hashmap binning colliders per region.
 pub struct ColliderRegistry {
     pub bins: HashMap</*region_pos*/ Vector3<i32>, Vec<(Entity, ColliderId)>>,
-    pub colliders: HashMap<ColliderType, DynVecCloneable>,
-    collider_vtables: HashMap<ColliderType, *const ()>,
+    pub colliders: HashMap<TypeId, DynVecCloneable>,
+    collider_vtables: HashMap<TypeId, ColliderMethodsVtablePtr>,
+    pub collider_deserialize_fns: HashMap<TypeId, ColliderDeserializeFnPtr>,
+    pub collider_type_info: HashMap</*Collider::NAME*/ String, TypeInfoCloneable>,
+    pub collider_names: HashMap<TypeId, /*Collider::NAME*/ String>,
+    intersection_functions: HashMap<ColliderIntersectionPair, ColliderIntersectionTestCaller>,
 }
 
 impl ColliderRegistry {
     pub fn new() -> Self {
-        Self {
+        let mut reg = Self {
             bins: HashMap::new(),
             colliders: HashMap::new(),
             collider_vtables: HashMap::new(),
-        }
+            collider_deserialize_fns: HashMap::new(),
+            collider_type_info: HashMap::new(),
+            collider_names: HashMap::new(),
+            intersection_functions: HashMap::new(),
+        };
+
+        reg.register_collider_type::<BoxCollider>();
+        reg.register_collider_intersection_fn::<BoxCollider, BoxCollider, _, _>(
+            box_collider::test_intersection_box_box,
+        );
+
+        reg
     }
 
-    pub fn register_collider<C: Collider + Clone + 'static>(&mut self, collider: C) -> ColliderId {
-        let collider_type = collider.collider_type();
+    fn register_collider_intersection_fn<
+        A: Collider,
+        B: Collider,
+        F: ColliderIntersectionTest<Marker> + 'static,
+        Marker,
+    >(
+        &mut self,
+        func: F,
+    ) {
+        let pair =
+            ColliderIntersectionPair::new(std::any::TypeId::of::<A>(), std::any::TypeId::of::<B>());
+        let old = self
+            .intersection_functions
+            .insert(pair, ColliderIntersectionTestCaller::new(func));
+        assert!(
+            old.is_none(),
+            "Already register intersection function for colliders {} and {}",
+            std::any::type_name::<A>(),
+            std::any::type_name::<B>()
+        );
+    }
 
-        let collider_vtable_ptr = {
-            // dyn pointer to the collider data and vtable.
-            let collider_dyn = &collider as &dyn Collider;
-            unsafe { vtable::get_vtable_ptr(collider_dyn) }
-        };
+    fn register_collider_type<C: Collider + 'static>(&mut self) {
+        let type_id = std::any::TypeId::of::<C>();
+        // Technically there can be two different vtable ptrs for the same type due to something
+        // about codegen units, but that doesn't matter here since semantically there is no
+        // difference so ignore duplicates.
+        if self.collider_vtables.contains_key(&type_id) {
+            return;
+        }
+
+        // Safety: We never access the contents of the pointer, only extracting the vtable, so
+        // should be okay right? Use `without_provenance_mut` since this ptr isn't actually
+        // associated with a memory allocation.
+        let null = unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut::<C>(0x1234)) };
+        let dyn_ref = unsafe { null.as_ref() } as &dyn ColliderMethods;
+        // Safety: This reference is in fact a dyn ref.
+        let vtable_ptr = unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn ColliderMethods) };
+        self.collider_vtables.insert(type_id, vtable_ptr);
+        let de_f = C::deserialize_collider;
+        self.collider_deserialize_fns.insert(type_id, de_f);
+
+        let old = self
+            .collider_type_info
+            .insert(C::NAME.to_owned(), TypeInfoCloneable::new::<C>());
+        assert!(
+            old.is_none(),
+            "{} collider has a duplicate Collider::NAME with another already registered component.",
+            std::any::type_name::<C>()
+        );
+        self.collider_names.insert(type_id, C::NAME.to_owned());
+    }
+
+    pub fn register_collider<C: Collider>(&mut self, collider: C) -> ColliderId {
+        let type_id = std::any::TypeId::of::<C>();
+        if !self.collider_vtables.contains_key(&type_id) {
+            panic!("Tried to register collider of type `{}` which has not been registered within the ColliderRegisty.", std::any::type_name::<C>());
+        }
 
         let vec = self
             .colliders
-            .entry(collider_type)
+            .entry(type_id)
             .or_insert(DynVecCloneable::new(TypeInfoCloneable::new::<C>()));
         let index = vec.len();
         vec.push(collider);
         return ColliderId {
-            collider_type: collider_type,
+            collider_type: type_id,
+            index,
+        };
+    }
+
+    /// Takes ownership of src_data. Type info must be a valid registered collider.
+    /// Safety: src_data must be allocated with the same alignment and size as the provided type
+    /// info. src_data is also taken ownership of.
+    pub unsafe fn register_collider_raw(
+        &mut self,
+        type_info_cloneable: &TypeInfoCloneable,
+        src_data: *mut u8,
+    ) -> ColliderId {
+        let type_id = type_info_cloneable.type_id();
+        if !self.collider_vtables.contains_key(&type_id) {
+            panic!("Tried to register collider of type `{:?}` which has not been registered within the ColliderRegisty.", 
+                type_info_cloneable.type_id());
+        }
+
+        let vec = self
+            .colliders
+            .entry(type_id)
+            .or_insert(DynVecCloneable::new(type_info_cloneable.clone()));
+        let index = vec.len();
+        vec.push_unchecked(std::slice::from_raw_parts(
+            src_data as *const u8,
+            type_info_cloneable.size(),
+        ));
+        return ColliderId {
+            collider_type: type_id,
             index,
         };
     }
@@ -69,19 +188,25 @@ impl ColliderRegistry {
         return collider_id.index < colliders.len();
     }
 
-    pub fn update_entity_collider_positions(&mut self, ecs_world: &mut ECSWorld) {
+    pub fn update_entity_collider_positions(
+        &mut self,
+        ecs_world: &mut ECSWorld,
+        voxel_world: &VoxelWorld,
+    ) {
         // Clear all the bins and then populate each one with the colliders.
         // This is trading off so we do O(2n) here so we don't do O(n^2) during collision
         // detection. TODO: Benchmark and also don't clear entire bin each time and figure out how
         // to selectively modify colliders.
         self.bins.clear();
         for (entity, (transform, colliders)) in ecs_world
-            .query_mut::<(&Transform, &Colliders)>()
+            .query_mut::<(&Transform, &EntityColliders)>()
             .without::<(EntityParent,)>()
             .into_iter()
         {
             for collider_id in &colliders.colliders {
-                let aabb = self.get_collider_dyn(collider_id).aabb(transform);
+                let aabb = self
+                    .get_collider_dyn(collider_id)
+                    .aabb(transform, voxel_world);
                 let region_min = VoxelChunks::position_to_region_pos(&aabb.min);
                 let region_max = VoxelChunks::position_to_region_pos(&aabb.max);
                 for region_x in region_min.x..=region_max.x {
@@ -98,7 +223,20 @@ impl ColliderRegistry {
         }
     }
 
-    pub fn get_collider_dyn(&self, collider_id: &ColliderId) -> &dyn Collider {
+    pub fn clone_collider(&mut self, collider_id: &ColliderId) -> ColliderId {
+        let vec = self
+            .colliders
+            .get_mut(&collider_id.collider_type)
+            .expect("Collider id is invalid");
+        let new_index = vec.clone_element(collider_id.index);
+
+        return ColliderId {
+            collider_type: collider_id.collider_type,
+            index: new_index,
+        };
+    }
+
+    pub fn get_collider_dyn(&self, collider_id: &ColliderId) -> &dyn ColliderMethods {
         let collider = self
             .colliders
             .get(&collider_id.collider_type)
@@ -111,7 +249,7 @@ impl ColliderRegistry {
                 .get(&collider_id.collider_type)
                 .unwrap();
             let dyn_fat_ptr = unsafe {
-                std::mem::transmute::<(*const (), *const ()), *const dyn Collider>((
+                std::mem::transmute::<(*const (), *const ()), *const dyn ColliderMethods>((
                     collider, vtable_ptr,
                 ))
             };
@@ -120,21 +258,18 @@ impl ColliderRegistry {
         dyn_ref
     }
 
-    pub fn get_collider<T: Collider + ColliderConcrete + 'static>(
-        &self,
-        collider_id: &ColliderId,
-    ) -> &T {
+    pub fn get_collider<T: Collider>(&self, collider_id: &ColliderId) -> &T {
         let collider = self
             .colliders
             .get(&collider_id.collider_type)
             .unwrap()
             .get_unchecked(collider_id.index)
             .as_ptr() as *const T;
-        assert_eq!(collider_id.collider_type, T::concrete_collider_type());
+        assert_eq!(collider_id.collider_type, std::any::TypeId::of::<T>());
         return unsafe { &*collider };
     }
 
-    pub fn get_collider_mut<T: Collider + ColliderConcrete + 'static>(
+    pub fn get_collider_mut<T: ColliderMethods + Collider + 'static>(
         &mut self,
         collider_id: &ColliderId,
     ) -> &mut T {
@@ -144,60 +279,26 @@ impl ColliderRegistry {
             .unwrap()
             .get_unchecked(collider_id.index)
             .as_ptr() as *mut T;
-        assert_eq!(collider_id.collider_type, T::concrete_collider_type());
+        assert_eq!(collider_id.collider_type, std::any::TypeId::of::<T>());
         return unsafe { &mut *collider };
     }
 }
 
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ColliderId {
-    pub collider_type: ColliderType,
+    pub collider_type: TypeId,
     pub index: usize,
 }
 
 impl ColliderId {
-    const fn null() -> ColliderId {
+    pub const fn null() -> ColliderId {
         ColliderId {
-            collider_type: ColliderType::Null,
+            collider_type: TypeId::of::<()>(),
             index: 0,
         }
     }
 
     fn is_null(&self) -> bool {
-        self.collider_type == ColliderType::Null
-    }
-}
-
-impl From<&ColliderRegistryAsset> for ColliderRegistry {
-    fn from(asset: &ColliderRegistryAsset) -> Self {
-        let mut colliders = asset.colliders.clone();
-        let mut collider_vtables = HashMap::new();
-        for (key, val) in asset.colliders.iter() {
-            if val.is_empty() {
-                colliders.remove(key);
-                continue;
-            }
-
-            match key {
-                ColliderType::Null => {}
-                ColliderType::Capsule => {
-                    let capsule = val.get::<CapsuleCollider>(0);
-                    let vtable_ptr = unsafe { vtable::get_vtable_ptr(capsule as &dyn Collider) };
-                    collider_vtables.insert(*key, vtable_ptr);
-                }
-                ColliderType::Plane => todo!(),
-                ColliderType::Box => {
-                    let b = val.get::<BoxCollider>(0);
-                    let vtable_ptr = unsafe { vtable::get_vtable_ptr(b as &dyn Collider) };
-                    collider_vtables.insert(*key, vtable_ptr);
-                }
-            }
-        }
-
-        Self {
-            bins: HashMap::new(),
-            colliders,
-            collider_vtables,
-        }
+        self.collider_type == TypeId::of::<()>()
     }
 }

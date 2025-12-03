@@ -11,3 +11,9 @@
 *.zst
 profile.json.gz
 profile.json
+perf.data*
+
+# Spirv intermediates
+*.spv
+*.spv-asm
+

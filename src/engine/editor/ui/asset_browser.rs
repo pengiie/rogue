@@ -5,7 +5,7 @@ use std::{
 
 use egui::Sense;
 
-use crate::{engine::ui::EditorUIState, session::Session};
+use crate::{engine::ui::EditorUIState, session::EditorSession};
 
 pub enum EditorAssetBrowserNode {
     Asset(EditorAssetBrowserAsset),
@@ -187,7 +187,11 @@ pub struct EditorAssetBrowserAsset {
     pub file_sub_path: PathBuf,
 }
 
-pub fn asset_browser_ui(ui: &mut egui::Ui, session: &mut Session, ui_state: &mut EditorUIState) {
+pub fn asset_browser_ui(
+    ui: &mut egui::Ui,
+    session: &mut EditorSession,
+    ui_state: &mut EditorUIState,
+) {
     let assets_dir = session
         .project_assets_dir()
         .expect("UI should be shown only when project is open.");

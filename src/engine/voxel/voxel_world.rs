@@ -13,7 +13,6 @@ use rogue_macros::Resource;
 
 use super::{
     attachment::{AttachmentId, AttachmentInfoMap, AttachmentMap},
-    cursor::{VoxelEditEntityInfo, VoxelEditInfo},
     flat::VoxelModelFlat,
     sft::VoxelModelSFT,
     voxel::{
@@ -27,6 +26,7 @@ use super::{
 use crate::{
     common::geometry::aabb::AABB,
     engine::{
+        editor::brush::{VoxelEditEntityInfo, VoxelEditInfo},
         entity::ecs_world::Entity,
         voxel::{
             thc::{VoxelModelTHC, VoxelModelTHCCompressed},
@@ -70,7 +70,7 @@ use crate::{
         },
         window::time::Stopwatch,
     },
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
 
@@ -321,7 +321,7 @@ impl VoxelWorld {
         mut voxel_world: ResMut<VoxelWorld>,
         mut voxel_world_gpu: ResMut<VoxelWorldGpu>,
         mut assets: ResMut<Assets>,
-        session: Res<Session>,
+        session: Res<EditorSession>,
     ) {
         let voxel_world: &mut VoxelWorld = &mut voxel_world;
         let chunks: &mut VoxelChunks = &mut voxel_world.chunks;

@@ -10,7 +10,7 @@ use crate::{
         ui::EditorUIState,
         voxel::voxel_world::VoxelWorld,
     },
-    session::Session,
+    session::EditorSession,
 };
 
 fn color_picker(ui: &mut egui::Ui, color: &mut Color) {
@@ -66,7 +66,7 @@ pub fn editing_pane(
     editor: &mut Editor,
     voxel_world: &mut VoxelWorld,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
 ) {
     let content = |ui: &mut egui::Ui| {

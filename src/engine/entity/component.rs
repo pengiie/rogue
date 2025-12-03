@@ -1,35 +1,77 @@
 use std::{any::TypeId, cell::Cell, collections::HashMap, ptr::NonNull};
 
 use rogue_macros::generate_tuples;
+use uuid::Uuid;
 
 use crate::{
     common::dyn_vec::TypeInfo,
     engine::{
         entity::{archetype::ComponentArchetype, query::QueryItemRef},
-        physics::physics_world::PhysicsWorld,
+        physics::{collider_registry::ColliderRegistry, physics_world::PhysicsWorld},
         resource::ResourceBank,
-        voxel::voxel_world::VoxelWorld,
+        voxel::{voxel_registry::VoxelModelRegistry, voxel_world::VoxelWorld},
     },
 };
 
-pub struct GameComponentContext<'a> {
+pub struct GameComponentCloneContext<'a> {
     pub voxel_world: &'a mut VoxelWorld,
-    pub physics_world: &'a mut PhysicsWorld,
+    pub collider_registry: &'a mut ColliderRegistry,
 }
 
-/// Implements serialization and cloning.
-pub trait GameComponent {
-    fn clone_component(&self, ctx: &mut GameComponentContext<'_>, dst_ptr: *mut u8);
+pub struct GameComponentSerializeContext<'a> {
+    pub voxel_registry: &'a VoxelModelRegistry,
+    pub collider_registry: &'a ColliderRegistry,
+}
+
+pub struct GameComponentDeserializeContext<'a> {
+    pub voxel_registry: &'a mut VoxelModelRegistry,
+    pub collider_registry: &'a mut ColliderRegistry,
+}
+
+pub trait GameComponentMethods {
+    fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8);
 
     fn serialize_component(
         &self,
-        ctx: GameComponentContext<'_>,
+        ctx: &GameComponentSerializeContext<'_>,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()>;
+}
+
+impl<T: GameComponent> GameComponentMethods for T {
+    fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8) {
+        GameComponent::clone_component(self, ctx, dst_ptr);
+    }
+
+    fn serialize_component(
+        &self,
+        ctx: &GameComponentSerializeContext<'_>,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        GameComponent::serialize_component(self, ctx, ser)
+    }
+}
+
+pub type GameComponentDeserializeFnPtr = unsafe fn(
+    /*ctx: */ &mut GameComponentDeserializeContext<'_>,
+    /*de: */ &mut dyn erased_serde::Deserializer,
+    /*dst_ptr: */ *mut u8,
+) -> erased_serde::Result<()>;
+
+/// Implements serialization and cloning.
+pub trait GameComponent {
+    const NAME: &str;
+
+    fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8);
+
+    fn serialize_component(
+        &self,
+        ctx: &GameComponentSerializeContext<'_>,
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()>;
 
-    fn deserialize_component(
-        &self,
-        ctx: GameComponentContext<'_>,
+    unsafe fn deserialize_component(
+        ctx: &mut GameComponentDeserializeContext<'_>,
         de: &mut dyn erased_serde::Deserializer,
         dst_ptr: *mut u8,
     ) -> erased_serde::Result<()>;
@@ -40,7 +82,7 @@ pub trait Bundle {
     fn component_type_ids() -> Vec<TypeId>;
     fn component_type_infos() -> Vec<TypeInfo>;
 
-    fn type_info(&self) -> Vec<(TypeInfo, *const u8)>;
+    unsafe fn type_info(&self) -> Vec<(TypeInfo, *const u8)>;
 }
 
 macro_rules! impl_bundle {
@@ -58,7 +100,7 @@ macro_rules! impl_bundle {
                 ]
             }
 
-            fn type_info(&self) -> Vec<(TypeInfo, *const u8)> {
+            unsafe fn type_info(&self) -> Vec<(TypeInfo, *const u8)> {
                 let p = std::slice::from_ref(self).as_ptr() as *const u8;
                 vec![
                     $((
@@ -82,7 +124,7 @@ impl Bundle for () {
         vec![]
     }
 
-    fn type_info(&self) -> Vec<(TypeInfo, *const u8)> {
+    unsafe fn type_info(&self) -> Vec<(TypeInfo, *const u8)> {
         vec![]
     }
 }

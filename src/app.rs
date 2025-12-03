@@ -29,8 +29,7 @@ use crate::{
         voxel::voxel_world::VoxelWorld,
         window::{time::Time, window::Window},
     },
-    game::{self, entity::player::Player},
-    game_loop,
+    game, game_loop,
     settings::Settings,
 };
 

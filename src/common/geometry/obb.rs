@@ -38,12 +38,10 @@ impl OBB {
 
     pub fn rotated_min_max(&self) -> (Vector3<f32>, Vector3<f32>) {
         let dv = (self.aabb.max - self.aabb.min);
-        let min = self.rotation.transform_vector(&-self.rotation_anchor)
-            + self.rotation_anchor
-            + self.aabb.min;
-        let max = self.rotation.transform_vector(&(dv - self.rotation_anchor))
-            + self.rotation_anchor
-            + self.aabb.min;
+        let center = self.aabb.center();
+        let anchor = self.rotation_anchor + center;
+        let min = self.rotation.transform_vector(&(self.aabb.min - anchor)) + anchor;
+        let max = self.rotation.transform_vector(&(self.aabb.max - anchor)) + anchor;
         (min, max)
     }
 

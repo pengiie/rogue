@@ -1,6 +1,5 @@
 use super::asset::{AssetLoadError, AssetLoader, AssetSaver};
 
-pub mod collider;
 pub mod components;
 pub mod editor_settings;
 pub mod game_entity;

@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 
-use crate::common::geometry::shape::{Face, Shape, Vertex};
+use crate::common::geometry::shape::{Face, Projection, Shape, Vertex};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AABB {
@@ -37,6 +37,22 @@ impl AABB {
 
     pub fn half_side_length(&self) -> Vector3<f32> {
         return self.side_length() * 0.5;
+    }
+
+    pub fn intersects_aabb(&self, other: &AABB) -> bool {
+        // Test if x-axis overlaps.
+        if self.min.x <= other.max.x && self.max.x <= other.min.x {
+            return false;
+        }
+        // Test if y-axis overlaps.
+        if self.min.y <= other.max.y && self.max.y <= other.min.y {
+            return false;
+        }
+        // Test if z-axis overlaps.
+        if self.min.z <= other.max.z && self.max.z <= other.min.z {
+            return false;
+        }
+        return true;
     }
 }
 

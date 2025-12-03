@@ -2,13 +2,15 @@ use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
 use super::transform::Transform;
 use crate::common::geometry::aabb::AABB;
+use crate::engine::physics::collider::ContactManifold;
+use crate::engine::voxel::voxel_world::VoxelWorld;
 use crate::{
     common::color::Color,
     engine::{
         debug::{DebugCapsule, DebugFlags, DebugLine, DebugRenderer},
         physics::{
             box_collider::BoxCollider,
-            collider::{Collider, ColliderConcrete, ColliderType, CollisionInfo},
+            collider::{Collider, ColliderMethods, ContactPair},
         },
     },
 };
@@ -52,47 +54,38 @@ impl CapsuleCollider {
     }
 }
 
-impl ColliderConcrete for CapsuleCollider {
-    fn concrete_collider_type() -> ColliderType {
-        ColliderType::Capsule
-    }
-}
-
 impl Collider for CapsuleCollider {
-    fn test_collision(
-        &self,
-        other: &dyn Collider,
-        transform_a: &Transform,
-        transform_b: &Transform,
-    ) -> Option<CollisionInfo> {
-        match other.collider_type() {
-            ColliderType::Box => {
-                let box_collider = other.downcast_ref::<BoxCollider>().unwrap();
-                return box_capsule_collision_test(box_collider, self, transform_b, transform_a);
-            }
-            ColliderType::Null => None,
-            _ => {
-                log::error!(
-                    "Collision not implemented for {:?} and {:?}",
-                    self.collider_type(),
-                    other.collider_type()
-                );
-                None
-            }
-        }
-    }
+    const NAME: &str = "CapsuleCollider";
+    // fn test_collision(
+    //     &self,
+    //     other: &dyn ColliderMethods,
+    //     transform_a: &Transform,
+    //     transform_b: &Transform,
+    // ) -> Option<ContactManifold> {
+    //     match other.collider_type() {
+    //         ColliderType::Box => {
+    //             let box_collider = other.downcast_ref::<BoxCollider>().unwrap();
+    //             return box_capsule_collision_test(box_collider, self, transform_b, transform_a);
+    //         }
+    //         ColliderType::Null => None,
+    //         _ => {
+    //             log::error!(
+    //                 "Collision not implemented for {:?} and {:?}",
+    //                 self.collider_type(),
+    //                 other.collider_type()
+    //             );
+    //             None
+    //         }
+    //     }
+    // }
 
-    fn aabb(&self, world_transform: &Transform) -> crate::common::geometry::aabb::AABB {
+    fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB {
         let up = Vector3::y() * self.half_height;
         let forward = Vector3::z() * self.radius;
         let right = Vector3::x() * self.radius;
         let min = self.center + self.orientation * (-up - forward - right);
         let max = self.center + self.orientation * (up + forward + right);
         return AABB::new_two_point(min, max);
-    }
-
-    fn collider_type(&self) -> ColliderType {
-        ColliderType::Capsule
     }
 
     fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
@@ -110,6 +103,20 @@ impl Collider for CapsuleCollider {
             flags: DebugFlags::NONE,
         });
     }
+
+    fn serialize_collider(
+        &self,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
+
+    unsafe fn deserialize_collider(
+        de: &mut dyn erased_serde::Deserializer,
+        dst_ptr: *mut u8,
+    ) -> erased_serde::Result<()> {
+        todo!()
+    }
 }
 
 pub fn box_capsule_collision_test(
@@ -117,7 +124,7 @@ pub fn box_capsule_collision_test(
     capsule: &CapsuleCollider,
     transform_box: &Transform,
     transform_capsule: &Transform,
-) -> Option<CollisionInfo> {
+) -> Option<ContactManifold> {
     let transform_box = transform_box.to_transformation_matrix();
     let transform_capsule = transform_capsule.to_transformation_matrix();
 
@@ -143,9 +150,5 @@ pub fn box_capsule_collision_test(
 
     let box_to_capsule_penetration = closest_vec.normalize() * capsule.radius;
 
-    return Some(CollisionInfo {
-        penetration_depth: box_to_capsule_penetration,
-        contact_points_a: todo!(),
-        contact_points_b: todo!(),
-    });
+    todo!();
 }

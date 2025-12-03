@@ -2,9 +2,10 @@ use std::{f32, time::Duration};
 
 use ash::vk::DisplayPlaneAlphaFlagsKHR;
 use nalgebra::{UnitQuaternion, Vector3};
+use rogue_macros::game_component;
 
 use crate::{consts, engine::entity::component::GameComponent};
-
+use crate::engine::entity::component::GameComponentSerializeContext;
 use super::transform::Transform;
 
 pub enum ForceType {
@@ -40,7 +41,8 @@ pub struct RigidBodyCreateInfo {
     pub restitution: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[game_component(name = "RigidBody")]
 pub struct RigidBody {
     pub velocity: Vector3<f32>,
     // Axis angle with length representing ccw-speed in radians per second.
@@ -146,33 +148,5 @@ impl RigidBody {
                 delta_angular_velocity.norm(),
             );
         }
-    }
-}
-
-impl GameComponent for RigidBody {
-    fn clone_component(
-        &self,
-        ctx: &mut crate::engine::entity::component::GameComponentContext<'_>,
-        dst_ptr: *mut u8,
-    ) {
-        // Safety: dst_ptr should be allocated with the memory layout for this type.
-        unsafe { (dst_ptr as *mut Self).write(self.clone()) };
-    }
-
-    fn serialize_component(
-        &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
-        ser: &mut dyn erased_serde::Serializer,
-    ) -> erased_serde::Result<()> {
-        todo!()
-    }
-
-    fn deserialize_component(
-        &self,
-        ctx: crate::engine::entity::component::GameComponentContext<'_>,
-        de: &mut dyn erased_serde::Deserializer,
-        dst_ptr: *mut u8,
-    ) -> erased_serde::Result<()> {
-        todo!()
     }
 }

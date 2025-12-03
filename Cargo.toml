@@ -40,8 +40,8 @@ petgraph = "0.6.5"
 pollster = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
-erased-serde = "0.4.8"
-uuid = { version = "1.15.1", features = [ "v4", "bytemuck" ]}
+erased-serde = { path = "../erased-serde" }
+uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
 
 # Math/physics
 nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }

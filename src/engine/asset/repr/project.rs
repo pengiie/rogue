@@ -1,106 +1,305 @@
-use std::{collections::HashMap, f32, ops::Deref, path::PathBuf, str::FromStr};
+use std::{
+    collections::HashMap,
+    f32,
+    ops::Deref,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use nalgebra::{Translation3, UnitQuaternion, Vector3};
+use uuid::Uuid;
 
 use crate::{
     engine::{
         asset::{
-            asset::{AssetHandle, AssetLoader, AssetPath, Assets},
-            repr::{collider::ColliderRegistryAsset, game_entity::EditorGameEntityAsset},
+            asset::{AssetFile, AssetHandle, AssetLoadError, AssetLoader, AssetPath, Assets},
+            repr::{game_entity::WorldGameEntityAsset, TextAsset},
         },
         editor::editor::Editor,
         entity::{
-            ecs_world::{ECSWorld, Entity},
+            component::{self, GameComponentDeserializeContext, GameComponentSerializeContext},
+            ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor},
             scripting::{ScriptableEntity, Scripts},
             EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
         graphics::camera::Camera,
         physics::{
             capsule_collider::CapsuleCollider, collider_registry::ColliderRegistry,
-            plane_collider::PlaneCollider, rigid_body::RigidBody, transform::Transform,
+            physics_world::PhysicsWorld, plane_collider::PlaneCollider, rigid_body::RigidBody,
+            transform::Transform,
         },
         voxel::{
             voxel::VoxelModelImpl, voxel_registry::VoxelModelRegistry, voxel_world::VoxelWorld,
         },
     },
-    session::{RenderableEntityLoad, Session},
+    session::{
+        EditorSession, ProjectEditorSettings, ProjectSettings, ProjectSettingsSerializable,
+        RenderableEntityLoad,
+    },
 };
+
+use serde::{ser::SerializeStruct, Deserializer};
 
 use super::{
     components::{CameraAsset, TransformAsset},
     voxel::any::VoxelModelAnyAsset,
 };
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct EditorProjectAsset {
-    pub editor_camera_transform: TransformAsset,
-    pub editor_camera: CameraAsset,
+pub struct EditorProjectRaw {
+    data: String,
+}
 
-    pub rotation_anchor: Vector3<f32>,
-    pub terrain_asset_path: Option<PathBuf>,
-    pub game_camera: Option</*uuid=*/ String>,
-    pub game_entities: Vec<EditorGameEntityAsset>,
-    #[serde(default)]
-    pub collider_registry: ColliderRegistryAsset,
+pub struct EditorProjectAsset {
+    pub project_dir: Option<PathBuf>,
+    pub editor_settings: ProjectEditorSettings,
+    pub settings: ProjectSettings,
+    pub ecs_world: ECSWorld,
+    pub physics_world: PhysicsWorld,
+    pub voxel_registry: VoxelModelRegistry,
 }
 
 impl EditorProjectAsset {
     pub fn new_empty() -> Self {
         Self {
-            editor_camera_transform: TransformAsset {
-                transform: Transform::with_translation(Translation3::new(-5.0, 5.0, -5.0)),
-            },
-            editor_camera: CameraAsset {
-                camera: Camera::new(f32::consts::FRAC_PI_2),
-            },
-            terrain_asset_path: None,
-            game_camera: None,
-            rotation_anchor: Vector3::zeros(),
-            game_entities: Vec::new(),
-            collider_registry: ColliderRegistryAsset::new(),
+            project_dir: None,
+            editor_settings: ProjectEditorSettings::new_empty(),
+            settings: ProjectSettings::new_empty(),
+            ecs_world: ECSWorld::new(),
+            physics_world: PhysicsWorld::new(),
+            voxel_registry: VoxelModelRegistry::new(),
         }
     }
 
-    // Creates a project asset from the current world state.
-    pub fn new_existing(
-        &self,
+    pub fn from_existing_raw(project_dir: &Path) -> anyhow::Result<Self> {
+        let json_text = Assets::load_asset_sync::<TextAsset>(AssetPath::new_project_file(
+            project_dir.to_owned(),
+        ))?;
+        let mut de = serde_json::Deserializer::from_str(&json_text.contents);
+
+        const FIELDS: [&str; 3] = ["editor_settings", "project_settings", "entities"];
+        Ok(de.deserialize_struct(
+            "project",
+            &FIELDS,
+            ProjectVisitor {
+                project_dir: project_dir.to_path_buf(),
+            },
+        )?)
+    }
+
+    pub fn serialize(
+        session: &EditorSession,
         editor: &Editor,
         ecs_world: &ECSWorld,
-        voxel_world: &VoxelWorld,
-        terrain_asset_path: Option<PathBuf>,
-        game_camera: Option<Entity>,
-        collider_registry: &ColliderRegistry,
-    ) -> Self {
-        let game_entities = ecs_world
-            .query::<()>()
-            .with::<(GameEntity,)>()
-            .into_iter()
-            .map(|(id, _)| EditorGameEntityAsset::new(&ecs_world, &voxel_world.registry, id))
-            .collect::<Vec<_>>();
+        physics_world: &PhysicsWorld,
+        voxel_registry: &VoxelModelRegistry,
+    ) -> anyhow::Result<TextAsset> {
+        let mut str = serde_json::to_string_pretty(&ProjectSerializer {
+            session,
+            editor,
+            ecs_world,
+            physics_world,
+            voxel_registry,
+        })?;
+        return Ok(TextAsset { contents: str });
+    }
+}
 
-        let mut editor_camera_query =
-            ecs_world.query_one::<(&mut Transform, &Camera)>(editor.editor_camera_entity.unwrap());
-        let (mut editor_transform, editor_camera) = editor_camera_query.get().unwrap();
+struct ProjectSerializer<'a> {
+    session: &'a EditorSession,
+    editor: &'a Editor,
+    ecs_world: &'a ECSWorld,
+    physics_world: &'a PhysicsWorld,
+    voxel_registry: &'a VoxelModelRegistry,
+}
 
-        let game_camera_uuid = game_camera.map(|e| {
-            ecs_world
-                .get::<&GameEntity>(e)
-                .expect("Game camera should be valid entity.")
-                .uuid
-                .to_string()
-        });
-        Self {
-            editor_camera_transform: TransformAsset {
-                transform: editor_transform.clone(),
-            },
-            editor_camera: CameraAsset {
-                camera: editor_camera.clone(),
-            },
-            rotation_anchor: editor.editor_camera.rotation_anchor,
-            terrain_asset_path,
-            game_entities,
-            game_camera: game_camera_uuid,
-            collider_registry: ColliderRegistryAsset::from(collider_registry),
+impl serde::Serialize for ProjectSerializer<'_> {
+    fn serialize<S>(&self, mut ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = ser.serialize_struct("project", 2)?;
+        s.serialize_field(
+            "editor_settings",
+            &self.editor.editor_settings(self.ecs_world),
+        );
+        s.serialize_field(
+            "project_settings",
+            &self.session.project.serialize(self.ecs_world),
+        );
+        s.serialize_field(
+            "scene",
+            &self
+                .ecs_world
+                .serialize_world(&GameComponentSerializeContext {
+                    voxel_registry: self.voxel_registry,
+                    collider_registry: &self.physics_world.colliders,
+                }),
+        );
+        s.end()
+    }
+}
+
+struct ProjectVisitor {
+    project_dir: PathBuf,
+}
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum ProjectField {
+    ProjectSettings,
+    EditorSettings,
+    Scene,
+}
+
+impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
+    type Value = EditorProjectAsset;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("project thingy")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut voxel_registry = VoxelModelRegistry::new();
+        let mut ecs_world = ECSWorld::new();
+        let mut entity_uuid_map = HashMap::new();
+        let mut physics_world = PhysicsWorld::new();
+        let mut editor_settings = None;
+        let mut project_settings_ser = None;
+        while let Some(key) = map.next_key::<ProjectField>()? {
+            match key {
+                ProjectField::ProjectSettings => {
+                    if project_settings_ser.is_some() {
+                        return Err(serde::de::Error::duplicate_field("project_settings"));
+                    }
+                    project_settings_ser = Some(map.next_value::<ProjectSettingsSerializable>()?);
+                }
+                ProjectField::EditorSettings => {
+                    if editor_settings.is_some() {
+                        return Err(serde::de::Error::duplicate_field("editor_settings"));
+                    }
+                    editor_settings = Some(map.next_value::<ProjectEditorSettings>()?);
+                }
+                ProjectField::Scene => {
+                    let visitor = ProjectSceneVisitor {
+                        ctx: &mut ProjectSceneDeserializeContext {
+                            ecs_world: &mut ecs_world,
+                            entity_uuid_map: &mut entity_uuid_map,
+                            component_ctx: &mut GameComponentDeserializeContext {
+                                voxel_registry: &mut voxel_registry,
+                                collider_registry: &mut physics_world.colliders,
+                            },
+                        },
+                    };
+                    map.next_value_seed(visitor)?;
+                }
+            }
         }
+
+        let editor_settings =
+            editor_settings.ok_or_else(|| serde::de::Error::missing_field("editor_settings"))?;
+        let project_settings_ser = project_settings_ser
+            .ok_or_else(|| serde::de::Error::missing_field("project_settings"))?;
+
+        let game_camera = project_settings_ser
+            .game_camera
+            .map(|uuid| {
+                entity_uuid_map.get(&uuid).ok_or_else(|| {
+                    serde::de::Error::custom(
+                        "Game camera contains uuid of an entity that doesn't exist",
+                    )
+                })
+            })
+            .transpose()?
+            .map(|e| *e);
+
+        let project_settings = ProjectSettings {
+            terrain_asset_path: project_settings_ser.terrain_asset_path,
+            game_camera,
+        };
+
+        Ok(EditorProjectAsset {
+            project_dir: Some(self.project_dir),
+            editor_settings,
+            settings: project_settings,
+            ecs_world,
+            physics_world,
+            voxel_registry,
+        })
+    }
+}
+
+pub struct ProjectSceneDeserializeContext<'a> {
+    pub ecs_world: &'a mut ECSWorld,
+    pub entity_uuid_map: &'a mut HashMap<Uuid, Entity>,
+    pub component_ctx: &'a mut GameComponentDeserializeContext<'a>,
+}
+
+pub struct ProjectSceneVisitor<'a> {
+    pub ctx: &'a mut ProjectSceneDeserializeContext<'a>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum ProjectSceneField {
+    Entities,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for ProjectSceneVisitor<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const FIELDS: [&str; 1] = ["entities"];
+        deserializer.deserialize_struct("Scene", &FIELDS, self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for ProjectSceneVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("failed while visiting struct Scene")
+    }
+
+    fn visit_map<A>(mut self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut entities_visitor = ProjectSceneEntitiesVisitor { ctx: self.ctx };
+        let mut parsed_entities = false;
+        while let Some(key) = map.next_key::<ProjectSceneField>()? {
+            match key {
+                ProjectSceneField::Entities => {
+                    if parsed_entities {
+                        return Err(serde::de::Error::duplicate_field("entities"));
+                    }
+                    parsed_entities = true;
+                    map.next_value_seed(&mut entities_visitor)?;
+                }
+            }
+        }
+
+        if !parsed_entities {
+            return Err(serde::de::Error::custom(
+                "Scene does not contain an `entities` field.",
+            ));
+        }
+
+        // Populate entity_uuid_map via ECS query.
+        for (entity, game_entity) in self.ctx.ecs_world.query::<&GameEntity>().into_iter() {
+            let old = self.ctx.entity_uuid_map.insert(game_entity.uuid, entity);
+            if old.is_some() {
+                return Err(serde::de::Error::custom(format!(
+                    "Scene contains duplicate entity uuid of {}.",
+                    game_entity.uuid
+                )));
+            }
+        }
+
+        Ok(())
     }
 }

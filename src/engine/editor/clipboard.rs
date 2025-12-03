@@ -1,3 +1,7 @@
 pub struct Clipboard {}
 
-impl Clipboard {}
+impl Clipboard {
+    pub fn new() -> Self {
+        Self {}
+    }
+}

@@ -503,6 +503,8 @@ pub enum AssetLoadError {
     Other(anyhow::Error),
 }
 
+impl std::error::Error for AssetLoadError {}
+
 impl From<anyhow::Error> for AssetLoadError {
     fn from(value: anyhow::Error) -> Self {
         AssetLoadError::Other(value)
@@ -587,53 +589,67 @@ pub trait AssetSaver {
         Self: Sized;
 }
 
-impl<T> AssetLoader for T
-where
-    T: serde::de::DeserializeOwned,
-{
-    fn load(data: &AssetFile) -> std::result::Result<Self, AssetLoadError>
-    where
-        Self: Sized + std::any::Any,
-    {
-        match data.path.extension() {
-            "json" => match data.read_contents() {
-                Ok(contents) => serde_json::from_str::<T>(&contents).map_err(|err| {
-                    AssetLoadError::Other(anyhow::anyhow!(
-                        "Failed to deserialize file, error: {}",
-                        err
-                    ))
-                }),
-                Err(err) => match err.kind() {
-                    std::io::ErrorKind::NotFound => Err(AssetLoadError::NotFound { path: None }),
-                    _ => Err(AssetLoadError::Other(anyhow::anyhow!(err.to_string()))),
-                },
-            },
-            s => todo!("Support extension .{}", s),
-        }
-    }
-}
-
-impl<T> AssetSaver for T
-where
-    T: serde::Serialize,
-{
-    fn save(data: &Self, out_file: &AssetFile) -> anyhow::Result<()>
-    where
-        Self: Sized,
-    {
-        match out_file.path.extension() {
-            "json" => match out_file
-                .write_contents(serde_json::to_string_pretty(data).expect("Failed to serialize."))
+/// Implements `AssetLoader` and `AssetSaver` for a type that implements `serde::Serializer` and
+/// `serde::Deserializer` automatically by choosing the right serde implementation based on the
+/// file's extension.
+macro_rules! impl_asset_load_save_serde {
+    ($name:ident) => {
+        impl crate::engine::asset::asset::AssetLoader for $name {
+            fn load(
+                data: &crate::engine::asset::asset::AssetFile,
+            ) -> std::result::Result<Self, crate::engine::asset::asset::AssetLoadError>
+            where
+                Self: Sized + std::any::Any,
             {
-                Ok(()) => Ok(()),
-                Err(err) => match err.kind() {
-                    _ => Err(anyhow::anyhow!(err.to_string())),
-                },
-            },
-            s => todo!("Support extension .{}", s),
+                match data.path().extension() {
+                    "json" => match data.read_contents() {
+                        Ok(contents) => serde_json::from_str::<$name>(&contents).map_err(|err| {
+                            crate::engine::asset::asset::AssetLoadError::Other(anyhow::anyhow!(
+                                "Failed to deserialize file into {}, error: {}",
+                                std::any::type_name::<$name>(),
+                                err
+                            ))
+                        }),
+                        Err(err) => match err.kind() {
+                            std::io::ErrorKind::NotFound => {
+                                Err(crate::engine::asset::asset::AssetLoadError::NotFound {
+                                    path: None,
+                                })
+                            }
+                            _ => Err(crate::engine::asset::asset::AssetLoadError::Other(
+                                anyhow::anyhow!(err.to_string()),
+                            )),
+                        },
+                    },
+                    s => todo!("Support extension .{}", s),
+                }
+            }
         }
-    }
+
+        impl crate::engine::asset::asset::AssetSaver for $name {
+            fn save(
+                data: &Self,
+                out_file: &crate::engine::asset::asset::AssetFile,
+            ) -> anyhow::Result<()>
+            where
+                Self: Sized,
+            {
+                match out_file.path().extension() {
+                    "json" => match out_file.write_contents(
+                        serde_json::to_string_pretty(data).expect("Failed to serialize."),
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(err) => match err.kind() {
+                            _ => Err(anyhow::anyhow!(err.to_string())),
+                        },
+                    },
+                    s => todo!("Support extension .{}", s),
+                }
+            }
+        }
+    };
 }
+pub(crate) use impl_asset_load_save_serde;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AssetHandle {
@@ -655,27 +671,72 @@ impl std::hash::Hash for AssetHandle {
     }
 }
 
+pub enum AssetPathType {
+    Game,
+    User,
+}
+
+/// Asset path for relative to the asset directory, used so assets can be loaded from wherever
+/// without worrying about how to load them or using absolute paths.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, Hash,
+)]
+pub struct GameAssetPath {
+    pub asset_path: String,
+}
+
+impl GameAssetPath {
+    /// Expects a path of the form dir::file_name::extension.
+    pub fn new(path: &str) -> Option<Self> {
+        let path_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]+(::[a-zA-Z0-9_-]+)*$").unwrap();
+        if !path_regex.is_match(&path) {
+            return None;
+        }
+
+        Some(unsafe { Self::new_unchecked(path) })
+    }
+
+    /// Same as `new` but does not check the path to see if it is valid.
+    pub unsafe fn new_unchecked(path: &str) -> Self {
+        Self {
+            asset_path: path.to_string(),
+        }
+    }
+
+    pub fn as_relative_path(&self) -> PathBuf {
+        let mut strs = self.asset_path.split("::");
+        let mut last_str = None;
+        let mut last_last_str = None;
+        let mut path = PathBuf::from("./");
+        while let Some(str) = strs.next() {
+            if let Some(last_last_iter_str) = last_last_str {
+                // Gotta be a directory.
+                path.join(last_last_iter_str);
+            }
+            last_last_str = last_str;
+            last_str = Some(str);
+        }
+
+        let last_str = last_str.expect("Asset path is somehow invalid.");
+        let last_last_str = last_last_str.expect("Asset path is somehow invalid.");
+        path.join(format!("{}.{}", last_last_str, last_str))
+    }
+}
+
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, Hash,
 )]
 pub struct AssetPath {
     // Only valid for binary and project assets.
     // In the form of (binary|project)::(dirs::)*file_name::extension
-    pub asset_path: Option<String>,
+    // TODO: Remove and just use the a relative path since it represents the same thing really.
+    pub asset_path: Option<GameAssetPath>,
     // Change maybe so we can support a giant asset file.
+    #[serde(skip)]
     path: PathBuf,
 }
 
 impl AssetPath {
-    fn validate_path(path: &str) {
-        let path_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]+(::[a-zA-Z0-9_-]+)*$").unwrap();
-        assert!(
-            path_regex.is_match(&path),
-            "Path {} failed to pass path validation.",
-            path
-        );
-    }
-
     pub fn new(path: PathBuf) -> Self {
         Self {
             asset_path: None,
@@ -683,26 +744,33 @@ impl AssetPath {
         }
     }
 
+    pub fn new_project_file(project_dir: PathBuf) -> Self {
+        Self {
+            asset_path: Some(unsafe { GameAssetPath::new_unchecked("project::json") }),
+            path: project_dir.join("project.json"),
+        }
+    }
+
     /// Searches in the editor/runtime required assets that are project independent.
-    pub fn new_binary_dir(path: impl ToString) -> Self {
-        let path = format!("{}", path.to_string());
-        Self::validate_path(&path);
+    pub fn new_binary_dir(path: impl AsRef<str>) -> Self {
+        let path = GameAssetPath::new(path.as_ref()).unwrap();
         Self {
             asset_path: Some(path.clone()),
-            path: Self::into_file_path(&path, Path::new("./assets/")),
+            path: Self::into_file_path(&path.asset_path, Path::new("./assets/")),
         }
     }
 
     /// Searches in the projects assets directory for the editor and runtime.
-    pub fn new_project_dir(project_dir: PathBuf, path: String) -> Self {
-        let path = format!("{}", path.clone());
-        Self::validate_path(&path);
+    pub fn new_project_dir(project_dir: PathBuf, path: impl AsRef<str>) -> Self {
+        let path = GameAssetPath::new(path.as_ref()).unwrap();
+        let path_buf = Self::into_file_path(&path.asset_path, &project_dir.join("assets"));
         Self {
-            asset_path: Some(path.clone()),
-            path: Self::into_file_path(&path, &project_dir.join("assets")),
+            asset_path: Some(path),
+            path: path_buf,
         }
     }
 
+    // TODO: Test this fn.
     pub fn from_project_dir_path(project_dir: &Path, path: &Path) -> Self {
         let sub_path = path
             .strip_prefix(project_dir.join("assets"))
@@ -728,9 +796,8 @@ impl AssetPath {
                 s.push_str("::");
             }
         }
-        Self::validate_path(&s);
         Self {
-            asset_path: Some(s),
+            asset_path: Some(unsafe { GameAssetPath::new_unchecked(&s) }),
             path: path.to_owned(),
         }
     }
@@ -851,6 +918,10 @@ impl AssetFile {
             path: path.clone(),
             file_handle: FileHandle::from_path(path),
         }
+    }
+
+    pub fn path(&self) -> &AssetPath {
+        &self.path
     }
 
     pub fn extension(&self) -> &str {

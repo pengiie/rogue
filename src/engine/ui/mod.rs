@@ -17,7 +17,7 @@ use crate::{
     common::color::Color,
     consts,
     engine::{
-        asset::{asset::AssetPath, repr::settings::SettingsAsset},
+        asset::{asset::AssetPath, repr::settings::UserSettingsAsset},
         editor::ui::{
             asset_browser::EditorAssetBrowserState,
             dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog,
@@ -26,7 +26,7 @@ use crate::{
         physics::{collider_registry::ColliderId, physics_world::PhysicsWorld},
         voxel::{voxel_registry::VoxelModelId, voxel_world_gpu::VoxelWorldGpu},
     },
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
 
@@ -103,12 +103,18 @@ pub struct EditorUIStatistics {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum EditorTab {
+    /// Properties and components for the currently selected entity.
     EntityProperties,
+    /// Properties of the underlying voxel world, may be better
+    /// called terrain properties.
     WorldProperties,
+    /// Voxel editing brushes and colors.
     Editing,
-    // Game/project specific settings.
+    /// Game/project specific settings.
     Game,
+    /// Statistics for CPU/GPU and current game state.
     Stats,
+    /// Settings which would be visible to the end user of the game.
     User,
 }
 
@@ -289,7 +295,7 @@ impl UI {
         mut settings: ResMut<Settings>,
         mut ecs_world: ResMut<ECSWorld>,
         mut editor: ResMut<Editor>,
-        mut session: ResMut<Session>,
+        mut session: ResMut<EditorSession>,
         time: Res<Time>,
         mut scripts: ResMut<Scripts>,
         mut events: ResMut<Events>,

@@ -3,7 +3,7 @@ use crate::{
         asset::asset::Assets, editor::editor::Editor, entity::ecs_world::ECSWorld,
         ui::EditorUIState, voxel::voxel_world::VoxelWorld, window::time::Time,
     },
-    session::Session,
+    session::EditorSession,
     settings::Settings,
 };
 
@@ -13,7 +13,7 @@ pub fn user_pane(
     editor: &mut Editor,
     voxel_world: &mut VoxelWorld,
     ui_state: &mut EditorUIState,
-    session: &mut Session,
+    session: &mut EditorSession,
     assets: &mut Assets,
     settings: &mut Settings,
     time: &Time,
@@ -27,7 +27,7 @@ pub fn user_pane(
             let original = settings.chunk_render_distance;
             ui.add(egui::Slider::new(
                 &mut settings.chunk_render_distance,
-                0..=64,
+                1..=64,
             ));
         })
     };

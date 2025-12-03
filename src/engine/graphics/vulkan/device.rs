@@ -545,7 +545,17 @@ impl VulkanDevice {
                     (i, score)
                 })
                 .collect::<Vec<_>>();
-            scored_devices.sort_by(|(_, score_a), (_, score_b)| score_a.cmp(score_b));
+            // Sort by descending.
+            scored_devices.sort_by(|(_, score_a), (_, score_b)| score_a.cmp(score_b).reverse());
+
+            log::debug!("Scored physical devices, top one is chosen:");
+            for (i, score) in &scored_devices {
+                let name = devices[*i].properties
+                    .device_name_as_c_str()
+                    .map_or("Unknown device".to_owned(), 
+                        |c_name| c_name.to_string_lossy().to_string());
+                log::debug!("[{}] {} scored {}",i, name, score);
+            }
 
             anyhow::ensure!(
                 !devices.is_empty(),

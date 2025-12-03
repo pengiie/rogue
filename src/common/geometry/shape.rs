@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 
-use crate::engine::physics::collider::CollisionInfo;
+use crate::engine::physics::collider::{ContactManifold, ContactPair};
 
 pub type Vertex = Vector3<f32>;
 pub struct Face {
@@ -31,8 +31,8 @@ impl Face {
 }
 
 pub struct Projection {
-    min: f32,
-    max: f32,
+    pub min: f32,
+    pub max: f32,
 }
 
 impl Projection {
@@ -58,7 +58,8 @@ pub trait Shape {
         Projection { min, max }
     }
 
-    fn test_intersection(&self, other: &dyn Shape) -> Option<CollisionInfo> {
+    /// SAT intersection test.
+    fn test_intersection(&self, other: &dyn Shape) -> Option<ContactManifold> {
         let axes = self
             .collect_faces()
             .into_iter()
@@ -84,11 +85,7 @@ pub trait Shape {
             }
         }
 
-        return Some(CollisionInfo {
-            penetration_depth,
-            contact_points_a: vec![],
-            contact_points_b: vec![],
-        });
+        todo!();
     }
 }
 

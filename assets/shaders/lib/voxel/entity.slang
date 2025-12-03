@@ -5,7 +5,9 @@ namespace voxel {
 public struct EntityInfo {
   float3 aabb_min; // offset = 0
   float3 aabb_max; // offset = 16
-  matrix3x3 rotation; // offset = 32
+  float3 rotation_1; // offset = 32
+  float3 rotation_2; // offset = 32
+  float3 rotation_3; // offset = 32
   uint model_info_ptr; // offset = 76
 }
 
@@ -37,13 +39,16 @@ public struct EntityData {
       let entity_info = entity_data.accel_buf.Load(i);
       let entity_aabb = AABB.new_min_max(entity_info.aabb_min, entity_info.aabb_max);
 
-      let rotated_ray_pos = mul(entity_info.rotation, ray.origin - entity_aabb.center) + entity_aabb.center;
-      let rotated_ray_dir = mul(entity_info.rotation, ray.dir);
+      let entity_rotation = matrix3x3(entity_info.rotation_1,
+                                                         entity_info.rotation_2,
+                                                         entity_info.rotation_3);
+      let rotated_ray_pos = mul(entity_rotation, ray.origin - entity_aabb.center) + entity_aabb.center;
+      let rotated_ray_dir = mul(entity_rotation, ray.dir);
       let rotated_ray = Ray(rotated_ray_pos, rotated_ray_dir);
       let hit_info = rotated_ray.test_aabb(entity_aabb);
 
       if(hit_info.hit) {
-        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_info.rotation);
+        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_rotation);
         if (model_test.did_hit && model_test.depth_t < min_test.depth_t) {
           min_test = RayEntityTest.hit(model_test.color, model_test.depth_t);
         }
