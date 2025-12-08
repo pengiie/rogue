@@ -83,6 +83,8 @@ pub struct Editor {
 
     pub world_editing: EditorWorldEditing,
     pub terrain_generation: EditorTerrainGeneration,
+
+    pub show_collider_debug: bool,
 }
 
 pub struct EditorTerrainGeneration {
@@ -133,6 +135,8 @@ impl Editor {
 
             world_editing: EditorWorldEditing::new(),
             terrain_generation: EditorTerrainGeneration::new(),
+
+            show_collider_debug: false,
         }
     }
 
@@ -361,6 +365,10 @@ impl Editor {
         mut events: ResMut<Events>,
     ) {
         let editor: &mut Editor = &mut editor;
+
+        if input.is_key_pressed(consts::actions::keybind::EDITOR_TOGGLE_DEBUG) {
+            editor.show_collider_debug = !editor.show_collider_debug;
+        }
 
         if input.is_key_pressed_with_modifiers(Key::Z, &[Modifier::Control]) {
             todo!("you should implement this.");

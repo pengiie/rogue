@@ -1,5 +1,6 @@
 use nalgebra::Vector3;
 
+use crate::common::color::Color;
 use crate::common::geometry::aabb::AABB;
 use crate::engine::entity::component::{GameComponent, GameComponentSerializeContext};
 use crate::engine::entity::ecs_world::Entity;
@@ -11,21 +12,41 @@ use crate::engine::{
 };
 
 pub struct ContactPoint {
-    position: Vector3<f32>,
+    pub position: Vector3<f32>,
+    // Distance along `ContactManifold.normal`, negative if penetrating.
+    pub distance: f32,
+    pub normal_impulse: f32,
+    pub tangent_impulse: f32,
 }
 
 pub struct ContactManifold {
-    points: Vec<ContactPoint>,
-    normal: Vector3<f32>,
+    pub points: Vec<ContactPoint>,
+    pub normal: Vector3<f32>,
 }
 
 /// Output from the narrow phase step.
 pub struct ContactPair {
-    manifold: ContactManifold,
-    entity_a: Entity,
-    collider_a: ColliderId,
-    entity_b: Entity,
-    collider_b: ColliderId,
+    pub manifold: ContactManifold,
+    pub entity_a: Entity,
+    pub collider_a: ColliderId,
+    pub entity_b: Entity,
+    pub collider_b: ColliderId,
+}
+
+pub enum ColliderDebugColoring {
+    Untouched,
+    BroadPhaseCollision,
+    NarrowPhaseCollision,
+}
+
+impl ColliderDebugColoring {
+    pub fn color(&self) -> Color {
+        match self {
+            ColliderDebugColoring::Untouched => Color::new_srgb_hex("#FF00FF"),
+            ColliderDebugColoring::BroadPhaseCollision => Color::new_srgb_hex("#B54342"),
+            ColliderDebugColoring::NarrowPhaseCollision => Color::new_srgb_hex("#75EF22"),
+        }
+    }
 }
 
 pub type ColliderDeserializeFnPtr = unsafe fn(
@@ -36,8 +57,8 @@ pub type ColliderDeserializeFnPtr = unsafe fn(
 pub trait ColliderIntersectionTest<Marker> {
     fn run(
         &self,
-        collider_id_a: ColliderId,
-        collider_id_b: ColliderId,
+        collider_id_a: &ColliderId,
+        collider_id_b: &ColliderId,
         entity_transform_a: &Transform,
         entity_transform_b: &Transform,
         collider_registry: &ColliderRegistry,
@@ -50,14 +71,14 @@ where
 {
     fn run(
         &self,
-        collider_id_a: ColliderId,
-        collider_id_b: ColliderId,
+        collider_id_a: &ColliderId,
+        collider_id_b: &ColliderId,
         entity_transform_a: &Transform,
         entity_transform_b: &Transform,
         collider_registry: &ColliderRegistry,
     ) -> Option<ContactManifold> {
-        let collider_a = collider_registry.get_collider::<A>(&collider_id_a);
-        let collider_b = collider_registry.get_collider::<B>(&collider_id_a);
+        let collider_a = collider_registry.get_collider::<A>(collider_id_a);
+        let collider_b = collider_registry.get_collider::<B>(collider_id_a);
         self(
             collider_a,
             collider_b,
@@ -69,8 +90,8 @@ where
 
 type ColliderIntersectionTestErasedFn = fn(
     run_fn_ptr: *const (),
-    collider_id_a: ColliderId,
-    collider_id_b: ColliderId,
+    collider_id_a: &ColliderId,
+    collider_id_b: &ColliderId,
     entity_transform_a: &Transform,
     entity_transform_b: &Transform,
     collider_registry: &ColliderRegistry,
@@ -88,8 +109,8 @@ impl ColliderIntersectionTestCaller {
     {
         fn run_erased<F, Marker>(
             run_fn_ptr: *const (),
-            collider_id_a: ColliderId,
-            collider_id_b: ColliderId,
+            collider_id_a: &ColliderId,
+            collider_id_b: &ColliderId,
             entity_transform_a: &Transform,
             entity_transform_b: &Transform,
             collider_registry: &ColliderRegistry,
@@ -116,8 +137,8 @@ impl ColliderIntersectionTestCaller {
 
     pub fn run_erased(
         &self,
-        collider_id_a: ColliderId,
-        collider_id_b: ColliderId,
+        collider_id_a: &ColliderId,
+        collider_id_b: &ColliderId,
         entity_transform_a: &Transform,
         entity_transform_b: &Transform,
         collider_registry: &ColliderRegistry,
@@ -150,8 +171,14 @@ pub trait Collider: Clone + 'static {
         dst_ptr: *mut u8,
     ) -> erased_serde::Result<()>;
 
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {}
-    fn collider_component_ui(&self, ui: &mut egui::Ui) {
+    fn render_debug(
+        &self,
+        world_transform: &Transform,
+        debug_renderer: &mut DebugRenderer,
+        coloring: ColliderDebugColoring,
+    ) {
+    }
+    fn collider_component_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(format!(
             "`Collider::collider_component_ui` has not been implemented for `{}`",
             std::any::type_name::<Self>()
@@ -168,8 +195,13 @@ pub trait ColliderMethods: downcast::Any {
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()>;
 
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer);
-    fn collider_component_ui(&self, ui: &mut egui::Ui);
+    fn render_debug(
+        &self,
+        world_transform: &Transform,
+        debug_renderer: &mut DebugRenderer,
+        coloring: ColliderDebugColoring,
+    );
+    fn collider_component_ui(&mut self, ui: &mut egui::Ui);
 }
 
 impl<T: Collider> ColliderMethods for T {
@@ -184,11 +216,16 @@ impl<T: Collider> ColliderMethods for T {
         Collider::serialize_collider(self, ser)
     }
 
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
-        Collider::render_debug(self, world_transform, debug_renderer);
+    fn render_debug(
+        &self,
+        world_transform: &Transform,
+        debug_renderer: &mut DebugRenderer,
+        coloring: ColliderDebugColoring,
+    ) {
+        Collider::render_debug(self, world_transform, debug_renderer, coloring);
     }
 
-    fn collider_component_ui(&self, ui: &mut egui::Ui) {
+    fn collider_component_ui(&mut self, ui: &mut egui::Ui) {
         Collider::collider_component_ui(self, ui);
     }
 }

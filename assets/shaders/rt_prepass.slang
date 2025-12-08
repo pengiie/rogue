@@ -40,29 +40,13 @@ void main(uint3 id: SV_DispatchThreadID) {
   let ray_entity = voxel::EntityData.trace(ray);
   if (ray_entity.did_hit) {
     if (ray_entity.depth_t < depth) {
+      var color = ray_entity.color;
+      let normal = ray_entity.normal;
+      let sun_dir = normalize(-float3(0.7,-1,-0.4));
+      let l = max(dot(normal, sun_dir), 0.035);
+      color = color * l;
       depth = ray_entity.depth_t;
-      out_color = ray_entity.color;
-    }
-  }
-
-  let inv_sun_dir = normalize(-u_frame.world_info.sun_dir);
-  let should_cast_shadow_ray = ray_terrain.did_hit || ray_entity.did_hit;
-  if (should_cast_shadow_ray) {
-    var shadow_ray = ray.advance_clone(depth - 0.001);
-    shadow_ray.dir = inv_sun_dir;
-    shadow_ray.inv_dir = 1.0 / shadow_ray.dir;
-    let shadow_ray_terrain = voxel::Terrain.trace(shadow_ray);
-    if (shadow_ray_terrain.did_hit) {
-      out_color *= 0.1;
-    } else {
-      // If the hit entity is closer than the hit terrain, use the
-      // entities hit.
-      let shadow_ray_entity = voxel::EntityData.trace(shadow_ray);
-      if (shadow_ray_entity.did_hit) {
-        out_color *= saturate(0.1 + min(inv_sun_dir.y * 0.8, 0.0));
-      } else {
-        //out_color *= lerp(saturate(1.0 + pow(sun_dir.y, 1.0 / 30.0)), out_color, sample_sky(shadow_ray));
-      }
+      out_color = color;
     }
   }
 

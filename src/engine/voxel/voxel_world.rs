@@ -310,6 +310,24 @@ impl VoxelWorld {
         self.chunks.update_player_position(center_pos);
     }
 
+    pub fn handle_renderable_load_events(
+        events: Res<Events>,
+        mut ecs_world: ResMut<ECSWorld>,
+        mut voxel_world: ResMut<VoxelWorld>,
+        mut assets: ResMut<Assets>,
+        session: Res<EditorSession>,
+    ) {
+        let Some(project_dir) = &session.project_save_dir else {
+            return;
+        };
+        voxel_world.registry.handle_model_load_events(
+            project_dir,
+            &events,
+            &mut assets,
+            &mut ecs_world,
+        );
+    }
+
     // Processes:
     // - Voxel terrain chunks
     // - Terrain chunk edits (async handlers, and sync)
@@ -345,6 +363,12 @@ impl VoxelWorld {
             voxel_world
                 .registry
                 .unload_model(model, voxel_world_gpu.voxel_allocator_mut());
+        }
+
+        // Push any needed model updates from the registry to the voxel world so the VoxelWorldGpu
+        // can go through them later.
+        for model_id in voxel_world.registry.to_update_model_normals.drain(..) {
+            voxel_world.to_update_normals.insert(model_id);
         }
     }
 

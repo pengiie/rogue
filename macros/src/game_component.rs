@@ -4,17 +4,38 @@ use syn::{parse::Parse, parse_macro_input, spanned::Spanned, DeriveInput};
 
 struct GameComponentArgs {
     name: syn::LitStr,
+    is_constructible: bool,
 }
 
 impl Parse for GameComponentArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let arg = input.parse::<syn::Ident>()?;
         if &arg != "name" {
-            return syn::Result::Err(syn::Error::new(arg.span(), "Expected name as argument"));
+            return syn::Result::Err(syn::Error::new(
+                arg.span(),
+                "Expected first argument as name",
+            ));
         }
         input.parse::<syn::Token![=]>()?;
         let name = input.parse::<syn::LitStr>()?;
-        return Ok(GameComponentArgs { name });
+
+        // Assume component is constructible if using this macro unless specified otherwise.
+        let mut is_constructible = true;
+        if let Ok(_) = input.parse::<syn::Token![,]>() {
+            let arg = input.parse::<syn::Ident>()?;
+            if &arg != "constructible" {
+                return syn::Result::Err(syn::Error::new(
+                    arg.span(),
+                    "Expected second argument to be constructible",
+                ));
+            }
+            input.parse::<syn::Token![=]>()?;
+            is_constructible = input.parse::<syn::LitBool>()?.value;
+        }
+        return Ok(GameComponentArgs {
+            name,
+            is_constructible,
+        });
     }
 }
 
@@ -24,12 +45,31 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
 
     let name = &item.ident;
     let game_component_serde_name = game_component_args.name;
+    let is_constructible = game_component_args.is_constructible;
+
+    let constructible_impl = if is_constructible {
+        quote! {
+            fn is_constructible() -> bool {
+                true
+            }
+
+            fn construct_component(dst_ptr: *mut u8) {
+                let dst_ptr = dst_ptr as *mut Self;
+                // Safety: dst_ptr should be allocated with the memory layout for this type.
+                unsafe { dst_ptr.write(std::default::Default::default()) };
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     let gen = quote! {
         #item
 
         impl crate::engine::entity::component::GameComponent for #name {
             const NAME: &str = #game_component_serde_name;
+
+            #constructible_impl
 
             fn clone_component(
                 &self,

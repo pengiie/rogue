@@ -2,26 +2,28 @@ implementing lib;
 
 namespace voxel {
 
+// Total size 80
 public struct EntityInfo {
   float3 aabb_min; // offset = 0
   float3 aabb_max; // offset = 16
   float3 rotation_1; // offset = 32
-  float3 rotation_2; // offset = 32
-  float3 rotation_3; // offset = 32
+  float3 rotation_2; // offset = 48
+  float3 rotation_3; // offset = 64
   uint model_info_ptr; // offset = 76
 }
 
 public struct RayEntityTest {
   public bool did_hit;
   public float3 color;
+  public float3 normal;
   public float depth_t;
 
   static RayEntityTest miss() {
     return RayEntityTest(false, float3(0.0), 0.0);
   }
 
-  static RayEntityTest hit(float3 color, float depth_t) {
-    return RayEntityTest(true, color, depth_t);
+  static RayEntityTest hit(float3 color, float3 normal, float depth_t) {
+    return RayEntityTest(true, color, normal, depth_t);
   }
 }
 
@@ -50,7 +52,7 @@ public struct EntityData {
       if(hit_info.hit) {
         let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_rotation);
         if (model_test.did_hit && model_test.depth_t < min_test.depth_t) {
-          min_test = RayEntityTest.hit(model_test.color, model_test.depth_t);
+          min_test = RayEntityTest.hit(model_test.color, model_test.normal, model_test.depth_t);
         }
       }
     }

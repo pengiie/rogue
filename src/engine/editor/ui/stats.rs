@@ -43,6 +43,13 @@ pub fn stats_pane(
             }
             stats.last_sample = Instant::now();
             stats.cpu_frame_time_samples_max = Duration::ZERO;
+
+            stats
+                .physics_world_energy
+                .push_back(ecs_world.total_kinetic_energy());
+            if stats.physics_world_energy.len() > stats.samples as usize {
+                stats.physics_world_energy.pop_front();
+            }
         }
         let cpu_frame_time_points = PlotPoints::Owned(
             stats
@@ -92,6 +99,50 @@ pub fn stats_pane(
             "Total allocated GPU voxel data: {}",
             format_bytes(voxel_world_gpu.voxel_allocator().total_allocation_size())
         ));
+
+        ui.label(egui::RichText::new("Physics").size(16.0));
+        let physics_world_energy_points = PlotPoints::Owned(
+            stats
+                .physics_world_energy
+                .iter()
+                .enumerate()
+                .map(|(i, energy)| egui_plot::PlotPoint {
+                    x: (i as f64 / stats.samples as f64) * -stats.time_length.as_secs_f64(),
+                    y: *energy as f64,
+                })
+                .collect::<Vec<egui_plot::PlotPoint>>(),
+        );
+        let physics_world_energy_line =
+            egui_plot::Line::new("Total kinetic energy", physics_world_energy_points);
+        egui_plot::Plot::new(egui::Id::new("physics_energy_plot"))
+            .link_axis(egui::Id::new("timings_plot"), egui::Vec2b::new(true, true))
+            .view_aspect(1.0)
+            .include_x(-stats.time_length.as_secs_f64())
+            .include_x(0.0)
+            .include_y(0.0)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .allow_boxed_zoom(false)
+            .legend(egui_plot::Legend::default())
+            .y_grid_spacer(|grid_input| {
+                let mut v = Vec::new();
+                let mut distance = grid_input.bounds.1 - grid_input.bounds.0;
+                let marks = 10;
+                let step_size = distance / marks as f64;
+                for i in 0..=marks {
+                    v.push(egui_plot::GridMark {
+                        value: grid_input.bounds.0 + i as f64 * step_size,
+                        step_size,
+                    });
+                }
+                v
+            })
+            .set_margin_fraction(egui::vec2(0.0, 0.0))
+            .cursor_color(egui::Color32::TRANSPARENT)
+            .show(ui, |ui| {
+                ui.line(physics_world_energy_line);
+            });
     };
 
     egui::ScrollArea::vertical()

@@ -1,3 +1,4 @@
-pub mod entity;
+pub mod camera_controller;
+pub mod game_scripts;
 pub mod init;
-pub mod state;
+pub mod player_controller;

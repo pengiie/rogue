@@ -7,14 +7,15 @@ public const static uint INVALID_PTR = 0xFFFFFFFF;
 public struct RayModelTest {
   public bool did_hit;
   public float3 color;
+  public float3 normal;
   public float depth_t;
 
   static RayModelTest miss() {
     return RayModelTest(false, float3(0.0), 0.0);
   }
 
-  static RayModelTest hit(float3 color, float depth_t) {
-    return RayModelTest(true, color, depth_t);
+  static RayModelTest hit(float3 color, float3 normal, float depth_t) {
+    return RayModelTest(true, color, normal, depth_t);
   }
 }
 

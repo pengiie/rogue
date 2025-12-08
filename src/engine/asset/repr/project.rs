@@ -18,7 +18,7 @@ use crate::{
         editor::editor::Editor,
         entity::{
             component::{self, GameComponentDeserializeContext, GameComponentSerializeContext},
-            ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor},
+            ecs_world::{self, ECSWorld, Entity, ProjectSceneEntitiesVisitor},
             scripting::{ScriptableEntity, Scripts},
             EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         },
@@ -126,6 +126,13 @@ impl serde::Serialize for ProjectSerializer<'_> {
             "project_settings",
             &self.session.project.serialize(self.ecs_world),
         );
+
+        let entity_uuid_map = self
+            .ecs_world
+            .query::<&GameEntity>()
+            .into_iter()
+            .map(|(entity, game_entity)| (entity, game_entity.uuid))
+            .collect::<HashMap<_, _>>();
         s.serialize_field(
             "scene",
             &self
@@ -133,6 +140,7 @@ impl serde::Serialize for ProjectSerializer<'_> {
                 .serialize_world(&GameComponentSerializeContext {
                     voxel_registry: self.voxel_registry,
                     collider_registry: &self.physics_world.colliders,
+                    entity_uuid_map: &entity_uuid_map,
                 }),
         );
         s.end()
@@ -163,8 +171,8 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
     {
         let mut voxel_registry = VoxelModelRegistry::new();
         let mut ecs_world = ECSWorld::new();
-        let mut entity_uuid_map = HashMap::new();
         let mut physics_world = PhysicsWorld::new();
+        let mut uuid_to_entity_map = HashMap::new();
         let mut editor_settings = None;
         let mut project_settings_ser = None;
         while let Some(key) = map.next_key::<ProjectField>()? {
@@ -185,10 +193,13 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
                     let visitor = ProjectSceneVisitor {
                         ctx: &mut ProjectSceneDeserializeContext {
                             ecs_world: &mut ecs_world,
-                            entity_uuid_map: &mut entity_uuid_map,
+                            uuid_to_entity_map: &mut uuid_to_entity_map,
+                            // State used within deserialization, just hoisted up here for convenience.
+                            to_parent_entities: &mut Vec::new(),
                             component_ctx: &mut GameComponentDeserializeContext {
                                 voxel_registry: &mut voxel_registry,
                                 collider_registry: &mut physics_world.colliders,
+                                entity_parent: uuid::Uuid::nil(),
                             },
                         },
                     };
@@ -205,7 +216,7 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
         let game_camera = project_settings_ser
             .game_camera
             .map(|uuid| {
-                entity_uuid_map.get(&uuid).ok_or_else(|| {
+                uuid_to_entity_map.get(&uuid).ok_or_else(|| {
                     serde::de::Error::custom(
                         "Game camera contains uuid of an entity that doesn't exist",
                     )
@@ -232,8 +243,9 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
 
 pub struct ProjectSceneDeserializeContext<'a> {
     pub ecs_world: &'a mut ECSWorld,
-    pub entity_uuid_map: &'a mut HashMap<Uuid, Entity>,
     pub component_ctx: &'a mut GameComponentDeserializeContext<'a>,
+    pub uuid_to_entity_map: &'a mut HashMap<uuid::Uuid, Entity>,
+    pub to_parent_entities: &'a mut Vec<(/*self*/ Entity /*parent*/, uuid::Uuid)>,
 }
 
 pub struct ProjectSceneVisitor<'a> {
@@ -291,13 +303,34 @@ impl<'de> serde::de::Visitor<'de> for ProjectSceneVisitor<'_> {
 
         // Populate entity_uuid_map via ECS query.
         for (entity, game_entity) in self.ctx.ecs_world.query::<&GameEntity>().into_iter() {
-            let old = self.ctx.entity_uuid_map.insert(game_entity.uuid, entity);
+            let old = self.ctx.uuid_to_entity_map.insert(game_entity.uuid, entity);
             if old.is_some() {
                 return Err(serde::de::Error::custom(format!(
                     "Scene contains duplicate entity uuid of {}.",
                     game_entity.uuid
                 )));
             }
+        }
+
+        // Populate the EntityParent and EntityChildren entity references.
+        for (child_entity, parent_uuid) in self.ctx.to_parent_entities.drain(..) {
+            let mut parent_component = self.ctx.ecs_world.get::<&mut EntityParent>(child_entity)
+                .expect("If entity is in to_parent_entities but doesnt have an EntityParent component something logic wise went wrong.");
+            let parent_entity_id = self
+                .ctx
+                .uuid_to_entity_map
+                .get(&parent_uuid)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Entity references parent with uuid {} but that doesn't exist",
+                        parent_uuid.to_string()
+                    )
+                });
+            parent_component.set_parent(*parent_entity_id);
+
+            let mut children_component = self.ctx.ecs_world.get::<&mut EntityChildren>(*parent_entity_id)
+                .expect("If entity is a parent in to_parent_entities but doesnt have an EntityChildren component something logic wise went wrong.");
+            children_component.children.insert(child_entity);
         }
 
         Ok(())

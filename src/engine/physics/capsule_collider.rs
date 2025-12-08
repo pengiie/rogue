@@ -2,7 +2,7 @@ use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
 use super::transform::Transform;
 use crate::common::geometry::aabb::AABB;
-use crate::engine::physics::collider::ContactManifold;
+use crate::engine::physics::collider::{ColliderDebugColoring, ContactManifold};
 use crate::engine::voxel::voxel_world::VoxelWorld;
 use crate::{
     common::color::Color,
@@ -88,7 +88,12 @@ impl Collider for CapsuleCollider {
         return AABB::new_two_point(min, max);
     }
 
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
+    fn render_debug(
+        &self,
+        world_transform: &Transform,
+        debug_renderer: &mut DebugRenderer,
+        coloring: ColliderDebugColoring,
+    ) {
         let (mut bottom, mut top) = self.bottom_top_points();
         let matrix = world_transform.to_transformation_matrix();
         bottom = matrix.transform_vector(&bottom);
@@ -98,7 +103,7 @@ impl Collider for CapsuleCollider {
             start: bottom,
             end: top,
             thickness: self.radius,
-            color: Color::new_srgb_hex("#FF0000"),
+            color: coloring.color(),
             alpha: 0.8,
             flags: DebugFlags::NONE,
         });

@@ -99,6 +99,7 @@ pub struct EditorUIStatistics {
     pub last_sample: Instant,
     pub cpu_frame_time_samples_max: Duration,
     pub cpu_frame_time_samples: VecDeque<Duration>,
+    pub physics_world_energy: VecDeque</*KE*/ f32>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -191,6 +192,7 @@ impl EditorUIState {
                 last_sample: Instant::now(),
                 cpu_frame_time_samples_max: Duration::ZERO,
                 cpu_frame_time_samples: VecDeque::new(),
+                physics_world_energy: VecDeque::new(),
             },
             selected_collider: None,
         }

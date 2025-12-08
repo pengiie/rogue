@@ -21,7 +21,7 @@ use crate::engine::entity::archetype::ComponentArchetype;
 use crate::engine::entity::component::{
     Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentCloneContext,
     GameComponentDeserializeContext, GameComponentDeserializeFnPtr, GameComponentMethods,
-    GameComponentSerializeContext,
+    GameComponentMethodsVtablePtr, GameComponentSerializeContext, GameComponentType,
 };
 use crate::engine::entity::ecs_world;
 use crate::engine::entity::query::{
@@ -36,11 +36,10 @@ use crate::engine::{
     system::SystemParam,
     voxel::{voxel::VoxelModelImpl, voxel_world::VoxelWorld},
 };
+use crate::game;
 
 pub type Entity = FreeListHandle<EntityInfo>;
 pub struct EventEntityDespawn(pub Entity);
-
-type GameComponentMethodsVtablePtr = *const ();
 
 #[derive(Debug)]
 pub struct EntityInfo {
@@ -57,10 +56,8 @@ pub struct ECSWorld {
     // Makes it easier to see what archetypes are required for a type.
     pub component_archetypes: HashMap<TypeId, Vec</*archetype_index*/ usize>>,
     pub entities: FreeList<EntityInfo>,
-    pub game_component_vtables: HashMap<TypeId, GameComponentMethodsVtablePtr>,
-    pub game_component_deserialize_fns: HashMap<TypeId, GameComponentDeserializeFnPtr>,
-    pub game_component_type_info: HashMap</*GameComponent::NAME*/ String, TypeInfo>,
-    pub game_component_names: HashMap<TypeId, /*GameComponent::NAME*/ String>,
+    pub game_components: HashMap<TypeId, GameComponentType>,
+    pub game_component_names: HashMap</*GameComponent::NAME*/ String, TypeId>,
     pub despawn_event_reader: EventReader<EventEntityDespawn>,
 }
 
@@ -70,9 +67,7 @@ impl ECSWorld {
             archetypes: Vec::new(),
             component_archetypes: HashMap::new(),
             entities: FreeList::new(),
-            game_component_vtables: HashMap::new(),
-            game_component_deserialize_fns: HashMap::new(),
-            game_component_type_info: HashMap::new(),
+            game_components: HashMap::new(),
             game_component_names: HashMap::new(),
             despawn_event_reader: EventReader::new(),
         };
@@ -89,8 +84,54 @@ impl ECSWorld {
         ecs.register_game_component::<Camera>();
         ecs.register_game_component::<RigidBody>();
         ecs.register_game_component::<EntityColliders>();
+        game::init::register_game_components(&mut ecs);
 
         ecs
+    }
+
+    pub fn construct_and_insert_game_component(
+        &mut self,
+        entity_id: Entity,
+        game_component: TypeId,
+    ) {
+        let component_ptr = self.construct_game_component(game_component);
+        let game_component = self.game_components.get(&game_component).expect("Tried to construct and insert a game component for a type that is not registered as a game component.");
+        let type_info = &game_component.type_info.clone();
+        // Safety: component_ptr is allocated with the correct memory layout for this type.
+        unsafe {
+            self.insert_one_raw(entity_id, &type_info, component_ptr)
+                .expect("Failed to insert constructed game component into entity.");
+        }
+    }
+
+    // Returns an owned pointer to that game component, allocated with the correct memory layout.
+    pub fn construct_game_component(&self, game_component: TypeId) -> *mut u8 {
+        let game_component = self.game_components.get(&game_component).expect("Tried to construct a game component for a type that is not registered as a game component.");
+        let ptr = unsafe { std::alloc::alloc(game_component.type_info.layout(1)) };
+        if ptr.is_null() {
+            panic!("Failed to allocate memory for game component.");
+        }
+        // Safety: ptr is allocated with the correct memory layout for this type and is not null.
+        unsafe { (game_component.construct_fn)(ptr) };
+        return ptr;
+    }
+
+    pub fn get_constructible_game_components(&self) -> Vec<TypeId> {
+        let mut constructible = Vec::new();
+        for (type_id, game_component) in &self.game_components {
+            if game_component.is_constructible {
+                constructible.push(*type_id);
+            }
+        }
+        return constructible;
+    }
+
+    pub fn total_kinetic_energy(&mut self) -> f32 {
+        let mut energy = 0.0;
+        for (_, rigid_body) in self.query_mut::<&RigidBody>().into_iter() {
+            energy += rigid_body.kinetic_energy();
+        }
+        return energy;
     }
 
     /// Returns a serde serializable object which holds references to the required data structures
@@ -112,14 +153,24 @@ impl ECSWorld {
         todo!();
     }
 
-    pub fn run_queued_despawns(ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {}
+    pub fn handle_despawn_events(mut ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {
+        let mut ecs_world = &mut ecs_world as &mut ECSWorld;
+        let despawned_entities = ecs_world
+            .despawn_event_reader
+            .read(&events)
+            .map(|e| e.0)
+            .collect::<Vec<_>>();
+        for entity in despawned_entities {
+            ecs_world.despawn(entity);
+        }
+    }
 
-    fn register_game_component<C: GameComponent + 'static>(&mut self) {
+    pub fn register_game_component<C: GameComponent + 'static>(&mut self) {
         let type_id = std::any::TypeId::of::<C>();
         // Technically there can be two different vtable ptrs for the same type due to something
         // about codegen units, but that doesn't matter here since semantically there is no
         // difference so ignore duplicates.
-        if self.game_component_vtables.contains_key(&type_id) {
+        if self.game_components.contains_key(&type_id) {
             return;
         }
 
@@ -130,18 +181,24 @@ impl ECSWorld {
         let dyn_ref = unsafe { null.as_ref() } as &dyn GameComponentMethods;
         // Safety: This reference is in fact a dyn ref.
         let vtable_ptr = unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn GameComponentMethods) };
-        self.game_component_vtables.insert(type_id, vtable_ptr);
-        let de_f = C::deserialize_component;
-        self.game_component_deserialize_fns.insert(type_id, de_f);
+        self.game_components.insert(
+            type_id,
+            GameComponentType {
+                type_info: TypeInfo::new::<C>(),
+                component_name: C::NAME.to_owned(),
+                is_constructible: C::is_constructible(),
+                construct_fn: C::construct_component,
+                deserialize_fn: C::deserialize_component,
+                methods_vtable_ptr: vtable_ptr,
+            },
+        );
 
         let old = self
-            .game_component_type_info
-            .insert(C::NAME.to_owned(), TypeInfo::new::<C>());
+            .game_component_names
+            .insert(C::NAME.to_owned(), type_id);
         assert!(old.is_none(),
                 "{} game component has a duplicate GameComponent::NAME with another already registered component.", 
                 std::any::type_name::<C>());
-        self.game_component_names
-            .insert(type_id, C::NAME.to_owned());
     }
 
     pub fn get_or_create_archetype_static<'a>(
@@ -212,6 +269,7 @@ impl ECSWorld {
         let (archetype_ptr, archetype) = self.get_or_create_archetype(type_infos.clone());
         let archetype_index = archetype.insert(entity_id, data);
 
+        assert!(type_infos.is_sorted());
         let pushed_entity_id = self.entities.push(EntityInfo {
             components: type_infos,
             archetype_ptr,
@@ -227,8 +285,23 @@ impl ECSWorld {
         entity_id: Entity,
         mut component: C,
     ) -> anyhow::Result<()> {
-        let component_type_id = std::any::TypeId::of::<C>();
+        let type_info = TypeInfo::new::<C>();
+        let component_ptr = std::ptr::from_mut(&mut component);
+        // Safety: component is forgotten so it is taken ownership of and the type info
+        // and ptr are from the same type.
+        unsafe { self.insert_one_raw(entity_id, &type_info, component_ptr as *mut u8) }?;
+        std::mem::forget(component);
+        Ok(())
+    }
 
+    /// Safety: Expects `component` to be allocated with the provided type info's layout and
+    /// ownership moved to this ECSWorld.
+    pub unsafe fn insert_one_raw(
+        &mut self,
+        entity_id: Entity,
+        type_info: &TypeInfo,
+        component_ptr: *mut u8,
+    ) -> anyhow::Result<()> {
         let entity_info = self.entities.get_mut(entity_id).unwrap();
         assert!(entity_info.components.is_sorted());
         let old_archetype = &mut self.archetypes[entity_info.archetype_ptr];
@@ -237,29 +310,46 @@ impl ECSWorld {
         // Check if this component is already in the current entity's archetype.
         if old_type_infos
             .into_iter()
-            .find(|type_info| type_info.type_id == component_type_id)
+            .find(|old_type_info| old_type_info.type_id == type_info.type_id)
             .is_some()
         {
             // Replace the old component.
-            let type_info = TypeInfo::new::<C>();
-            let component_ref = old_archetype.get_mut::<C>(&type_info, entity_info.index as usize);
-            *component_ref = component;
+            // Safety: Safe by expectations of calling this function.
+            old_archetype.replace_component_raw(
+                entity_info.index as usize,
+                type_info,
+                component_ptr,
+            );
             return Ok(());
         }
 
         // Get or create new archetype and move entity components to it.
         let mut new_type_infos = old_archetype.types.clone();
-        new_type_infos.push(TypeInfo::new::<C>());
+        new_type_infos.push(type_info.clone());
         new_type_infos.sort();
         let new_type_ids = new_type_infos
             .iter()
             .map(|type_info| type_info.type_id)
             .collect::<Vec<_>>();
+        log::debug!(
+            "Inserting component {:?} into entity {:?}, moving from archetype types {:?} to {:?}",
+            type_info.name(),
+            entity_id,
+            old_archetype
+                .types
+                .iter()
+                .map(|ty| (ty.type_id(), ty.name()))
+                .collect::<Vec<_>>(),
+            new_type_infos
+                .iter()
+                .map(|ty| (ty.type_id(), ty.name()))
+                .collect::<Vec<_>>()
+        );
 
         let mut new_ptrs = old_archetype.take_raw(entity_info.index as usize);
         let new_type_index = new_type_ids
             .iter()
-            .position(|ty| *ty == component_type_id)
+            .position(|ty| *ty == type_info.type_id)
             .unwrap();
         let (new_archetype_ptr, mut new_archetype) = Self::get_or_create_archetype_static(
             &mut self.archetypes,
@@ -267,9 +357,12 @@ impl ECSWorld {
             new_type_infos.clone(),
         );
 
-        let component_ptr = std::ptr::from_mut(&mut component);
+        log::debug!(
+            "new type index for inserted component {:?} is {}",
+            type_info.name(),
+            new_type_index
+        );
         new_ptrs.insert(new_type_index, component_ptr as *mut u8);
-        std::mem::forget(component);
 
         // Safety: We used the same type infos as the old archetype, and insert the new
         // component in the new type info's location. All the pointers are also valid since
@@ -278,6 +371,7 @@ impl ECSWorld {
         entity_info.index = unsafe { new_archetype.insert_raw(entity_id, new_ptrs) };
         entity_info.archetype_ptr = new_archetype_ptr;
         entity_info.components = new_type_infos;
+        log::debug!("Post insert");
 
         return Ok(());
     }
@@ -288,7 +382,6 @@ impl ECSWorld {
     pub fn clone_game_entities(&self, mut ctx: GameComponentCloneContext) -> ECSWorld {
         let ctx = &mut ctx;
         let mut new_world = ECSWorld::new();
-        new_world.game_component_vtables = self.game_component_vtables.clone();
 
         for (entity, entity_info) in self.entities.iter_with_handle() {
             if entity_info
@@ -304,7 +397,7 @@ impl ECSWorld {
                 .components
                 .iter()
                 .filter_map(|type_info| {
-                    self.game_component_vtables
+                    self.game_components
                         .contains_key(&type_info.type_id)
                         .then_some(type_info.clone())
                 })
@@ -324,13 +417,16 @@ impl ECSWorld {
             let cloned_data = src_data
                 .iter()
                 .map(|(type_info, src_data)| {
-                    let game_component_vtable =
-                        self.game_component_vtables.get(&type_info.type_id).unwrap();
+                    let game_component_vtable = self
+                        .game_components
+                        .get(&type_info.type_id)
+                        .unwrap()
+                        .methods_vtable_ptr;
                     let game_component_ptr = unsafe {
                         std::mem::transmute::<
                             (*const u8, GameComponentMethodsVtablePtr),
                             *const dyn GameComponentMethods,
-                        >((*src_data, *game_component_vtable))
+                        >((*src_data, game_component_vtable))
                     };
                     let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
                     // Safety: We free the pointers after the data is copied to the new archetype.
@@ -415,7 +511,12 @@ impl ECSWorld {
 
     pub fn find_archetype(&self, entity: Entity) -> &ComponentArchetype {
         let entity_info = self.entities.get(entity).unwrap();
-        assert!(entity_info.components.is_sorted());
+        assert!(
+            entity_info.components.is_sorted(),
+            "Entity {:?} has unsorted components {:?}??",
+            entity,
+            entity_info.components
+        );
         return &self.archetypes[entity_info.archetype_ptr];
     }
 
@@ -433,6 +534,10 @@ impl ECSWorld {
     }
 
     pub fn remove_one<C: 'static>(&mut self, entity: Entity) {
+        todo!();
+    }
+
+    pub fn remove_one_raw(&mut self, entity: Entity, type_id: &TypeId) {
         todo!();
     }
 
@@ -508,7 +613,7 @@ impl ECSWorld {
     //}
 
     pub fn contains(&self, entity: Entity) -> bool {
-        todo!()
+        self.entities.has_value(entity)
     }
 
     pub fn duplicate(
@@ -528,7 +633,7 @@ impl ECSWorld {
             .components
             .iter()
             .filter_map(|type_info| {
-                self.game_component_vtables
+                self.game_components
                     .contains_key(&type_info.type_id)
                     .then_some(type_info.clone())
             })
@@ -562,13 +667,16 @@ impl ECSWorld {
                         let new_game_entity = game_entity_component.duplicate();
                         unsafe { (clone_dst as *mut GameEntity).write(new_game_entity) };
                     } else {
-                        let game_component_vtable =
-                            self.game_component_vtables.get(&type_info.type_id).unwrap();
+                        let game_component_vtable = self
+                            .game_components
+                            .get(&type_info.type_id)
+                            .unwrap()
+                            .methods_vtable_ptr;
                         let game_component_ptr = unsafe {
                             std::mem::transmute::<
                                 (*const u8, *const ()),
                                 *const dyn GameComponentMethods,
-                            >((*src_data, *game_component_vtable))
+                            >((*src_data, game_component_vtable))
                         };
                         let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
                         game_component.clone_component(&mut clone_ctx, clone_dst);
@@ -602,8 +710,102 @@ impl ECSWorld {
         return new_entity_id;
     }
 
+    pub fn set_parent(&mut self, entity: Entity, parent: Option<Entity>) {
+        log::info!("Setting parent of entity {:?} to {:?}", entity, parent);
+        if let Some(new_parent) = parent {
+            let mut old_parent = self.get::<&mut EntityParent>(entity);
+            if let Ok(ref mut parent_component) = old_parent {
+                let last_parent = parent_component.parent();
+                if last_parent == new_parent {
+                    return;
+                }
+                parent_component.set_parent(new_parent);
+                drop(old_parent);
+                log::info!("Old parent: {:?}", last_parent);
+
+                let mut old_parent_children = self
+                    .get::<&mut EntityChildren>(last_parent)
+                    .expect("Entity had this entity as a parent so it should have an EntityChildren component.");
+                old_parent_children.children.remove(&entity);
+                if old_parent_children.children.is_empty() {
+                    drop(old_parent_children);
+                    self.remove_one::<EntityChildren>(last_parent);
+                } else {
+                    drop(old_parent_children);
+                }
+
+                let new_parent_children = self.get::<&mut EntityChildren>(new_parent);
+                if let Ok(mut new_parent_children) = new_parent_children {
+                    new_parent_children.children.insert(entity);
+                } else {
+                    drop(new_parent_children);
+                    let mut s = HashSet::new();
+                    s.insert(entity);
+                    self.insert_one(new_parent, EntityChildren { children: s });
+                    log::info!(
+                        "Children after insert: {:?}",
+                        &self.get::<&EntityChildren>(new_parent).unwrap().children
+                    );
+                }
+            } else {
+                drop(old_parent);
+                self.insert_one(entity, EntityParent::new(new_parent));
+
+                log::info!("No old parent.");
+                let new_parent_children = self.get::<&mut EntityChildren>(new_parent);
+                if let Ok(mut new_parent_children) = new_parent_children {
+                    log::info!(
+                        "New parent {:?} already has children {:?}.",
+                        new_parent,
+                        &new_parent_children.children
+                    );
+                    new_parent_children.children.insert(entity);
+                } else {
+                    drop(new_parent_children);
+                    let mut s = HashSet::new();
+                    s.insert(entity);
+                    self.insert_one(new_parent, EntityChildren { children: s })
+                        .expect("Failed to insert EntityChildren component.");
+                    log::info!(
+                        "Children after insert: {:?}",
+                        &self.get::<&EntityChildren>(new_parent).unwrap().children
+                    );
+                }
+            }
+        } else {
+            let Ok(old_parent) = self.get::<&EntityParent>(entity) else {
+                return;
+            };
+            let mut parent_children = self
+                .get::<&mut EntityChildren>(old_parent.parent())
+                .unwrap();
+            parent_children.children.remove(&entity);
+            drop(parent_children);
+            drop(old_parent);
+            self.remove_one::<EntityParent>(entity);
+        }
+    }
+
+    /// Despawns the given entity and removes the reference from its parent if it has one
+    /// Does nothing if the entity does not exist.
     pub fn despawn(&mut self, entity: Entity) {
-        let entity_info = self.entities.get(entity).unwrap();
+        let entity_parent = self
+            .get::<&EntityParent>(entity)
+            .map(|p| p.parent().clone());
+        if let Ok(entity_parent) = entity_parent {
+            let mut parent_children = self.get::<&mut EntityChildren>(entity_parent)
+                .expect("Despawned entity has a parent so that parent should have an `EntityChildren` component.");
+            parent_children.children.remove(&entity);
+            if parent_children.children.is_empty() {
+                drop(parent_children);
+                self.remove_one::<EntityChildren>(entity_parent);
+            }
+        }
+
+        let Some(entity_info) = self.entities.get(entity) else {
+            return;
+        };
+
         assert!(entity_info.components.is_sorted());
         let archetype = &mut self.archetypes[entity_info.archetype_ptr];
         archetype.remove(entity_info.index);
@@ -618,19 +820,6 @@ impl ECSWorld {
         )
     }
 
-    pub fn set_parent(&mut self, entity: Entity, parent: Entity) {
-        self.insert_one(entity, EntityParent::new(parent));
-        let contains_children = self.get::<&mut EntityChildren>(parent).is_ok();
-        if contains_children {
-            let mut children = self.get::<&mut EntityChildren>(parent).unwrap();
-            children.children.insert(entity);
-        } else {
-            let mut children = HashSet::new();
-            children.insert(entity);
-            self.insert_one(parent, EntityChildren { children });
-        }
-    }
-
     pub fn get_world_transform(
         &self,
         entity: Entity,
@@ -640,14 +829,14 @@ impl ECSWorld {
 
         let mut curr_parent = self.get::<&EntityParent>(entity);
         while let Ok(parent) = curr_parent {
-            let Ok(parent_transform) = self.get::<&Transform>(parent.parent) else {
+            let Ok(parent_transform) = self.get::<&Transform>(parent.parent()) else {
                 break;
             };
             curr_transform.position =
                 (parent_transform.rotation * curr_transform.position) + parent_transform.position;
             curr_transform.rotation = parent_transform.rotation * curr_transform.rotation;
             curr_transform.scale = curr_transform.scale.component_mul(&parent_transform.scale);
-            curr_parent = self.get::<&EntityParent>(parent.parent);
+            curr_parent = self.get::<&EntityParent>(parent.parent());
         }
 
         return curr_transform;
@@ -679,7 +868,7 @@ impl ECSWorld {
             if type_info == &TypeInfo::new::<EntityParent>() {
                 let parent_id = archetype
                     .get::<EntityParent>(&TypeInfo::new::<EntityParent>(), entity_info.index)
-                    .parent;
+                    .parent();
                 asset_parent = Some(self.get_game_entity_uuid(parent_id));
                 continue;
             }
@@ -695,15 +884,18 @@ impl ECSWorld {
                 continue;
             }
 
-            let Some(vtable_ptr) = self.game_component_vtables.get(&type_info.type_id) else {
+            let Some(GameComponentType {
+                methods_vtable_ptr, ..
+            }) = self.game_components.get(&type_info.type_id)
+            else {
                 continue;
             };
             // Safety: We only use this pointer as a reference.
             let src_data = unsafe { archetype.get_raw(&type_info, entity_info.index).as_ptr() };
             let (asset_component_data, dst_layout) =
-                unsafe { Self::clone_component(src_data, type_info, *vtable_ptr, ctx) };
+                unsafe { Self::clone_component(src_data, type_info, *methods_vtable_ptr, ctx) };
             asset_components.insert(type_info.type_id, unsafe {
-                WorldGameComponentAsset::new(*type_info, asset_component_data)
+                WorldGameComponentAsset::new(type_info.clone(), asset_component_data)
             });
         }
         let game_entity =
@@ -816,9 +1008,9 @@ impl serde::Serialize for ECSWorldEntitiesSerializable<'_> {
     {
         let mut archetypes: HashSet<usize> = HashSet::new();
         let mut game_component_count = 0;
-        for (name, ty) in self.world.ecs_world.game_component_type_info.iter() {
+        for (name, ty) in self.world.ecs_world.game_component_names.iter() {
             game_component_count += 1;
-            let Some(indices) = self.world.ecs_world.component_archetypes.get(&ty.type_id) else {
+            let Some(indices) = self.world.ecs_world.component_archetypes.get(ty) else {
                 continue;
             };
             archetypes.extend(indices.iter().map(|i| *i));
@@ -856,7 +1048,7 @@ impl serde::Serialize for ECSWorldEntitiesSerializable<'_> {
                     (self
                         .world
                         .ecs_world
-                        .game_component_vtables
+                        .game_components
                         .contains_key(&type_info.type_id))
                     .then_some(i)
                 })
@@ -942,12 +1134,14 @@ impl serde::Serialize for ECSWorldSceneEntityGameComponentSerializable<'_> {
         let mut s = se.serialize_struct("GameComponent", 2)?;
         s.serialize_field(
             "name",
-            self.sup
+            &self
+                .sup
                 .sup
                 .ecs_world
-                .game_component_names
+                .game_components
                 .get(&self.type_info.type_id)
-                .expect("Type should be a game component, must have filtered wrong."),
+                .expect("Type should be a game component, must have filtered wrong.")
+                .component_name,
         )?;
         s.serialize_field(
             "data",
@@ -966,9 +1160,6 @@ impl serde::Serialize for ECSWorldSceneEntityGameComponentDataSerializable<'_> {
     where
         S: serde::Serializer,
     {
-        // TODO: Serialize the game component data by getting
-        // &dyn GameComponent then calling serialize with ctx. Then time to deserialize,
-        // ehhfshfhsHShfshfshfhsfsh maybe i do audio in the meantime i mean who knows.
         let ecs_world = self.sup.sup.sup.ecs_world;
         let archetype = self.sup.sup.archetype;
         let ctx = self.sup.sup.sup.ctx;
@@ -979,14 +1170,15 @@ impl serde::Serialize for ECSWorldSceneEntityGameComponentDataSerializable<'_> {
         };
         let game_component = {
             let game_component_vtable = ecs_world
-                .game_component_vtables
+                .game_components
                 .get(&self.sup.type_info.type_id)
-                .unwrap();
+                .unwrap()
+                .methods_vtable_ptr;
             let game_component_ptr = unsafe {
                 std::mem::transmute::<
                     (*const u8, GameComponentMethodsVtablePtr),
                     *const dyn GameComponentMethods,
-                >((src_data, *game_component_vtable))
+                >((src_data, game_component_vtable))
             };
 
             unsafe { game_component_ptr.as_ref().unwrap() }
@@ -1034,25 +1226,31 @@ impl<'de> serde::de::Visitor<'de> for &mut EntityVisitor<'_, '_> {
     {
         let mut components_visitor = EntityComponentsVisitor { ctx: self.ctx };
 
-        let mut component_data = None;
+        let mut components_result = None;
         while let Some(key) = map.next_key::<EntityField>()? {
             match key {
                 EntityField::Components => {
-                    if component_data.is_some() {
+                    if components_result.is_some() {
                         return Err(serde::de::Error::duplicate_field("components"));
                     }
-                    component_data = Some(map.next_value_seed(&mut components_visitor)?);
+                    components_result = Some(map.next_value_seed(&mut components_visitor)?);
                 }
             }
         }
 
-        let Some(component_data) = component_data else {
+        let Some(components_result) = components_result else {
             return Err(serde::de::Error::custom(
                 "Scene does not contain an `components` field.",
             ));
         };
 
-        self.ctx.ecs_world.spawn_raw(component_data);
+        let entity_id = self
+            .ctx
+            .ecs_world
+            .spawn_raw(components_result.raw_component_data);
+        if let Some(parent_uuid) = components_result.entity_parent {
+            self.ctx.to_parent_entities.push((entity_id, parent_uuid));
+        }
 
         Ok(())
     }
@@ -1062,8 +1260,13 @@ struct EntityComponentsVisitor<'a, 'b> {
     pub ctx: &'a mut ProjectSceneDeserializeContext<'b>,
 }
 
+struct EntityComponentsVisitorResult {
+    raw_component_data: Vec<(TypeInfo, *const u8)>,
+    entity_parent: Option<uuid::Uuid>,
+}
+
 impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityComponentsVisitor<'_, '_> {
-    type Value = Vec<(TypeInfo, *const u8)>;
+    type Value = EntityComponentsVisitorResult;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
@@ -1074,7 +1277,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for &mut EntityComponentsVisitor<'_, '
 }
 
 impl<'de> serde::de::Visitor<'de> for &mut EntityComponentsVisitor<'_, '_> {
-    type Value = Vec<(TypeInfo, *const u8)>;
+    type Value = EntityComponentsVisitorResult;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("expected Array with components")
@@ -1084,19 +1287,22 @@ impl<'de> serde::de::Visitor<'de> for &mut EntityComponentsVisitor<'_, '_> {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let mut raw_component_data = Vec::new();
+        let mut result = EntityComponentsVisitorResult {
+            raw_component_data: Vec::new(),
+            entity_parent: None,
+        };
         let mut visitor = EntityComponentStructVisitor {
             ctx: self.ctx,
-            raw_component_data: &mut raw_component_data,
+            result: &mut result,
         };
         while let Some(_) = seq.next_element_seed(&mut visitor)? {}
-        Ok(raw_component_data)
+        Ok(result)
     }
 }
 
 struct EntityComponentStructVisitor<'a, 'b> {
     ctx: &'a mut ProjectSceneDeserializeContext<'b>,
-    raw_component_data: &'a mut Vec<(TypeInfo, *const u8)>,
+    result: &'a mut EntityComponentsVisitorResult,
 }
 
 #[derive(serde::Deserialize)]
@@ -1155,17 +1361,21 @@ impl<'de> serde::de::Visitor<'de> for &mut EntityComponentStructVisitor<'_, '_> 
                         return Err(serde::de::Error::duplicate_field("data"));
                     }
 
-                    let type_info = component_data_visitor.ctx.ecs_world.game_component_type_info.get(name)
+                    let type_id = component_data_visitor.ctx.ecs_world.game_component_names.get(name)
                         .unwrap_or_else(|| panic!("Tried to deserialize component with GameComponent::NAME `{}` but there it is not registered in the ECSWorld, cant get type info.", name));
+                    let game_component = component_data_visitor
+                        .ctx
+                        .ecs_world
+                        .game_components
+                        .get(&type_id)
+                        .unwrap();
                     component_data_visitor.dst_ptr =
-                        unsafe { std::alloc::alloc(type_info.layout(1)) };
+                        unsafe { std::alloc::alloc(game_component.type_info.layout(1)) };
                     if component_data_visitor.dst_ptr.is_null() {
                         panic!("Failed to allocate game component");
                     }
-
-                    let de_fn = component_data_visitor.ctx.ecs_world.game_component_deserialize_fns.get(&type_info.type_id)
-                        .unwrap_or_else(|| panic!("Tried to deserialize component with GameComponent::NAME `{}` but there it is not registered in the ECSWorld, cant get deserialize fn.", name));
-                    component_data_visitor.game_component_de_method = Some(*de_fn);
+                    component_data_visitor.game_component_de_method =
+                        Some(game_component.deserialize_fn);
 
                     map.next_value_seed(&mut component_data_visitor)?;
                     data = Some(component_data_visitor.dst_ptr);
@@ -1178,8 +1388,27 @@ impl<'de> serde::de::Visitor<'de> for &mut EntityComponentStructVisitor<'_, '_> 
         let name = name.ok_or_else(|| serde::de::Error::missing_field("name"))?;
         let data = data.ok_or_else(|| serde::de::Error::missing_field("data"))?;
 
-        let type_info = self.ctx.ecs_world.game_component_type_info.get(&name).ok_or_else(|| serde::de::Error::custom(format!("Provided component name `{}` doesn't map to any registered GameComponent type.", name)))?;
-        self.raw_component_data.push((type_info.clone(), data));
+        let type_id = self.ctx.ecs_world.game_component_names.get(&name).ok_or_else(|| serde::de::Error::custom(format!("Provided component name `{}` doesn't map to any registered GameComponent type.", name)))?;
+        let type_info = self
+            .ctx
+            .ecs_world
+            .game_components
+            .get(&type_id)
+            .unwrap()
+            .type_info
+            .clone();
+        self.result.raw_component_data.push((type_info, data));
+
+        if *type_id == std::any::TypeId::of::<EntityParent>() {
+            let component_ctx_parent = &mut self.ctx.component_ctx.entity_parent;
+            if component_ctx_parent.is_nil() {
+                return Err(serde::de::Error::custom(
+                    "EntityParent component has a null parent uuid.",
+                ));
+            }
+            self.result.entity_parent = Some(*component_ctx_parent);
+            *component_ctx_parent = uuid::Uuid::nil();
+        }
 
         Ok(())
     }

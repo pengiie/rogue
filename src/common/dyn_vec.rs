@@ -462,9 +462,10 @@ impl TypeInfoCloneable {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct TypeInfo {
     pub type_id: std::any::TypeId,
+    name: String,
     drop_fn: unsafe fn(*mut u8),
     size: usize,
     alignment: usize,
@@ -504,6 +505,7 @@ impl TypeInfo {
 
         Self {
             type_id: std::any::TypeId::of::<T>(),
+            name: std::any::type_name::<T>().to_string(),
             drop_fn: drop_fn::<T>,
             size: std::mem::size_of::<T>(),
             alignment: std::mem::align_of::<T>(),
@@ -516,6 +518,10 @@ impl TypeInfo {
 
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub unsafe fn drop(&self, data: *mut u8) {

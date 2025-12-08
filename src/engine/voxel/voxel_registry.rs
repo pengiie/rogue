@@ -2,6 +2,7 @@ use std::{
     any::TypeId,
     collections::HashMap,
     ops::{Deref, DerefMut},
+    path::Path,
 };
 
 use crate::{
@@ -11,9 +12,18 @@ use crate::{
         freelist::{FreeList, FreeListHandle},
     },
     engine::{
-        asset::{asset::AssetPath, repr::voxel::any::VoxelModelAnyAsset},
-        entity::RenderableVoxelEntity,
-        voxel::voxel_allocator::VoxelDataAllocator,
+        asset::{
+            asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
+            repr::voxel::any::VoxelModelAnyAsset,
+        },
+        entity::{
+            ecs_world::{ECSWorld, Entity},
+            RenderableVoxelEntity,
+        },
+        event::{EventReader, Events},
+        voxel::{
+            voxel_allocator::VoxelDataAllocator, voxel_events::EventVoxelRenderableEntityLoad,
+        },
     },
 };
 
@@ -79,6 +89,8 @@ pub struct VoxelModelTypeInfo {
     model_gpu_type_info: TypeInfo,
 }
 
+// TODO: Follow pattern of collider registry and ecs where we get concrete type info and remove
+// VoxelModelType.
 pub struct VoxelModelRegistry {
     /// Each archetype is (VoxelModel<T>, VoxelModelGpu<T::Gpu>).
     /// The key is the (TypeId::of::<T>()) and the value is (Archetype, TypeId::of::<T::Gpu>())
@@ -86,10 +98,18 @@ pub struct VoxelModelRegistry {
     /// Each archetype is (VoxelModel<T>)
     standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
     pub voxel_model_info: FreeList<VoxelModelInfo>,
+    pub static_asset_models: HashMap<GameAssetPath, VoxelModelId>,
 
-    // Maps model_type to the vtable for dyn VoxelModelImpl and
-    // maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
+    /// Maps model_type to the vtable for dyn VoxelModelImpl and
+    /// maps gpu_type to the vtable for dyn VoxelModelGpuImpl.
     type_vtables: HashMap<TypeId, *mut ()>,
+
+    model_load_event_reader: EventReader<EventVoxelRenderableEntityLoad>,
+    loading_static_model_handles: HashMap<GameAssetPath, AssetHandle>,
+    loading_renderable_entities: HashMap<GameAssetPath, Vec<Entity>>,
+
+    /// Non-terrain voxel models that need their normals updated.
+    pub to_update_model_normals: Vec<VoxelModelId>,
 }
 
 impl VoxelModelRegistry {
@@ -98,7 +118,14 @@ impl VoxelModelRegistry {
             renderable_voxel_model_archtypes: HashMap::new(),
             standalone_voxel_model_archtypes: HashMap::new(),
             voxel_model_info: FreeList::new(),
+            static_asset_models: HashMap::new(),
             type_vtables: HashMap::new(),
+
+            model_load_event_reader: EventReader::new(),
+            loading_static_model_handles: HashMap::new(),
+            loading_renderable_entities: HashMap::new(),
+
+            to_update_model_normals: Vec::new(),
         }
     }
 
@@ -125,6 +152,125 @@ impl VoxelModelRegistry {
         VoxelModelId::new(self.voxel_model_info.next_free_handle())
     }
 
+    pub fn handle_model_load_events(
+        &mut self,
+        project_save_dir: &Path,
+        events: &Events,
+        assets: &mut Assets,
+        ecs_world: &mut ECSWorld,
+    ) {
+        // Look for any renderable load requests.
+        for event in self.model_load_event_reader.read(events) {
+            let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(event.entity)
+            else {
+                // Ignore events where the renderable doesn't exist.
+                continue;
+            };
+            let Some(model_asset_path) = renderable.model_asset_path() else {
+                log::error!("Should not be sending EventVoxelRenderableEntityLoad for a renderable entity without an asset path.");
+                continue;
+            };
+            // If we don't worry about force reloading then use a cached model.
+            if !event.reload {
+                if let Some(model_id) = self.static_asset_models.get(model_asset_path) {
+                    if renderable.is_dynamic() {
+                        todo!("clone then create new model");
+                    } else {
+                        renderable.set_model_id(*model_id);
+                    }
+                    continue;
+                }
+            }
+
+            // Enqueue this entity to be loaded when the model is loaded.
+            self.loading_renderable_entities
+                .entry(model_asset_path.clone())
+                .or_default()
+                .push(event.entity);
+
+            // Start loading this static model if it isn't already loading.
+            if !self
+                .loading_static_model_handles
+                .contains_key(model_asset_path)
+            {
+                let model_asset_handle = assets.load_asset::<VoxelModelAnyAsset>(
+                    model_asset_path.as_file_asset_path(project_save_dir),
+                );
+                self.loading_static_model_handles
+                    .insert(model_asset_path.clone(), model_asset_handle);
+            }
+        }
+
+        // Check on the state of any loading voxel model assets.
+        let mut finished_asset_paths = Vec::new();
+        // Clone because of the use of self later.
+        // TODO: Clean up and make rust like me.
+        for (asset_path, asset_handle) in &self.loading_static_model_handles.clone() {
+            match assets.get_asset_status(asset_handle) {
+                AssetStatus::InProgress => {
+                    continue;
+                }
+                AssetStatus::Saved => unreachable!(),
+                AssetStatus::Loaded => {
+                    // Register the loaded static voxel model asset.
+                    let asset = assets
+                        .take_asset::<VoxelModelAnyAsset>(asset_handle)
+                        .unwrap();
+                    let voxel_model_id = self.register_renderable_voxel_model_any(
+                        format!("static_{}", asset_path.asset_path),
+                        *asset,
+                    );
+                    self.set_voxel_model_asset_path(
+                        voxel_model_id,
+                        Some(asset_path.as_file_asset_path(project_save_dir)),
+                    );
+                    self.static_asset_models
+                        .insert(asset_path.clone(), voxel_model_id);
+                    self.to_update_model_normals.push(voxel_model_id);
+                    log::debug!("Loaded static model {}.", asset_path.asset_path);
+                }
+                AssetStatus::NotFound => {
+                    log::error!(
+                        "Tried loading renderable asset at {} but it is not found.",
+                        asset_path.asset_path
+                    );
+                }
+                AssetStatus::Error(error) => {
+                    log::error!(
+                        "Error while loading renderable asset at {}: {}",
+                        asset_path.asset_path,
+                        error
+                    );
+                }
+            }
+            finished_asset_paths.push(asset_path.clone());
+        }
+
+        // Update any waiting RenderableEntity components with the loaded asset.
+        for asset_path in finished_asset_paths {
+            self.loading_static_model_handles.remove(&asset_path);
+            let Some(entities) = self.loading_renderable_entities.get_mut(&asset_path) else {
+                continue;
+            };
+            let Some(static_model_id) = self.static_asset_models.get(&asset_path) else {
+                // Model must have failed to load for some reason.
+                entities.clear();
+                continue;
+            };
+            for entity in entities.drain(..) {
+                let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(entity) else {
+                    // Ignore any entities which no longer have a renderable component.
+                    continue;
+                };
+                if renderable.is_dynamic() {
+                    todo!("Figure out dynamic loading and stuff.");
+                } else {
+                    renderable.set_model(Some(asset_path.clone()), *static_model_id);
+                }
+            }
+        }
+    }
+
     /// Noop if model is already unloaded or doesn't exist.
     pub fn unload_model(&mut self, id: VoxelModelId, voxel_allocator: &mut VoxelDataAllocator) {
         let info_handle = id.handle;
@@ -134,7 +280,6 @@ impl VoxelModelRegistry {
         if info.gpu_type.is_some() {
             let mut dyn_gpu = self.get_dyn_gpu_model_mut(id);
             dyn_gpu.deallocate(voxel_allocator);
-            log::info!("deallocated {:?}", id);
 
             let info = self.voxel_model_info.get(info_handle).unwrap();
             self.renderable_voxel_model_archtypes
@@ -142,9 +287,7 @@ impl VoxelModelRegistry {
                 .unwrap()
                 .0
                 .remove(info.archetype_index);
-            log::info!("removed");
         } else {
-            log::info!("deallocated standalone {:?}", id);
             self.standalone_voxel_model_archtypes
                 .get_mut(&info.model_type_id)
                 .unwrap()
@@ -589,17 +732,6 @@ impl VoxelModelRegistry {
         RenderableVoxelModelIterMut {
             archetype_iters_mut,
             current_archetype_index: 0,
-        }
-    }
-}
-
-impl Clone for VoxelModelRegistry {
-    fn clone(&self) -> Self {
-        Self {
-            renderable_voxel_model_archtypes: self.renderable_voxel_model_archtypes.clone(),
-            standalone_voxel_model_archtypes: self.standalone_voxel_model_archtypes.clone(),
-            voxel_model_info: self.voxel_model_info.clone(),
-            type_vtables: self.type_vtables.clone(),
         }
     }
 }

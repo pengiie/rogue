@@ -86,9 +86,7 @@ impl Archetype {
         for (i, data) in self.data.iter_mut().enumerate() {
             let type_info = self.types[i];
             let ptr = data.get_mut_unchecked(index as usize).as_mut_ptr();
-            log::info!("pre drop");
             unsafe { type_info.drop(ptr) };
-            log::info!("post drop");
         }
         self.global_indices[index as usize] = FreeListHandle::DANGLING;
     }

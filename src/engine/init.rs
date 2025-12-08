@@ -1,5 +1,7 @@
 use crate::engine::asset::repr::editor_settings::{self, EditorUserSettingsAsset};
 use crate::engine::asset::repr::project::EditorProjectAsset;
+use crate::engine::entity::RenderableVoxelEntity;
+use crate::engine::voxel::voxel_events;
 use crate::session::EditorSession;
 use crate::{app::App, settings::Settings};
 
@@ -84,11 +86,27 @@ pub fn init_editor_project(app: &mut App) {
                 .ok()
         })
         .unwrap_or(None);
+
     if project.is_none() {
         editor_settings.last_project_dir = None;
     }
 
     let project = project.unwrap_or_else(|| EditorProjectAsset::new_empty());
+
+    // Initialize project assets.
+    let mut events = app.get_resource_mut::<Events>();
+    for (entity, renderable) in project
+        .ecs_world
+        .query::<&RenderableVoxelEntity>()
+        .into_iter()
+    {
+        events.push(voxel_events::EventVoxelRenderableEntityLoad {
+            entity,
+            reload: false,
+        });
+    }
+    drop(events);
+
     app.insert_resource(project.ecs_world);
     app.insert_resource(project.physics_world);
     app.insert_resource(Editor::new(project.editor_settings));

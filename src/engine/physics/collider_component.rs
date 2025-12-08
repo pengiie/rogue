@@ -30,6 +30,16 @@ impl EntityColliders {
 impl GameComponent for EntityColliders {
     const NAME: &str = "Colliders";
 
+    fn is_constructible() -> bool {
+        true
+    }
+
+    fn construct_component(dst_ptr: *mut u8) {
+        let dst_ptr = dst_ptr as *mut Self;
+        // Safety: dst_ptr should be allocated with the memory layout for this type.
+        unsafe { dst_ptr.write(Self::new()) };
+    }
+
     fn clone_component(
         &self,
         ctx: &mut crate::engine::entity::component::GameComponentCloneContext<'_>,

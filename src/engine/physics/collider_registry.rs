@@ -18,7 +18,7 @@ use crate::{
             capsule_collider::CapsuleCollider,
             collider::{
                 Collider, ColliderDeserializeFnPtr, ColliderIntersectionTest,
-                ColliderIntersectionTestCaller, ColliderMethods,
+                ColliderIntersectionTestCaller, ColliderMethods, ContactManifold,
             },
             collider_component::EntityColliders,
             transform::Transform,
@@ -236,6 +236,28 @@ impl ColliderRegistry {
         };
     }
 
+    pub fn test_narrow_phase(
+        &self,
+        collider_id_a: &ColliderId,
+        collider_id_b: &ColliderId,
+        entity_transform_a: &Transform,
+        entity_transform_b: &Transform,
+    ) -> Option<ContactManifold> {
+        let pair =
+            ColliderIntersectionPair::new(collider_id_a.collider_type, collider_id_b.collider_type);
+        let Some(func) = self.intersection_functions.get(&pair) else {
+            return None;
+        };
+
+        func.run_erased(
+            collider_id_a,
+            collider_id_b,
+            entity_transform_a,
+            entity_transform_b,
+            self,
+        )
+    }
+
     pub fn get_collider_dyn(&self, collider_id: &ColliderId) -> &dyn ColliderMethods {
         let collider = self
             .colliders
@@ -254,6 +276,28 @@ impl ColliderRegistry {
                 ))
             };
             unsafe { dyn_fat_ptr.as_ref() }.unwrap()
+        };
+        dyn_ref
+    }
+
+    pub fn get_collider_dyn_mut(&mut self, collider_id: &ColliderId) -> &mut dyn ColliderMethods {
+        let collider = self
+            .colliders
+            .get_mut(&collider_id.collider_type)
+            .unwrap()
+            .get_mut_unchecked(collider_id.index)
+            .as_ptr() as *mut ();
+        let dyn_ref = {
+            let vtable_ptr = *self
+                .collider_vtables
+                .get(&collider_id.collider_type)
+                .unwrap();
+            let dyn_fat_ptr = unsafe {
+                std::mem::transmute::<(*mut (), *const ()), *mut dyn ColliderMethods>((
+                    collider, vtable_ptr,
+                ))
+            };
+            unsafe { dyn_fat_ptr.as_mut() }.unwrap()
         };
         dyn_ref
     }

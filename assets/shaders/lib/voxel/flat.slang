@@ -48,16 +48,12 @@ public struct Flat {
       if (this.voxel_exists(voxel_index)) {
         if (let pt_material = this.load_ptmaterial(voxel_index)) {
           var color = pt_material;
-          if (let normal = this.load_normal(voxel_index)) {
-            let rot_normal = mul(rotation, normal);
-            var sun_dir = u_frame.world_info.sun_dir;
-            if (sun_dir.y < 0) {
-              sun_dir *= -1;
-            }
-            let l = dot(rot_normal, sun_dir);
-            color *= max(l, 0.1);
+          var normal = float3(0.0);
+          if (let n = this.load_normal(voxel_index)) {
+            let rot_normal = mul(rotation, n);
+            normal = rot_normal;
           }
-          //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
+
           let t_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;
           let next_point = root_aabb.min() + ((float3) last_grid_pos + ((float3) dda.unit_grid * 0.5 + 0.5)) * t_scaling;
           let hit_t = ray_point_test(in_ray, next_point);
@@ -65,7 +61,7 @@ public struct Flat {
           if (i == 0) {
             depth = root_hit_info.t_enter;
           }
-          return RayModelTest.hit(color, depth);
+          return RayModelTest.hit(color, normal, depth);
         }
       }
 

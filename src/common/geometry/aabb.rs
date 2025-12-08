@@ -1,6 +1,9 @@
-use nalgebra::Vector3;
+use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::common::geometry::shape::{Face, Projection, Shape, Vertex};
+use crate::common::geometry::{
+    obb::OBB,
+    shape::{Face, Projection, Shape, Vertex},
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AABB {
@@ -27,6 +30,13 @@ impl AABB {
         }
     }
 
+    pub fn scale_by(&self, scale: Vector3<f32>) -> AABB {
+        Self {
+            min: self.min.component_mul(&scale),
+            max: self.max.component_mul(&scale),
+        }
+    }
+
     pub fn center(&self) -> Vector3<f32> {
         (self.max + self.min) * 0.5
     }
@@ -35,21 +45,25 @@ impl AABB {
         self.max - self.min
     }
 
+    pub fn as_obb(&self) -> OBB {
+        OBB::new(self.clone(), UnitQuaternion::identity(), Vector3::zeros())
+    }
+
     pub fn half_side_length(&self) -> Vector3<f32> {
         return self.side_length() * 0.5;
     }
 
     pub fn intersects_aabb(&self, other: &AABB) -> bool {
         // Test if x-axis overlaps.
-        if self.min.x <= other.max.x && self.max.x <= other.min.x {
+        if self.max.x <= other.min.x || other.max.x <= self.min.x {
             return false;
         }
         // Test if y-axis overlaps.
-        if self.min.y <= other.max.y && self.max.y <= other.min.y {
+        if self.max.y <= other.min.y || other.max.y <= self.min.y {
             return false;
         }
         // Test if z-axis overlaps.
-        if self.min.z <= other.max.z && self.max.z <= other.min.z {
+        if self.max.z <= other.min.z || other.max.z <= self.min.z {
             return false;
         }
         return true;

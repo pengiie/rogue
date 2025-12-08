@@ -80,7 +80,7 @@ public struct THC {
       if (should_pop) {
         if (curr_height == 0) {
           //break;
-          return RayModelTest.hit(float3(1.0, 0.0, 0.0), 0.0);
+          return RayModelTest.hit(float3(1.0, 0.0, 0.0), float3(0.0), 0.0);
         }
 
         curr_height -= 1;
@@ -108,26 +108,19 @@ public struct THC {
             if (let pt_material = this.load_ptmaterial(voxel_addr)) {
               //printf("Color is %f %f %f\n", pt_material.x, pt_material.y, pt_material.z);
               var color = pt_material;
-              if (let normal = this.load_normal(voxel_addr)) {
-                let rot_normal = mul(rotation, normal);
-                let l = sqrt(dot(rot_normal, normalize(-float3(0.7,-1,-0.2))) * 0.5 + 0.5);
-                color *= max(l, 0.2);
+              var normal = float3(0.0);
+              if (let n = this.load_normal(voxel_addr)) {
+                let rot_normal = mul(rotation, n);
+                normal = rot_normal;
               }
               let next_point = curr_anchor_grid + curr_local_grid + max(unit_grid, 0);
               let next_t = ray_point_test(curr_ray, next_point);
               let min_t = min3(next_t.x, next_t.y, next_t.z);
-              //if (last_mask.x) {
-              //  color *= 0.8;
-              //} else if (last_mask.y) {
-              //  color *= 0.6;
-              //} else if (last_mask.z) {
-              //  color *= 0.4;
-              //}
               let voxel_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;
               let d = distance(in_ray.origin, root_aabb.min() + curr_ray.origin * voxel_scaling);
-              return RayModelTest.hit(color, d);
+              return RayModelTest.hit(color, normal, d);
             }
-            return RayModelTest.hit(float3(0.5), 0.0);
+            return RayModelTest.hit(float3(0.5), float3(0.0), 0.0);
           }
 
           let curr_node_size = this.quarter_side_length >> (curr_height * 2);

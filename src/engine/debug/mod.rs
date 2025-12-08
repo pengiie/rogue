@@ -22,7 +22,6 @@ pub struct DebugRenderer {
     debug_lines: Vec<DebugLine>,
     debug_rings: Vec<DebugRing>,
     debug_planes: Vec<DebugPlane>,
-    show_debug: bool,
 }
 
 pub struct DebugLine {
@@ -87,28 +86,18 @@ impl DebugRenderer {
             debug_lines: Vec::new(),
             debug_rings: Vec::new(),
             debug_planes: Vec::new(),
-            show_debug: true,
         }
     }
 
     pub fn draw_line(&mut self, line: DebugLine) {
-        if !self.show_debug {
-            return;
-        }
         self.debug_lines.push(line);
     }
 
     pub fn draw_ring(&mut self, ring: DebugRing) {
-        if !self.show_debug {
-            return;
-        }
         self.debug_rings.push(ring);
     }
 
     pub fn draw_plane(&mut self, plane: DebugPlane) {
-        if !self.show_debug {
-            return;
-        }
         self.debug_planes.push(plane);
     }
 
@@ -128,9 +117,6 @@ impl DebugRenderer {
     }
 
     pub fn draw_obb(&mut self, debug_obb: DebugOBB) {
-        if !self.show_debug {
-            return;
-        }
         let obb = debug_obb.obb;
         let rot = obb.rotation;
         let (min, max) = obb.rotated_min_max();
@@ -168,10 +154,6 @@ impl DebugRenderer {
         mut renderer: ResMut<Renderer>,
         input: Res<Input>,
     ) {
-        if input.is_key_pressed(consts::actions::keybind::EDITOR_TOGGLE_DEBUG) {
-            debug.show_debug = !debug.show_debug;
-        }
-
         let line_count = debug.debug_lines.len();
         if line_count > 0 {
             let lines_byte_size = line_count * 48;

@@ -2,12 +2,12 @@ use log::debug;
 use nalgebra::{Isometry3, Matrix4};
 use rogue_macros::{game_component, Resource};
 
+use super::renderer;
+use crate::engine::entity::component::GameComponentSerializeContext;
 use crate::{
     consts,
     engine::entity::{component::GameComponent, ecs_world::Entity},
 };
-use crate::engine::entity::component::GameComponentSerializeContext;
-use super::renderer;
 
 #[derive(Resource)]
 pub struct MainCamera {
@@ -48,6 +48,12 @@ pub struct Camera {
     pub fov: f32,
     pub near_plane: f32,
     pub far_plane: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Camera::new(90.0)
+    }
 }
 
 impl Camera {

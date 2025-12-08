@@ -34,7 +34,7 @@ public float3 sample_sky(Ray ray) {
   const float3 dark_blue = float3(0.4, 0.5, 0.75);
   const float3 light_blue = float3(0.6, 0.78, 0.98);
 
-  let sun_dir = normalize(float3(1.0, 1.0, 0.0));
+  let sun_dir = normalize(-float3(0.7,-1,-0.4));
   let t = saturate(sun_dir.y * 2.0);
 
   let sun_l = dot(ray.dir, normalize(sun_dir));
@@ -52,11 +52,6 @@ public float3 sample_sky(Ray ray) {
     return color::srgb_to_lsrgb(float3(1.0));
   }
 
-  if (t > 0.6) {
-    return color::srgb_to_lsrgb(lerp(dark_blue, light_blue, saturate((t - 0.3) / 0.7)));
-  } else if (t > 0.3) {
-    return color::srgb_to_lsrgb(dark_blue);
-  } else {
-    return color::srgb_to_lsrgb(lerp(really_dark_blue, dark_blue, saturate(t / 0.3)));
-  }
+  let dithered_dir = dither(ray.dir);
+  return color::srgb_to_lsrgb(lerp(dark_blue, light_blue, smoothstep_saturate((dithered_dir.y + 0.35) / 0.5)));
 }

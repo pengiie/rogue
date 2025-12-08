@@ -4,7 +4,8 @@ use nalgebra::{Quaternion, Rotation3, UnitQuaternion, Vector2, Vector3};
 use super::{capsule_collider::CapsuleCollider, transform::Transform};
 use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::obb::OBB;
-use crate::engine::physics::collider::ContactManifold;
+use crate::engine::editor::ui::entity_properties::{position_ui, rotation_ui, scale_ui};
+use crate::engine::physics::collider::{ColliderDebugColoring, ContactManifold};
 use crate::engine::voxel::voxel_world::VoxelWorld;
 use crate::{
     common::{color::Color, geometry::shape::Shape},
@@ -48,14 +49,29 @@ impl Collider for BoxCollider {
     const NAME: &str = "BoxCollider";
 
     fn aabb(&self, world_transform: &Transform, voxel_world: &VoxelWorld) -> AABB {
-        return self.obb.bounding_aabb();
+        world_transform.transform_obb(&self.obb).bounding_aabb()
     }
 
-    fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
+    fn render_debug(
+        &self,
+        world_transform: &Transform,
+        debug_renderer: &mut DebugRenderer,
+        coloring: ColliderDebugColoring,
+    ) {
         debug_renderer.draw_obb(DebugOBB {
             obb: &world_transform.transform_obb(&self.obb),
             thickness: 0.025,
-            color: Color::new_srgb_hex("#FF00FF"),
+            color: coloring.color(),
+            alpha: 0.75,
+            flags: DebugFlags::XRAY,
+        });
+        debug_renderer.draw_obb(DebugOBB {
+            obb: &world_transform
+                .transform_obb(&self.obb)
+                .bounding_aabb()
+                .as_obb(),
+            thickness: 0.025,
+            color: Color::new_srgb_hex("#55AAB3"),
             alpha: 0.75,
             flags: DebugFlags::XRAY,
         });
@@ -76,5 +92,21 @@ impl Collider for BoxCollider {
         // Safety: dst_ptr should be allocated with the memory layout for this type.
         unsafe { dst_ptr.write(erased_serde::deserialize::<Self>(de)?) };
         Ok(())
+    }
+
+    fn collider_component_ui(&mut self, ui: &mut egui::Ui) {
+        let mut center = self.obb.aabb.center();
+        let original_center = center.clone();
+        position_ui(ui, &mut center);
+
+        let mut half_side_length = self.obb.aabb.half_side_length();
+        let original_half_side_length = half_side_length.clone();
+
+        rotation_ui(ui, &mut self.obb.rotation);
+
+        scale_ui(ui, &mut half_side_length);
+        if center != original_center || half_side_length != original_half_side_length {
+            self.obb.aabb = AABB::new_center_extents(center, half_side_length);
+        }
     }
 }

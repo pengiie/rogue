@@ -46,7 +46,11 @@ impl OBB {
     }
 
     pub fn bounding_aabb(&self) -> AABB {
-        let (min, max) = self.rotated_min_max();
+        let (mut min, mut max) = self.rotated_min_max();
+        for point in Shape::collect_vertices(self) {
+            min = min.zip_map(&point, |x, y| x.min(y));
+            max = max.zip_map(&point, |x, y| x.max(y));
+        }
         return AABB::new_two_point(min, max);
     }
 }
@@ -88,7 +92,7 @@ impl Shape for OBB {
             .transform_vector(&(Vector3::z() * (self.aabb.max.z - self.aabb.min.z)));
         vec![
             // Bottom
-            Face::new(vec![min, min + right, min + right + forward, min + forward]),
+            Face::new(vec![min, min + forward, min + right + forward, min + right]),
             // Top
             Face::new(vec![
                 min + up,
@@ -101,12 +105,12 @@ impl Shape for OBB {
             // Back
             Face::new(vec![
                 min + forward,
-                min + right + forward,
-                min + right + up + forward,
                 min + up + forward,
+                min + right + up + forward,
+                min + right + forward,
             ]),
             // Left
-            Face::new(vec![min, min + forward, min + forward + up, min + up]),
+            Face::new(vec![min, min + up, min + forward + up, min + forward]),
             // Right
             Face::new(vec![
                 min + right,

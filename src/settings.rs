@@ -73,6 +73,7 @@ pub struct Settings {
     pub frame_rate_cap: u32,
 }
 
+// EDIT DEFAULTS HERE
 impl From<&UserSettingsAsset> for Settings {
     fn from(s: &UserSettingsAsset) -> Self {
         Self {
@@ -88,7 +89,7 @@ impl From<&UserSettingsAsset> for Settings {
             ticks_per_seconds: 10,
 
             graphics: GraphicsSettings::default(),
-            frame_rate_cap: 200,
+            frame_rate_cap: 144,
         }
     }
 }

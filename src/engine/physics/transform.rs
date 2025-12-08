@@ -15,7 +15,7 @@ use crate::{consts, engine::entity::ecs_world::ECSWorld};
 
 /// Transform relative to the world-space or parent transform if one exists.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
-#[game_component(name = "Transform")]
+#[game_component(name = "Transform", constructible = false)]
 pub struct Transform {
     pub position: Vector3<f32>,
     pub rotation: UnitQuaternion<f32>,
@@ -80,7 +80,10 @@ impl Transform {
 
     pub fn transform_obb(&self, obb: &OBB) -> OBB {
         return OBB::new(
-            AABB::new_two_point(obb.aabb.min + self.position, obb.aabb.max + self.position),
+            AABB::new_two_point(
+                obb.aabb.min.component_mul(&self.scale) + self.position,
+                obb.aabb.max.component_mul(&self.scale) + self.position,
+            ),
             obb.rotation * self.rotation,
             Vector3::zeros(),
         );

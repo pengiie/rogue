@@ -2861,7 +2861,7 @@ impl VulkanResourceManager {
                             .map(|(binding_idx, binding)| (*binding_idx, binding.clone()))
                             .collect::<Vec<_>>(),
                     };
-                    let frame_descriptor_set_group =&descriptor_set_group.binding_set_maps[self.ctx.curr_cpu_frame_index() as usize];
+                    let frame_descriptor_set_group = &descriptor_set_group.binding_set_maps[self.ctx.curr_cpu_frame_index() as usize];
                     if !frame_descriptor_set_group.uniform_buffers.is_empty() {
                         vulkan_set_data.bindings.push(
                             (
@@ -2882,7 +2882,7 @@ impl VulkanResourceManager {
                         vulkan_set_data.bindings.iter().map(|(_, binding)| binding),
                     );
 
-frame_descriptor_set_group                    
+                    frame_descriptor_set_group                    
                         .descriptor_sets
                         .get(&vulkan_set_data)
                         .expect("Shader set should have been written and existing at this point.")

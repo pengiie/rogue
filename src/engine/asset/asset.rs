@@ -703,6 +703,15 @@ impl GameAssetPath {
         }
     }
 
+    pub fn as_file_asset_path(&self, project_dir: &Path) -> AssetPath {
+        let rel = self.as_relative_path();
+        let full_path = project_dir.join("assets").join(rel);
+        AssetPath {
+            asset_path: Some(self.clone()),
+            path: full_path,
+        }
+    }
+
     pub fn as_relative_path(&self) -> PathBuf {
         let mut strs = self.asset_path.split("::");
         let mut last_str = None;
@@ -731,7 +740,8 @@ pub struct AssetPath {
     // In the form of (binary|project)::(dirs::)*file_name::extension
     // TODO: Remove and just use the a relative path since it represents the same thing really.
     pub asset_path: Option<GameAssetPath>,
-    // Change maybe so we can support a giant asset file.
+
+    /// Full absolute asset path.
     #[serde(skip)]
     path: PathBuf,
 }

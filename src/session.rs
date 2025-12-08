@@ -239,58 +239,6 @@ impl EditorSession {
     ) {
         let session: &mut EditorSession = &mut session;
 
-        // Load unloaded renderable models from disk.
-        let mut completed = HashSet::new();
-        for (entity, asset_handle) in &session.loading_renderables {
-            match assets.get_asset_status(asset_handle) {
-                crate::engine::asset::asset::AssetStatus::Loaded => {}
-                crate::engine::asset::asset::AssetStatus::NotFound => {
-                    log::error!("Voxel model not found trying to load {:?}", asset_handle)
-                }
-                crate::engine::asset::asset::AssetStatus::Error(error) => log::error!(
-                    "Voxel model had an error trying to load {:?}: {:?}",
-                    asset_handle,
-                    error
-                ),
-                _ => continue,
-            }
-            completed.insert(*entity);
-            let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(*entity) else {
-                continue;
-            };
-
-            let model_asset_path = asset_handle.asset_path();
-            let model = *assets
-                .take_asset::<VoxelModelAnyAsset>(asset_handle)
-                .unwrap();
-            let model_id = voxel_world.registry.register_renderable_voxel_model_any(
-                format!("asset_{:?}", model_asset_path.asset_path.as_ref().unwrap()),
-                model,
-            );
-            voxel_world
-                .registry
-                .set_voxel_model_asset_path(model_id, Some(asset_handle.asset_path().clone()));
-            log::info!(
-                "Settings asset path voxel for {:?} {:?}",
-                asset_handle.asset_path(),
-                model_id
-            );
-            voxel_world.to_update_normals.insert(model_id);
-            renderable.set_model(
-                Some(
-                    model_asset_path
-                        .asset_path
-                        .as_ref()
-                        .expect("Loading asset handle should have associated game asset path.")
-                        .clone(),
-                ),
-                model_id,
-            );
-        }
-        for e in completed {
-            session.loading_renderables.remove(&e);
-        }
-
         if session.should_start_game {
             // Start the game.
             session.should_start_game = false;
@@ -317,8 +265,9 @@ impl EditorSession {
                 .unwrap();
             let editor_camera = editor_camera.clone();
             let editor_transform = editor_transform.clone();
-            // Reset the ECS world to the old state with just game entities and the editor camera.
+            // Reset the ECS world to the old state with just game entities.
             *ecs_world = session.editor_ecs_world.take().unwrap();
+            // Respawn editor camera.
             editor.editor_camera_entity = Some(ecs_world.spawn((editor_camera, editor_transform)));
             main_camera.set_camera(
                 editor
@@ -326,6 +275,17 @@ impl EditorSession {
                     .expect("Editor camera should exist"),
                 "Editor camera",
             );
+
+            if let Some(selected_entity) = editor.selected_entity {
+                if !ecs_world.contains(selected_entity) {
+                    log::info!(
+                        "Deselecting entity {:?} as it no longer exists",
+                        selected_entity
+                    );
+                    editor.selected_entity = None;
+                }
+            }
+            editor.hovered_entity = None;
             log::info!("Stopping game");
             // We must respawn the editor camera.
         }

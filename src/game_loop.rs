@@ -16,6 +16,7 @@ use crate::{
         voxel::{voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
+    game::game_scripts,
     session::{EditorSession, SessionState},
 };
 
@@ -76,32 +77,32 @@ pub fn game_loop(app: &App) {
         app.run_system(Editor::update_camera_animations);
     }
 
+    // ----- GAME SCRIPTS ------
     let session_state = app.get_resource::<EditorSession>().session_state;
-    match session_state {
-        SessionState::Editor => {}
-        SessionState::Game => {
-            // -------- SCRIPTS ---------
-
-            app.run_system(Scripts::update_loaded_scripts);
-            app.run_system(Scripts::run_on_update);
-            app.run_system(Scripts::update_script_events);
-
-            let physics_updates = app
-                .get_resource_mut::<PhysicsWorld>()
-                .physics_update_count();
-            for _ in 0..physics_updates {
-                // -------- PHYSICS ----------
-                app.run_system(Scripts::run_on_physics_update);
-                app.run_system(Scripts::update_script_events);
-                app.run_system(PhysicsWorld::do_physics_update);
-            }
-        }
-        SessionState::GamePaused => todo!(),
+    if session_state == SessionState::Game {
+        game_scripts::on_game_update(app);
     }
 
-    app.run_system(ECSWorld::run_queued_despawns);
+    // -------- PHYSICS ----------
+    // Only do dynamics if we are in game running.
+    app.get_resource_mut::<PhysicsWorld>().do_dynamics = session_state == SessionState::Game;
+    let physics_updates = app
+        .get_resource_mut::<PhysicsWorld>()
+        .physics_update_count();
+    for _ in 0..physics_updates {
+        app.run_system(PhysicsWorld::start_time_step);
+        game_scripts::on_game_physics_update(app);
+        //app.run_system(Scripts::run_on_physics_update);
+        //app.run_system(Scripts::update_script_events);
+        app.run_system(PhysicsWorld::do_physics_update);
+        app.run_system(PhysicsWorld::end_time_step);
+    }
+
+    // Handle ECSWorld events.
+    app.run_system(ECSWorld::handle_despawn_events);
 
     // ------- VOXEL WORLD -------
+    app.run_system(VoxelWorld::handle_renderable_load_events);
     app.run_system(VoxelWorld::update_post_physics);
 
     // ------- GPU RENDERING ---------

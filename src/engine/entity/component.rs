@@ -6,12 +6,21 @@ use uuid::Uuid;
 use crate::{
     common::dyn_vec::TypeInfo,
     engine::{
-        entity::{archetype::ComponentArchetype, query::QueryItemRef},
+        entity::{archetype::ComponentArchetype, ecs_world::Entity, query::QueryItemRef},
         physics::{collider_registry::ColliderRegistry, physics_world::PhysicsWorld},
         resource::ResourceBank,
         voxel::{voxel_registry::VoxelModelRegistry, voxel_world::VoxelWorld},
     },
 };
+
+pub struct GameComponentType {
+    pub type_info: TypeInfo,
+    pub component_name: String,
+    pub is_constructible: bool,
+    pub construct_fn: GameComponentConstructFnPtr,
+    pub deserialize_fn: GameComponentDeserializeFnPtr,
+    pub methods_vtable_ptr: GameComponentMethodsVtablePtr,
+}
 
 pub struct GameComponentCloneContext<'a> {
     pub voxel_world: &'a mut VoxelWorld,
@@ -21,11 +30,14 @@ pub struct GameComponentCloneContext<'a> {
 pub struct GameComponentSerializeContext<'a> {
     pub voxel_registry: &'a VoxelModelRegistry,
     pub collider_registry: &'a ColliderRegistry,
+    pub entity_uuid_map: &'a HashMap<Entity, uuid::Uuid>,
 }
 
 pub struct GameComponentDeserializeContext<'a> {
     pub voxel_registry: &'a mut VoxelModelRegistry,
     pub collider_registry: &'a mut ColliderRegistry,
+    /// Used for `EntityParent` in deserializing. By default is `uuid::Uuid::nil()`.
+    pub entity_parent: uuid::Uuid,
 }
 
 pub trait GameComponentMethods {
@@ -58,9 +70,28 @@ pub type GameComponentDeserializeFnPtr = unsafe fn(
     /*dst_ptr: */ *mut u8,
 ) -> erased_serde::Result<()>;
 
+pub type GameComponentConstructFnPtr = unsafe fn(/*dst_ptr: */ *mut u8);
+
+pub type GameComponentMethodsVtablePtr = *const ();
+
 /// Implements serialization and cloning.
 pub trait GameComponent {
     const NAME: &str;
+
+    fn is_constructible() -> bool {
+        false
+    }
+
+    fn construct_component(dst_ptr: *mut u8) {
+        if Self::is_constructible() {
+            panic!("Game component {} marked as constructible but GameComponent::construct was not implemented.", std::any::type_name::<Self>());
+        } else {
+            panic!(
+                "Call GameComponent::construct on a non-constructible game component {}.",
+                std::any::type_name::<Self>()
+            );
+        }
+    }
 
     fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8);
 

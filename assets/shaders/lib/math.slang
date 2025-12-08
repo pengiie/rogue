@@ -217,3 +217,8 @@ public uint3 decode(uint val) {
 public uint morton_encode(uint3 val) {
   return morton::encode(val);
 }
+
+public float smoothstep_saturate(float t) {
+  t = saturate(t);
+  return t * t * (3.0 - 2.0 * t);
+}

@@ -66,7 +66,7 @@ impl<T> std::fmt::Debug for FreeListHandle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FreeListHandle")
             .field("index", &self.index())
-            .field("generation", &self.index())
+            .field("generation", &self.generation())
             .field("type", &std::any::type_name::<T>())
             .finish()
     }
@@ -151,13 +151,11 @@ impl<T> FreeList<T> {
     }
 
     pub fn push(&mut self, val: T) -> FreeListHandle<T> {
-        if let Some(next_free) = self.free.pop() {
-            // Safety, we set the generation on removal after the drop.
-            let generation =
-                self.data[next_free].generation & !FreeListNode::<T>::NULL_GENERATION_BIT;
-            self.data[next_free].data =
-                std::mem::MaybeUninit::new(std::mem::ManuallyDrop::new(val));
-            return FreeListHandle::new(next_free as u32, generation);
+        if let Some(next_free_idx) = self.free.pop() {
+            let next_free = &mut self.data[next_free_idx];
+            next_free.generation &= !FreeListNode::<T>::NULL_GENERATION_BIT;
+            next_free.data = std::mem::MaybeUninit::new(std::mem::ManuallyDrop::new(val));
+            return FreeListHandle::new(next_free_idx as u32, next_free.generation);
         }
 
         self.data.push(FreeListNode {
@@ -183,7 +181,7 @@ impl<T> FreeList<T> {
         assert!(!node.is_null());
         // Safety: We assert the node is not null.
         let res = unsafe { std::mem::ManuallyDrop::take(&mut node.data.assume_init_mut()) };
-        node.generation = (node.generation + 1) & FreeListNode::<T>::NULL_GENERATION_BIT;
+        node.generation = (node.generation + 1) | FreeListNode::<T>::NULL_GENERATION_BIT;
         return res;
     }
 
@@ -191,8 +189,16 @@ impl<T> FreeList<T> {
         return self.data[handle.index as usize].is_null();
     }
 
+    pub fn has_value(&self, handle: FreeListHandle<T>) -> bool {
+        return self
+            .data
+            .get(handle.index as usize)
+            .map(|n| !n.is_null())
+            .unwrap_or(false);
+    }
+
     pub fn get(&self, handle: FreeListHandle<T>) -> Option<&T> {
-        if self.is_free(handle) {
+        if !self.has_value(handle) {
             return None;
         }
         let r = unsafe { self.data[handle.index as usize].data.assume_init_ref() };
@@ -200,10 +206,10 @@ impl<T> FreeList<T> {
     }
 
     pub fn get_mut(&mut self, handle: FreeListHandle<T>) -> Option<&mut T> {
-        assert!((handle.index as usize) < self.data.len());
-        if self.is_free(handle) {
+        if !self.has_value(handle) {
             return None;
         }
+
         let mut r = unsafe { self.data[handle.index as usize].data.assume_init_mut() };
         return Some(r.deref_mut());
     }

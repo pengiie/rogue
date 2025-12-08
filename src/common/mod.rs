@@ -9,5 +9,6 @@ pub mod id;
 pub mod morton;
 pub mod oneshot;
 pub mod ring_queue;
+pub mod serde_util;
 pub mod util;
 pub mod vtable;

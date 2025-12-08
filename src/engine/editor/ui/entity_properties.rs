@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::{path::PathBuf, str::FromStr};
 
 use nalgebra::{UnitQuaternion, Vector3};
 
 use crate::common::geometry::aabb::AABB;
+use crate::consts;
 use crate::engine::editor::ui::dialog::new_voxel_model_dialog::EditorNewVoxelModelDialog;
 use crate::engine::event::Events;
 use crate::engine::physics::collider_component::EntityColliders;
@@ -43,7 +45,7 @@ use crate::{
     session::EditorSession,
 };
 
-fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
+pub fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
     ui.horizontal(|ui| {
         ui.label("Position:");
         ui.label("X");
@@ -70,7 +72,7 @@ fn position_ui(ui: &mut egui::Ui, position: &mut Vector3<f32>) {
     });
 }
 
-fn rotation_ui(ui: &mut egui::Ui, rotation: &mut UnitQuaternion<f32>) {
+pub fn rotation_ui(ui: &mut egui::Ui, rotation: &mut UnitQuaternion<f32>) {
     ui.horizontal(|ui| {
         ui.label("Rotation:");
         ui.label("X");
@@ -116,7 +118,7 @@ fn rotation_ui(ui: &mut egui::Ui, rotation: &mut UnitQuaternion<f32>) {
     });
 }
 
-fn scale_ui(ui: &mut egui::Ui, scale: &mut Vector3<f32>) {
+pub fn scale_ui(ui: &mut egui::Ui, scale: &mut Vector3<f32>) {
     ui.horizontal(|ui| {
         ui.label("Scale:");
         ui.label("X");
@@ -288,25 +290,30 @@ pub fn entity_properties_pane(
         ui.label(egui::RichText::new("Entity properties").size(20.0));
         if let Some(selected_entity) = &editor.selected_entity {
             ui.menu_button("Add component", |ui| {
-                if ui.button("Camera").clicked() {
-                    ecs_world.insert_one(*selected_entity, Camera::new(Camera::FOV_90));
-                    ui.close_menu();
+                let mut selected_entity_components = HashSet::new();
+                for component_type_info in
+                    &ecs_world.entities.get(*selected_entity).unwrap().components
+                {
+                    selected_entity_components.insert(component_type_info.type_id());
                 }
-                if ui.button("Renderable").clicked() {
-                    ecs_world.insert_one(*selected_entity, RenderableVoxelEntity::new_null());
-                    ui.close_menu();
-                }
-                if ui.button("Script").clicked() {
-                    ecs_world.insert_one(*selected_entity, ScriptableEntity::new());
-                    ui.close_menu();
-                }
-                if ui.button("Rigidbody").clicked() {
-                    ecs_world.insert_one(*selected_entity, RigidBody::default());
-                    ui.close_menu();
-                }
-                if ui.button("Colliders").clicked() {
-                    ecs_world.insert_one(*selected_entity, EntityColliders::new());
-                    ui.close_menu();
+
+                for component_type_id in ecs_world.get_constructible_game_components() {
+                    let game_component = ecs_world.game_components.get(&component_type_id).unwrap();
+                    let entity_has_component =
+                        selected_entity_components.contains(&component_type_id);
+                    if ui
+                        .add_enabled(
+                            !entity_has_component,
+                            egui::Button::new(&game_component.component_name),
+                        )
+                        .clicked()
+                    {
+                        ecs_world.construct_and_insert_game_component(
+                            *selected_entity,
+                            component_type_id,
+                        );
+                        ui.close_menu();
+                    }
                 }
             });
         }
@@ -325,8 +332,61 @@ pub fn entity_properties_pane(
 
             ui.style_mut().spacing.item_spacing.y = 8.0;
 
+            // General info for every game entity.
             game_entity_info(ui, ui_state, ecs_world, selected_entity);
             transform_component(ui, ui_state, ecs_world, selected_entity);
+
+            // All game component editor UIs.
+            let game_entity_components = ecs_world
+                .entities
+                .get(*selected_entity)
+                .unwrap()
+                .components
+                .iter()
+                .map(|c| c.type_id())
+                .collect::<Vec<_>>();
+
+            let to_avoid_components = HashSet::from([
+                std::any::TypeId::of::<Transform>(),
+                std::any::TypeId::of::<GameEntity>(),
+                std::any::TypeId::of::<EntityParent>(),
+                std::any::TypeId::of::<EntityChildren>(),
+            ]);
+
+            for game_component_type_id in game_entity_components {
+                if to_avoid_components.contains(&game_component_type_id) {
+                    continue;
+                }
+                let Some(game_component) = ecs_world.game_components.get(&game_component_type_id)
+                else {
+                    continue;
+                };
+
+                let last_spacing = ui.style().spacing.item_spacing.y;
+                ui.style_mut().spacing.item_spacing.y = 2.0;
+
+                let mut removed_component = false;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&game_component.component_name).size(16.0));
+                    removed_component = ui.button("Remove").clicked();
+                });
+                if removed_component {
+                    ecs_world.remove_one_raw(*selected_entity, &game_component_type_id);
+                    continue;
+                }
+
+                ui.style_mut().spacing.item_spacing.y = last_spacing;
+                egui::Frame::new()
+                    .stroke(egui::Stroke::new(
+                        2.0,
+                        ui.style().visuals.window_stroke.color.gamma_multiply(0.3),
+                    ))
+                    .corner_radius(4.0)
+                    .inner_margin(6.0)
+                    .show(ui, |ui| {
+                        ui.style_mut().spacing.item_spacing.y = 4.0;
+                    });
+            }
             renderable_component(
                 ui,
                 ui_state,
@@ -403,6 +463,10 @@ pub fn entity_properties_pane(
                         ui.label("Restitution");
                         ui.add(egui::DragValue::new(&mut rigid_body.restitution).range(0.0..=50.0));
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Friction");
+                        ui.add(egui::DragValue::new(&mut rigid_body.friction).range(0.0..=50.0));
+                    });
                     ui.label(format!(
                         "Velocity  X: {}, Y: {}, Z: {}",
                         rigid_body.velocity.x, rigid_body.velocity.y, rigid_body.velocity.z
@@ -474,12 +538,12 @@ fn game_entity_info(
             ui.label("Parent: ");
 
             let parent = ecs_world.get::<&EntityParent>(*selected_entity).ok();
-            let parent_entity = parent.as_ref().map(|parent| parent.parent);
+            let parent_entity = parent.as_ref().map(|parent| parent.parent());
             let parent_name = parent.as_ref().map_or_else(
                 || "None".to_owned(),
                 |parent| {
                     let parent_game_entity = ecs_world
-                        .get::<&GameEntity>(parent.parent)
+                        .get::<&GameEntity>(parent.parent())
                         .expect("Parent should be a GameEntity");
                     parent_game_entity.name.clone()
                 },
@@ -496,12 +560,7 @@ fn game_entity_info(
                     .add_enabled(parent_entity.is_some(), egui::Button::new("Remove"))
                     .clicked()
                 {
-                    let mut parent_children = ecs_world
-                        .get::<&mut EntityChildren>(parent_entity.unwrap())
-                        .expect("Parent should have a children component");
-                    parent_children.children.remove(selected_entity);
-                    drop(parent_children);
-                    ecs_world.remove_one::<EntityParent>(*selected_entity);
+                    ecs_world.set_parent(*selected_entity, None);
                     ui.close_menu();
                 }
             });
@@ -817,6 +876,15 @@ fn renderable_component(
                         ui.label(text);
                     }
                 });
+
+                let model_dyn = voxel_world.registry.get_dyn_model(model_id);
+                let length = model_dyn
+                    .length()
+                    .map(|x| x as f32 * consts::voxel::VOXEL_METER_LENGTH);
+                ui.label(format!(
+                    "Bounds: {:.2}mX{:.2}mX{:.2}m",
+                    length.x, length.y, length.z
+                ));
             }
         });
     }
@@ -1021,9 +1089,14 @@ fn colliders_component(
                             .collider_names
                             .get(&collider_id.collider_type)
                             .map_or("UnregisteredCollider (uh oh)", |s| s);
+                        let selected_text = if ui_state.selected_collider == Some(*collider_id) {
+                            " (Selected)"
+                        } else {
+                            ""
+                        };
                         let mut text = egui::RichText::new(format!(
-                            "{} collider #{}",
-                            collider_name, collider_id.index
+                            "{} collider #{}{}",
+                            collider_name, collider_id.index, selected_text
                         ));
                         if let Some(selected_collider_id) = &ui_state.selected_collider {
                             if collider_id == selected_collider_id {
@@ -1063,7 +1136,7 @@ fn colliders_component(
                     ));
                     physics_world
                         .colliders
-                        .get_collider_dyn(collider_id)
+                        .get_collider_dyn_mut(collider_id)
                         .collider_component_ui(ui);
                 }
                 None => {

@@ -6,7 +6,7 @@ use crate::engine::{
     editor::{editor::Editor, events::EventEditorZoom},
     entity::{
         component::GameComponentCloneContext,
-        ecs_world::{ECSWorld, Entity},
+        ecs_world::{ECSWorld, Entity, EventEntityDespawn},
         EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
     },
     event::Events,
@@ -187,7 +187,7 @@ fn render_entity_label(
     if label.clicked() {
         // Check if we are select a new parent for the currently selected entity.
         if let Some(new_child) = ui_state.selecting_new_parent.take() {
-            ecs_world.set_parent(new_child, entity_id);
+            ecs_world.set_parent(new_child, Some(entity_id));
         } else {
             editor.selected_entity = Some(entity_id);
         }
@@ -209,7 +209,8 @@ fn render_entity_label(
             ui.close_menu();
         }
         if ui.button("Delete").clicked() {
-            ecs_world.despawn(entity_id);
+            // Ensure we do it as an event since we are iterating over the e
+            events.push(EventEntityDespawn(entity_id));
             editor.selected_entity = None;
             ui.close_menu();
         }

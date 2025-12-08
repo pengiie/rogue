@@ -151,8 +151,8 @@ impl VoxelWorldGpu {
         (4 * 4) + // float3
         /*aabb_max*/
         (4 * 4) + // float3
-        /*rotation*/ (4 * 11) +// matrix3x3
-        /*model_info_ptr*/ 4 // uint
+        /*rotation*/ (4 * 4 * 3) +// matrix3x3
+        /*model_info_ptr*/ (1 * 4) // uint
     }
 
     pub fn update_gpu_objects(
@@ -326,9 +326,7 @@ impl VoxelWorldGpu {
             voxel_entity_data.extend_from_slice(&r.m31.to_le_bytes());
             voxel_entity_data.extend_from_slice(&r.m32.to_le_bytes());
             voxel_entity_data.extend_from_slice(&r.m33.to_le_bytes());
-            voxel_entity_data.extend_from_slice(&[0u8; 4]);
             voxel_entity_data.extend_from_slice(&model_ptr.to_le_bytes());
-            voxel_entity_data.extend_from_slice(&[0u8; 12]);
         }
         if !voxel_entity_data.is_empty() {
             device.write_buffer_slice(

@@ -527,6 +527,12 @@ impl ShaderCompiler {
                                     size: descriptor_array_size,
                                 }
                             } else {
+                                // For debug
+                                //let inner_layout = ty_layout.resource_result_type();
+                                //log::debug!(
+                                //    "Showing struct offsets for array struct {}",
+                                //    inner_layout.name()
+                                //);
                                 ShaderBindingType::StorageBuffer
                             }
                         }

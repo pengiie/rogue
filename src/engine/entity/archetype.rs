@@ -49,8 +49,14 @@ impl ComponentArchetype {
     }
 
     pub fn get_entity(&self, index: usize) -> Option<Entity> {
-        let entity = self.global_indices[index];
-        return (!entity.is_null()).then_some(entity);
+        let Some(entity) = self.global_indices.get(index) else {
+            return None;
+        };
+        return (!entity.is_null()).then_some(*entity);
+    }
+
+    pub fn is_entity_null(&self, index: usize) -> bool {
+        self.global_indices[index].is_null()
     }
 
     fn get_type_index(&self, type_id: &TypeId) -> usize {
@@ -80,10 +86,18 @@ impl ComponentArchetype {
     }
 
     pub fn get<T: 'static>(&self, type_info: &TypeInfo, index: usize) -> &T {
+        assert!(
+            self.get_entity(index).is_some(),
+            "Can't get component of non-existent entity"
+        );
         self.get_type_data(type_info).get(index)
     }
 
     pub unsafe fn get_raw(&self, type_info: &TypeInfo, index: usize) -> &[u8] {
+        assert!(
+            self.get_entity(index).is_some(),
+            "Can't get component of non-existent entity"
+        );
         self.get_type_data(type_info).get_bytes(index)
     }
 
@@ -93,11 +107,40 @@ impl ComponentArchetype {
         type_info: &TypeInfo,
         index: usize,
     ) -> NonNull<T> {
+        assert!(
+            self.get_entity(index).is_some(),
+            "Can't get component of non-existent entity"
+        );
         return self.get_type_data(type_info).get_mut_unchecked(index);
     }
 
     pub fn get_mut<T: 'static>(&mut self, type_info: &TypeInfo, index: usize) -> &mut T {
+        assert!(
+            self.get_entity(index).is_some(),
+            "Can't get component of non-existent entity"
+        );
         self.get_type_data_mut(type_info).get_mut(index)
+    }
+
+    pub unsafe fn replace_component_raw(
+        &mut self,
+        index: usize,
+        type_info: &TypeInfo,
+        src_data: *mut u8,
+    ) {
+        assert!(
+            self.get_entity(index).is_some(),
+            "Can't replace component of non-existent entity"
+        );
+        // Borrow mutably since we are modifying the data vector so nothing else can borrow.
+        let type_id = type_info.type_id;
+        let i = self.get_type_index(&type_id);
+        // Safety: We mutably borrow above and choose the right type index.
+        let dst_data = self.data[i].get_mut_bytes(index).as_mut_ptr();
+        type_info.drop(dst_data);
+        // Safety: We have dropped the old data and both src_data and dst_data are valid ptrs to
+        // type of `type_info`.
+        dst_data.copy_from_nonoverlapping(src_data, type_info.size());
     }
 
     // This is unsafe if the type ordering of `src_data` doesn't match the internal archetype type
@@ -159,7 +202,7 @@ impl ComponentArchetype {
     pub fn remove(&mut self, index: usize) {
         assert_ne!(self.global_indices[index as usize], Entity::DANGLING);
         for (i, data) in self.data.iter_mut().enumerate() {
-            let type_info = self.types[i];
+            let type_info = self.types[i].clone();
             let ptr = data.get_mut_bytes(index).as_mut_ptr();
             // Safety: We overwrite the DynVec drop function so this is not dropped twice, and
             // track the status of this index via `global_indices`.
