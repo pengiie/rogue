@@ -28,13 +28,6 @@ void main(uint3 id: SV_DispatchThreadID) {
   var depth = u_frame.world_info.camera.far_plane;
   var out_color = sky_color;
 
-  var light = sky_color;
-  let ray_terrain = voxel::Terrain.trace(ray);
-  if (ray_terrain.did_hit) {
-    depth = ray_terrain.depth_t;
-    out_color = ray_terrain.color;
-  }
-
   // If the hit entity is closer than the hit terrain, use the
   // entities hit.
   let ray_entity = voxel::EntityData.trace(ray);
@@ -48,6 +41,12 @@ void main(uint3 id: SV_DispatchThreadID) {
       depth = ray_entity.depth_t;
       out_color = color;
     }
+  }
+
+  let ray_terrain = voxel::Terrain.trace(ray);
+  if (ray_terrain.did_hit) {
+    depth = ray_terrain.depth_t;
+    out_color = ray_terrain.color;
   }
 
   let normalized_depth = depth / u_frame.world_info.camera.far_plane;

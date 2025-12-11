@@ -24,6 +24,7 @@ pub struct DebugRenderer {
     debug_planes: Vec<DebugPlane>,
 }
 
+#[derive(Clone)]
 pub struct DebugLine {
     pub start: Vector3<f32>,
     pub end: Vector3<f32>,
@@ -33,6 +34,7 @@ pub struct DebugLine {
     pub flags: DebugFlags,
 }
 
+#[derive(Clone)]
 pub struct DebugRing {
     pub center: Vector3<f32>,
     pub normal: Vector3<f32>,
@@ -43,6 +45,7 @@ pub struct DebugRing {
     pub flags: DebugFlags,
 }
 
+#[derive(Clone)]
 pub struct DebugCapsule {
     pub center: Vector3<f32>,
     /// Identity orientation is oriented with height along on the Y axis.
@@ -54,6 +57,7 @@ pub struct DebugCapsule {
     pub flags: DebugFlags,
 }
 
+#[derive(Clone)]
 pub struct DebugPlane {
     pub center: Vector3<f32>,
     pub normal: Vector3<f32>,

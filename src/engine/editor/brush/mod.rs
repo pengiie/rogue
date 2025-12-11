@@ -147,6 +147,7 @@ impl EditorWorldEditing {
                         .get_dyn_model(renderable.voxel_model_id().unwrap())
                         .length();
                     let model_obb = model_world_transform.as_voxel_model_obb(side_length);
+                    let (min, _) = model_obb.rotated_min_max();
                     let forward = model_world_transform.forward()
                         * consts::voxel::VOXEL_METER_LENGTH
                         * model_world_transform.scale.z;
@@ -157,7 +158,7 @@ impl EditorWorldEditing {
                         * consts::voxel::VOXEL_METER_LENGTH
                         * model_world_transform.scale.y;
 
-                    let center = model_obb.aabb.min
+                    let center = min
                         + forward * (local_voxel_pos.z as f32 + 0.5)
                         + right * (local_voxel_pos.x as f32 + 0.5)
                         + up * (local_voxel_pos.y as f32 + 0.5);

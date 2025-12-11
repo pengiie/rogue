@@ -361,17 +361,27 @@ pub fn entity_properties_pane(
                 else {
                     continue;
                 };
+                let game_component_name = game_component.component_name.clone();
 
                 let last_spacing = ui.style().spacing.item_spacing.y;
                 ui.style_mut().spacing.item_spacing.y = 2.0;
 
                 let mut removed_component = false;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&game_component.component_name).size(16.0));
+                    ui.label(egui::RichText::new(&game_component_name).size(16.0));
                     removed_component = ui.button("Remove").clicked();
                 });
                 if removed_component {
-                    ecs_world.remove_one_raw(*selected_entity, &game_component_type_id);
+                    // Safety: We dont use the returned ptr.
+                    unsafe {
+                        ecs_world.try_remove_one_raw(*selected_entity, &game_component_type_id)
+                    }
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Component {} should exist if it is removable via UI.",
+                            game_component_name
+                        )
+                    });
                     continue;
                 }
 
@@ -444,7 +454,11 @@ pub fn entity_properties_pane(
                         egui::ComboBox::from_id_salt("Rigid body type")
                             .selected_text(format!("{:?}", rigid_body.rigid_body_type))
                             .show_ui(ui, |ui| {
-                                for val in [RigidBodyType::Static, RigidBodyType::Dynamic] {
+                                for val in [
+                                    RigidBodyType::Static,
+                                    RigidBodyType::Dynamic,
+                                    RigidBodyType::Kinematic,
+                                ] {
                                     ui.selectable_value(
                                         &mut rigid_body.rigid_body_type,
                                         val,
@@ -466,6 +480,12 @@ pub fn entity_properties_pane(
                     ui.horizontal(|ui| {
                         ui.label("Friction");
                         ui.add(egui::DragValue::new(&mut rigid_body.friction).range(0.0..=50.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Locked rotation");
+                        ui.checkbox(&mut rigid_body.locked_rotational_axes.x, "X");
+                        ui.checkbox(&mut rigid_body.locked_rotational_axes.y, "Y");
+                        ui.checkbox(&mut rigid_body.locked_rotational_axes.z, "Z");
                     });
                     ui.label(format!(
                         "Velocity  X: {}, Y: {}, Z: {}",

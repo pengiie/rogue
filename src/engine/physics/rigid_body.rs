@@ -26,6 +26,7 @@ pub enum RigidBodyType {
     Static,
     // Can be affected by forces like gravity and collisions.
     Dynamic,
+    Kinematic,
 }
 
 impl Default for RigidBodyType {
@@ -44,6 +45,7 @@ pub struct RigidBodyCreateInfo {
     pub restitution: f32,
     // Friction coefficient 0.0-1.0.
     pub friction: f32,
+    pub locked_rotational_axes: Vector3<bool>,
 }
 
 impl Default for RigidBodyCreateInfo {
@@ -53,6 +55,7 @@ impl Default for RigidBodyCreateInfo {
             mass: 1.0,
             restitution: 0.5,
             friction: 0.7,
+            locked_rotational_axes: Vector3::new(false, false, false),
         }
     }
 }
@@ -82,12 +85,14 @@ pub struct RigidBody {
     pub force: Vector3<f32>,
     pub impulse_force: Vector3<f32>,
 
+    pub locked_rotational_axes: Vector3<bool>,
     pub rigid_body_type: RigidBodyType,
     mass: f32,
 
     inv_mass: f32,
     // Massless inverse interia tensor;
     inv_inertia: Matrix3<f32>,
+    inv_inertia_world: Matrix3<f32>,
 
     // Where 1 is fully elastic and 0 is non-elastic.
     pub restitution: f32,
@@ -109,10 +114,12 @@ impl RigidBody {
             impulse_force: Vector3::zeros(),
 
             rigid_body_type: create_info.rigid_body_type,
+            locked_rotational_axes: create_info.locked_rotational_axes,
 
             mass: create_info.mass,
             inv_mass: 1.0 / create_info.mass,
-            inv_inertia: Matrix3::identity() * (1.0 / ((1.0 / 6.0) * 4.0)),
+            inv_inertia: Matrix3::identity() * (1.0 / ((1.0 / 6.0) * (2.0 + 2.0f32).powi(2))),
+            inv_inertia_world: Matrix3::identity(),
             restitution: create_info.restitution,
             friction: create_info.friction,
         }
@@ -128,6 +135,7 @@ impl RigidBody {
             mass: self.mass,
             restitution: self.restitution,
             friction: self.friction,
+            locked_rotational_axes: self.locked_rotational_axes,
         }
     }
 
@@ -169,18 +177,19 @@ impl RigidBody {
         self.inv_mass
     }
 
+    /// Return the world-space inertia tensor.
     pub fn inv_inertia(&self) -> Matrix3<f32> {
         if self.rigid_body_type == RigidBodyType::Static {
             return Matrix3::zeros();
         }
         // TODO: Calculate based on colliders.
-        return self.inv_inertia;
+        return self.inv_inertia_world;
     }
 
     pub fn apply_impulse_at_point(
         &mut self,
         impulse_force: Vector3<f32>,
-        local_point: Vector3<f32>,
+        world_space_offset: Vector3<f32>,
     ) {
         if self.rigid_body_type == RigidBodyType::Static {
             return;
@@ -188,7 +197,19 @@ impl RigidBody {
 
         // impulse = mass * delta_velocity
         self.velocity += impulse_force * self.inv_mass();
-        self.angular_velocity += self.inv_inertia() * local_point.cross(&impulse_force);
+        self.set_angular_velocity(
+            self.angular_velocity + self.inv_inertia() * world_space_offset.cross(&impulse_force),
+        );
+    }
+
+    pub fn set_angular_velocity(&mut self, angular_velocity: Vector3<f32>) {
+        if self.rigid_body_type == RigidBodyType::Static {
+            return;
+        }
+        self.angular_velocity = angular_velocity.zip_map(
+            &self.locked_rotational_axes,
+            |v, locked| if locked { 0.0 } else { v },
+        );
     }
 
     pub fn apply_force(&mut self, force_type: ForceType, force: Vector3<f32>) {
@@ -200,12 +221,24 @@ impl RigidBody {
                 self.force += force;
             }
             ForceType::VelocityChange => {
-                self.velocity += force;
+                self.impulse_force += force * self.inv_mass;
             }
         }
     }
 
-    pub fn update(&mut self, timestep: Duration, transform: &mut Transform) {
+    pub fn integrate_velocities(&mut self, timestep: Duration, transform: &mut Transform) {
+        transform.position += self.velocity * timestep.as_secs_f32();
+
+        // Apply angular velocity.
+        let delta_angular_velocity = self.angular_velocity * timestep.as_secs_f32();
+        if delta_angular_velocity.norm_squared() != 0.0 {
+            // Order of quaternion multiplication matters here.
+            transform.rotation =
+                UnitQuaternion::from_scaled_axis(delta_angular_velocity) * transform.rotation;
+        }
+    }
+
+    pub fn integrate_forces(&mut self, timestep: Duration, transform: &mut Transform) {
         let forces = self.impulse_force + self.force * timestep.as_secs_f32();
         self.impulse_force = Vector3::zeros();
         self.force = Vector3::zeros();
@@ -220,13 +253,10 @@ impl RigidBody {
                 consts::physics::VELOCITY_MAX,
             )
         });
-        transform.position += self.velocity * timestep.as_secs_f32();
-        let delta_angular_velocity = self.angular_velocity * timestep.as_secs_f32();
-        if delta_angular_velocity.norm_squared() != 0.0 {
-            transform.rotation *= UnitQuaternion::from_axis_angle(
-                &nalgebra::Unit::new_normalize(delta_angular_velocity),
-                delta_angular_velocity.norm(),
-            );
-        }
+
+        // Update the world inertia tensor.
+        let rot_matrix = transform.rotation.to_rotation_matrix();
+        //self.inv_inertia_world = rot_matrix * self.inv_inertia * rot_matrix.transpose();
+        self.inv_inertia_world = rot_matrix * self.inv_inertia * rot_matrix.matrix().transpose();
     }
 }

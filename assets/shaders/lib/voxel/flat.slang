@@ -50,8 +50,7 @@ public struct Flat {
           var color = pt_material;
           var normal = float3(0.0);
           if (let n = this.load_normal(voxel_index)) {
-            let rot_normal = mul(rotation, n);
-            normal = rot_normal;
+            normal = n;
           }
 
           let t_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;

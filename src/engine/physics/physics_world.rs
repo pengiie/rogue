@@ -15,7 +15,7 @@ use super::{
 use crate::{
     common::{
         color::Color,
-        geometry::{aabb::AABB, shape::Shape},
+        geometry::{aabb::AABB, ray::Ray, shape::Shape},
     },
     engine::{
         debug::{DebugCapsule, DebugFlags, DebugLine},
@@ -68,7 +68,7 @@ impl Default for PhysicsSettings {
             // 60 fps physics updates
             timestep: PhysicsTimestep::Fixed(Duration::from_secs_f32(1.0 / 60.0)),
             time_scale: 1.0,
-            impulse_iterations: 5,
+            impulse_iterations: 15,
             baumgarte_iterations: 1,
             gravity: Vector3::new(0.0, -9.8, 0.0),
         }
@@ -117,7 +117,8 @@ impl NarrowPhase {
 pub struct PhysicsWorld {
     // The timestep set by Self::next_time_step().
     curr_timestep: Duration,
-    last_timestep: Instant,
+    last_timestep: Duration,
+    last_update_instant: Instant,
     update_time: Instant,
     settings: PhysicsSettings,
     pub colliders: ColliderRegistry,
@@ -126,31 +127,34 @@ pub struct PhysicsWorld {
 
     broad_phase: BroadPhase,
     narrow_phase: NarrowPhase,
+    draw_impulse_lines: Vec<DebugLine>,
 }
 
 impl PhysicsWorld {
     pub fn new() -> Self {
         Self {
-            last_timestep: Instant::now(),
+            last_update_instant: Instant::now(),
             update_time: Instant::now(),
             curr_timestep: Duration::ZERO,
+            last_timestep: Duration::ZERO,
             settings: PhysicsSettings::default(),
             colliders: ColliderRegistry::new(),
             do_dynamics: false,
 
             broad_phase: BroadPhase::new(),
             narrow_phase: NarrowPhase::new(),
+            draw_impulse_lines: Vec::new(),
         }
     }
 
     pub fn reset_last_timestep(&mut self) {
-        self.last_timestep = Instant::now();
+        self.last_update_instant = Instant::now();
     }
 
     // Determine the number of physics updates between the last physics update and now.
     pub fn physics_update_count(&mut self) -> u32 {
         self.update_time = Instant::now();
-        let dur = self.update_time - self.last_timestep;
+        let dur = self.update_time - self.last_update_instant;
         match self.settings.timestep {
             PhysicsTimestep::Max(max_duration) => {
                 (dur.as_secs_f32() / max_duration.as_secs_f32()).ceil() as u32
@@ -175,9 +179,9 @@ impl PhysicsWorld {
         // Render colliders and color code them depending on their collision stage.
         for (entity, (transform, colliders)) in ecs_world
             .query::<(&Transform, &EntityColliders)>()
-            .without::<(EntityParent,)>()
             .into_iter()
         {
+            let world_transform = ecs_world.get_world_transform(entity, &transform);
             for collider_id in &colliders.colliders {
                 let mut coloring = ColliderDebugColoring::Untouched;
                 if physics_world
@@ -196,18 +200,12 @@ impl PhysicsWorld {
                 }
 
                 let collider = physics_world.colliders.get_collider_dyn(collider_id);
-                collider.render_debug(&transform, &mut debug_renderer, coloring);
+                collider.render_debug(&world_transform, &mut debug_renderer, coloring);
             }
         }
 
         // Render all contact points from narrow phase.
         for narrow_contact_pair in &physics_world.narrow_phase.contact_pairs {
-            log::debug!(
-                "Contact between {:?} and {:?} with {:?} points",
-                narrow_contact_pair.entity_a,
-                narrow_contact_pair.entity_b,
-                narrow_contact_pair.manifold.points.len()
-            );
             for point in &narrow_contact_pair.manifold.points {
                 debug_renderer.draw_capsule(DebugCapsule {
                     center: point.position,
@@ -232,6 +230,11 @@ impl PhysicsWorld {
                 });
             }
         }
+
+        // Render impulse lines.
+        for line in &physics_world.draw_impulse_lines {
+            debug_renderer.draw_line(line.clone());
+        }
     }
 
     pub fn validate_colliders_exist(&self, ecs_world: &mut ECSWorld) {
@@ -245,7 +248,7 @@ impl PhysicsWorld {
     pub fn start_time_step(mut physics_world: ResMut<PhysicsWorld>) {
         physics_world.curr_timestep = match physics_world.settings.timestep {
             PhysicsTimestep::Max(duration) => {
-                (physics_world.update_time - physics_world.last_timestep).min(duration)
+                (physics_world.update_time - physics_world.last_update_instant).min(duration)
             }
             PhysicsTimestep::Fixed(duration) => duration,
         };
@@ -255,9 +258,24 @@ impl PhysicsWorld {
         self.curr_timestep
     }
 
+    pub fn last_time_step(&self) -> Duration {
+        self.last_timestep
+    }
+
+    /// Different from time_step() since time_step() is only valid during a physics_update.
+    pub fn time_since_last_physics_update(&self) -> Duration {
+        Instant::now() - self.last_update_instant
+    }
+
     pub fn end_time_step(mut physics_world: ResMut<PhysicsWorld>) {
-        physics_world.last_timestep = physics_world.last_timestep + physics_world.curr_timestep;
+        physics_world.last_update_instant =
+            physics_world.last_update_instant + physics_world.curr_timestep;
+        physics_world.last_timestep = physics_world.curr_timestep;
         physics_world.curr_timestep = Duration::ZERO;
+    }
+
+    pub fn ray_cast(&self, ray: Ray) -> Option<ColliderId> {
+        None
     }
 
     pub fn do_physics_update(
@@ -273,17 +291,22 @@ impl PhysicsWorld {
         if physics_world.do_dynamics {
             for (entity, (transform, rigid_body)) in ecs_world
                 .query_mut::<(&mut Transform, &mut RigidBody)>()
-                .without::<(EntityParent,)>()
                 .into_iter()
             {
-                if rigid_body.rigid_body_type == RigidBodyType::Dynamic {
-                    // Apply gravity.
-                    rigid_body.apply_force(
-                        ForceType::Force,
-                        rigid_body.mass() * physics_world.settings.gravity,
-                    );
+                match rigid_body.rigid_body_type {
+                    RigidBodyType::Static => {}
+                    RigidBodyType::Kinematic => {
+                        rigid_body.integrate_forces(timestep, transform);
+                    }
+                    RigidBodyType::Dynamic => {
+                        // Apply gravity.
+                        rigid_body.apply_force(
+                            ForceType::Force,
+                            rigid_body.mass() * physics_world.settings.gravity,
+                        );
 
-                    rigid_body.update(timestep, transform);
+                        rigid_body.integrate_forces(timestep, transform);
+                    }
                 }
             }
         }
@@ -320,7 +343,7 @@ impl PhysicsWorld {
                     };
 
                     let world_transform_a = ecs_world.get_world_transform(*entity_a, &transform_a);
-                    let world_transform_b = ecs_world.get_world_transform(*entity_a, &transform_b);
+                    let world_transform_b = ecs_world.get_world_transform(*entity_b, &transform_b);
 
                     let collider_a = physics_world.colliders.get_collider_dyn(collider_id_a);
                     let collider_b = physics_world.colliders.get_collider_dyn(collider_id_b);
@@ -347,6 +370,7 @@ impl PhysicsWorld {
 
         // Narrow-phase contact point generation.
         physics_world.narrow_phase.reset();
+        physics_world.draw_impulse_lines.clear();
         for [(entity_a, collider_a), (entity_b, collider_b)] in
             &physics_world.broad_phase.collisions
         {
@@ -356,7 +380,7 @@ impl PhysicsWorld {
             };
 
             let world_transform_a = ecs_world.get_world_transform(*entity_a, &transform_a);
-            let world_transform_b = ecs_world.get_world_transform(*entity_a, &transform_b);
+            let world_transform_b = ecs_world.get_world_transform(*entity_b, &transform_b);
             let Some(manifold) = physics_world.colliders.test_narrow_phase(
                 collider_a,
                 collider_b,
@@ -410,7 +434,7 @@ impl PhysicsWorld {
                 };
 
                 let world_transform_a = ecs_world.get_world_transform(*entity_a, &transform_a);
-                let world_transform_b = ecs_world.get_world_transform(*entity_a, &transform_b);
+                let world_transform_b = ecs_world.get_world_transform(*entity_b, &transform_b);
 
                 let friction_coeff = (rb_a.friction * rb_b.friction).sqrt();
                 let normal = manifold.normal;
@@ -444,30 +468,60 @@ impl PhysicsWorld {
                     let delta_normal_impulse = contact_point.normal_impulse - last_impulse;
                     let impulse_along_normal = delta_normal_impulse * normal;
 
-                    if !rb_a.is_static() {
-                        rb_a.velocity -= impulse_along_normal * rb_a.inv_mass();
-                        rb_a.angular_velocity -=
-                            rb_a.inv_inertia() * center_to_point_a.cross(&impulse_along_normal);
-                    }
-                    if !rb_b.is_static() {
-                        rb_b.velocity += impulse_along_normal * rb_b.inv_mass();
-                        rb_b.angular_velocity +=
-                            rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal);
-                    }
+                    //physics_world.draw_impulse_lines.push(DebugLine {
+                    //    start: contact_point.position,
+                    //    end: contact_point.position + impulse_along_normal * 10.0,
+                    //    thickness: 0.15,
+                    //    color: Color::new_srgb_hex("#33DC57"),
+                    //    alpha: 0.75,
+                    //    flags: DebugFlags::XRAY,
+                    //});
 
-                    // Resulting v_rel after normal impulse applied.
-                    let v_rel_post = (rb_b.velocity()
-                        + rb_b.angular_linear_velocity(center_to_point_b)
-                        - rb_a.velocity
-                        - rb_a.angular_linear_velocity(center_to_point_a))
-                    .dot(&normal);
+                    let angular_velocity_delta_a =
+                        rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_normal);
+                    let angular_velocity_delta_b =
+                        rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal);
+                    physics_world.draw_impulse_lines.push(DebugLine {
+                        start: contact_point.position,
+                        end: contact_point.position + angular_velocity_delta_a * 10.0,
+                        thickness: 0.1,
+                        color: Color::new_srgb_hex("#A357DC"),
+                        alpha: 0.75,
+                        flags: DebugFlags::XRAY,
+                    });
+                    physics_world.draw_impulse_lines.push(DebugLine {
+                        start: contact_point.position,
+                        end: contact_point.position + angular_velocity_delta_b * 10.0,
+                        thickness: 0.1,
+                        color: Color::new_srgb_hex("#A357DC"),
+                        alpha: 0.75,
+                        flags: DebugFlags::XRAY,
+                    });
 
-                    // Calculate frictional impulse.
+                    rb_a.velocity -= impulse_along_normal * rb_a.inv_mass();
+                    rb_a.set_angular_velocity(
+                        rb_a.angular_velocity
+                            + rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_normal),
+                    );
+                    rb_b.velocity += impulse_along_normal * rb_b.inv_mass();
+                    rb_b.set_angular_velocity(
+                        rb_b.angular_velocity
+                            + rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal),
+                    );
+
+                    //// Resulting v_rel after normal impulse applied.
+                    //let v_rel_post = (rb_b.velocity()
+                    //    + rb_b.angular_linear_velocity(center_to_point_b)
+                    //    - rb_a.velocity
+                    //    - rb_a.angular_linear_velocity(center_to_point_a))
+                    //.dot(&normal);
+
+                    //// Calculate frictional impulse.
                     let v_rel = rb_b.velocity() + rb_b.angular_linear_velocity(center_to_point_b)
                         - rb_a.velocity
                         - rb_a.angular_linear_velocity(center_to_point_a);
                     let v_rel_norm = v_rel.dot(&normal);
-                    let mut tangent = v_rel.cross(&normal).cross(&normal);
+                    let mut tangent = v_rel - (v_rel.dot(&normal) * normal);
                     if tangent.norm_squared() > 0.0 {
                         tangent = tangent.normalize();
                     }
@@ -492,23 +546,41 @@ impl PhysicsWorld {
                         contact_point.tangent_impulse - last_friction_impulse;
                     let impulse_along_tangent = delta_friction_impulse * tangent;
 
-                    if !rb_a.is_static() {
-                        rb_a.velocity -= impulse_along_tangent * rb_a.inv_mass();
-                        rb_a.angular_velocity -=
-                            rb_a.inv_inertia() * center_to_point_a.cross(&impulse_along_tangent);
-                    }
-                    if !rb_b.is_static() {
-                        rb_b.velocity += impulse_along_tangent * rb_b.inv_mass();
-                        rb_b.angular_velocity +=
-                            rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_tangent);
-                    }
+                    rb_a.velocity -= impulse_along_tangent * rb_a.inv_mass();
+                    rb_a.set_angular_velocity(
+                        rb_a.angular_velocity
+                            + rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_tangent),
+                    );
+                    rb_b.velocity += impulse_along_tangent * rb_b.inv_mass();
+                    rb_b.set_angular_velocity(
+                        rb_b.angular_velocity
+                            + rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_tangent),
+                    );
 
-                    // Resulting v_rel after tangent impulse applied.
-                    let v_rel_post = (rb_b.velocity()
-                        + rb_b.angular_linear_velocity(center_to_point_b)
-                        - rb_a.velocity
-                        - rb_a.angular_linear_velocity(center_to_point_a))
-                    .dot(&tangent);
+                    // Draw friction impulse line
+                    //physics_world.draw_impulse_lines.push(DebugLine {
+                    //    start: contact_point.position,
+                    //    end: contact_point.position + impulse_along_tangent * 10000.0,
+                    //    thickness: 0.15,
+                    //    color: Color::new_srgb_hex("#FFAA00"),
+                    //    alpha: 0.75,
+                    //    flags: DebugFlags::XRAY,
+                    //});
+
+                    //// Resulting v_rel after tangent impulse applied.
+                    //let v_rel_post = (rb_b.velocity()
+                    //    + rb_b.angular_linear_velocity(center_to_point_b)
+                    //    - rb_a.velocity
+                    //    - rb_a.angular_linear_velocity(center_to_point_a))
+                    //.dot(&normal);
+
+                    //log::debug!(
+                    //    "Iteration {}, {:?} v {:?}, relative_veloctiy {:?}",
+                    //    i,
+                    //    contact_pair.entity_a,
+                    //    contact_pair.entity_b,
+                    //    v_rel_post
+                    //);
                 }
             }
         }
@@ -531,41 +603,120 @@ impl PhysicsWorld {
                 };
 
                 let world_transform_a = ecs_world.get_world_transform(*entity_a, &transform_a);
-                let world_transform_b = ecs_world.get_world_transform(*entity_a, &transform_b);
+                let world_transform_b = ecs_world.get_world_transform(*entity_b, &transform_b);
 
                 let normal = manifold.normal;
                 for contact_point in &mut manifold.points {
                     let center_to_point_a = contact_point.position - world_transform_a.position;
                     let center_to_point_b = contact_point.position - world_transform_b.position;
 
-                    let steering_factor = 0.05;
-                    let slop = 0.01;
+                    let steering_factor = 0.15;
+                    let slop = 0.02;
                     let steering_velocity = contact_point.distance.signum()
-                        * (steering_factor * (contact_point.distance.abs() - slop).max(0.0))
-                            .min(0.2);
+                        * (steering_factor * (contact_point.distance.abs() - slop).max(0.0));
 
                     let eff_mass_rot_a = (rb_a.inv_inertia() * center_to_point_a.cross(&normal))
                         .cross(&center_to_point_a);
                     let eff_mass_rot_b = (rb_b.inv_inertia() * center_to_point_b.cross(&normal))
                         .cross(&center_to_point_b);
-                    let k = rb_a.inv_mass() + rb_b.inv_mass();
-                    //+ (eff_mass_rot_a + eff_mass_rot_b).dot(&normal);
+                    let k = rb_a.inv_mass()
+                        + rb_b.inv_mass()
+                        + (eff_mass_rot_a + eff_mass_rot_b).dot(&normal);
                     let mass_eff = 1.0 / k;
                     let impulse = -steering_velocity * mass_eff;
                     let impulse_along_normal = impulse * normal;
                     // Apply psueduo impulse as positional correction.
                     if !rb_a.is_static() {
-                        transform_a.position += -impulse_along_normal * rb_a.inv_mass();
+                        transform_a.position +=
+                            -impulse_along_normal * rb_a.inv_mass() * timestep.as_secs_f32();
                         transform_a.rotation *= UnitQuaternion::from_scaled_axis(
-                            rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_normal),
+                            rb_a.inv_inertia()
+                                * -center_to_point_a.cross(&impulse_along_normal)
+                                * timestep.as_secs_f32(),
                         );
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: world_transform_a.position,
+                            end: contact_point.position,
+                            thickness: 0.05,
+                            color: Color::new_srgb_hex("#CCCCFF"),
+                            alpha: 0.5,
+                            flags: DebugFlags::XRAY,
+                        });
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: contact_point.position,
+                            end: contact_point.position - impulse_along_normal * 1000.0,
+                            thickness: 0.15,
+                            color: Color::new_srgb_hex("#EC1133"),
+                            alpha: 0.75,
+                            flags: DebugFlags::XRAY,
+                        });
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: contact_point.position,
+                            end: contact_point.position
+                                + (rb_a.inv_inertia()
+                                    * -center_to_point_a.cross(&impulse_along_normal))
+                                    * 1000.0,
+                            thickness: 0.1,
+                            color: Color::new_srgb_hex("#C0FF00"),
+                            alpha: 0.75,
+                            flags: DebugFlags::XRAY,
+                        });
                     }
 
                     if !rb_b.is_static() {
-                        transform_b.position += impulse_along_normal * rb_b.inv_mass();
+                        transform_b.position +=
+                            impulse_along_normal * rb_b.inv_mass() * timestep.as_secs_f32();
                         transform_b.rotation *= UnitQuaternion::from_scaled_axis(
-                            rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal),
+                            rb_b.inv_inertia()
+                                * center_to_point_b.cross(&impulse_along_normal)
+                                * timestep.as_secs_f32(),
                         );
+                        // Draw center to contact point line
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: world_transform_b.position,
+                            end: contact_point.position,
+                            thickness: 0.05,
+                            color: Color::new_srgb_hex("#CCCCFF"),
+                            alpha: 0.5,
+                            flags: DebugFlags::XRAY,
+                        });
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: contact_point.position,
+                            end: contact_point.position + impulse_along_normal * 1000.0,
+                            thickness: 0.15,
+                            color: Color::new_srgb_hex("#EC1133"),
+                            alpha: 0.75,
+                            flags: DebugFlags::XRAY,
+                        });
+                        physics_world.draw_impulse_lines.push(DebugLine {
+                            start: contact_point.position,
+                            end: contact_point.position
+                                + (rb_b.inv_inertia()
+                                    * center_to_point_b.cross(&impulse_along_normal))
+                                    * 1000.0,
+                            thickness: 0.1,
+                            color: Color::new_srgb_hex("#C0FF00"),
+                            alpha: 0.75,
+                            flags: DebugFlags::XRAY,
+                        });
+                    }
+                }
+            }
+        }
+
+        if physics_world.do_dynamics {
+            for (entity, (transform, rigid_body)) in ecs_world
+                .query_mut::<(&mut Transform, &mut RigidBody)>()
+                .into_iter()
+            {
+                match rigid_body.rigid_body_type {
+                    RigidBodyType::Static => {}
+                    RigidBodyType::Kinematic => {
+                        rigid_body.integrate_velocities(timestep, transform);
+                    }
+                    RigidBodyType::Dynamic => {
+                        // Apply gravity.
+                        rigid_body.integrate_velocities(timestep, transform);
                     }
                 }
             }

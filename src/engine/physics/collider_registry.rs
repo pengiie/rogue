@@ -199,14 +199,14 @@ impl ColliderRegistry {
         // to selectively modify colliders.
         self.bins.clear();
         for (entity, (transform, colliders)) in ecs_world
-            .query_mut::<(&Transform, &EntityColliders)>()
-            .without::<(EntityParent,)>()
+            .query::<(&Transform, &EntityColliders)>()
             .into_iter()
         {
+            let world_transform = ecs_world.get_world_transform(entity, transform);
             for collider_id in &colliders.colliders {
                 let aabb = self
                     .get_collider_dyn(collider_id)
-                    .aabb(transform, voxel_world);
+                    .aabb(&world_transform, voxel_world);
                 let region_min = VoxelChunks::position_to_region_pos(&aabb.min);
                 let region_max = VoxelChunks::position_to_region_pos(&aabb.max);
                 for region_x in region_min.x..=region_max.x {

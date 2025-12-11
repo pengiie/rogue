@@ -16,7 +16,7 @@ use crate::{
         voxel::{voxel_world::VoxelWorld, voxel_world_gpu::VoxelWorldGpu},
         window::time::{Instant, Time},
     },
-    game::game_scripts,
+    game::game_loop,
     session::{EditorSession, SessionState},
 };
 
@@ -80,7 +80,7 @@ pub fn game_loop(app: &App) {
     // ----- GAME SCRIPTS ------
     let session_state = app.get_resource::<EditorSession>().session_state;
     if session_state == SessionState::Game {
-        game_scripts::on_game_update(app);
+        game_loop::on_game_update(app);
     }
 
     // -------- PHYSICS ----------
@@ -91,11 +91,15 @@ pub fn game_loop(app: &App) {
         .physics_update_count();
     for _ in 0..physics_updates {
         app.run_system(PhysicsWorld::start_time_step);
-        game_scripts::on_game_physics_update(app);
+        game_loop::on_game_physics_update(app);
         //app.run_system(Scripts::run_on_physics_update);
         //app.run_system(Scripts::update_script_events);
         app.run_system(PhysicsWorld::do_physics_update);
         app.run_system(PhysicsWorld::end_time_step);
+    }
+
+    if session_state == SessionState::Game {
+        game_loop::on_game_post_physics_update(app);
     }
 
     // Handle ECSWorld events.

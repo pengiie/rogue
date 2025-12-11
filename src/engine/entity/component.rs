@@ -40,6 +40,11 @@ pub struct GameComponentDeserializeContext<'a> {
     pub entity_parent: uuid::Uuid,
 }
 
+pub struct GameComponentPropertiesUIContext<'a> {
+    pub voxel_registry: &'a mut VoxelModelRegistry,
+    pub collider_registry: &'a mut ColliderRegistry,
+}
+
 pub trait GameComponentMethods {
     fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8);
 

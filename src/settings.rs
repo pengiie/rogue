@@ -35,7 +35,7 @@ impl Default for GraphicsSettings {
             // Target 720p upscaled to native resolution running at >90fps on my gtx 1070.
             rt_size: Vector2::new(1280, 720),
             antialiasing: Antialiasing::None,
-            present_mode: GfxPresentMode::NoVsync,
+            present_mode: GfxPresentMode::Vsync,
             triple_buffering: true,
         }
     }
@@ -50,10 +50,10 @@ pub enum SettingsEvent {
 #[derive(Resource, Serialize, Deserialize)]
 pub struct Settings {
     /// The field of view in degrees of the camera.
-    pub camera_fov: f32,
+    pub editor_camera_fov: f32,
 
     /// The mouse sensitivity of pixels per degree of rotation.
-    pub mouse_sensitivity: f32,
+    pub editor_mouse_sensitivity: f32,
 
     /// The controller sensitivity of degrees per second.
     pub controller_sensitity: f32,
@@ -77,8 +77,8 @@ pub struct Settings {
 impl From<&UserSettingsAsset> for Settings {
     fn from(s: &UserSettingsAsset) -> Self {
         Self {
-            camera_fov: consts::FRAC_PI_2,
-            mouse_sensitivity: s.mouse_sensitivity,
+            editor_camera_fov: consts::FRAC_PI_2,
+            editor_mouse_sensitivity: s.mouse_sensitivity,
             controller_sensitity: s.controller_sensitivity,
 
             chunk_render_distance: s.chunk_render_distance,
@@ -97,7 +97,7 @@ impl From<&UserSettingsAsset> for Settings {
 impl From<&Settings> for UserSettingsAsset {
     fn from(s: &Settings) -> Self {
         Self {
-            mouse_sensitivity: s.mouse_sensitivity,
+            mouse_sensitivity: s.editor_mouse_sensitivity,
             controller_sensitivity: s.controller_sensitity,
             chunk_render_distance: s.chunk_render_distance,
         }

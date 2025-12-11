@@ -533,12 +533,60 @@ impl ECSWorld {
         QueryMany::new(self, entities)
     }
 
-    pub fn remove_one<C: 'static>(&mut self, entity: Entity) {
-        todo!();
+    pub fn remove_one<C: 'static>(&mut self, entity: Entity) -> C {
+        self.try_remove_one(entity)
+            .expect("Entity does not have component.")
     }
 
-    pub fn remove_one_raw(&mut self, entity: Entity, type_id: &TypeId) {
-        todo!();
+    pub fn try_remove_one<C: 'static>(&mut self, entity: Entity) -> Option<C> {
+        // Safety: We have a mutable reference to self and do not reference the ptr data past our reference.
+        let ptr = unsafe { self.try_remove_one_raw(entity, &std::any::TypeId::of::<C>()) };
+        // Safety: The ptr returned from `Self::try_remove_one_raw` is an owned ptr and is properly
+        // aligned to type C.
+        ptr.map(|ptr| unsafe { (ptr as *mut C).read() })
+    }
+
+    /// Returns an owned ptr to the removed component data, returns None if the entity doesn't have
+    /// the specified component.
+    /// Safety: Returned ptr is only valid as long as new data isn't written to this ECSWorld.
+    pub unsafe fn try_remove_one_raw(
+        &mut self,
+        entity: Entity,
+        type_id: &TypeId,
+    ) -> Option<*mut u8> {
+        let entity_info = self
+            .entities
+            .get_mut(entity)
+            .expect("Given entity doesn't exist.");
+
+        let mut new_component_types = entity_info.components.clone();
+        let Some(removal_index) = entity_info
+            .components
+            .iter()
+            .position(|ty| &ty.type_id == type_id)
+        else {
+            return None;
+        };
+        new_component_types.remove(removal_index);
+
+        let mut entity_component_bundle = self
+            .archetypes
+            .get_mut(entity_info.archetype_ptr)
+            .unwrap()
+            .take_raw(entity_info.index);
+        let removed_component = entity_component_bundle.remove(removal_index);
+
+        let (archetype_ptr, new_archetype) = Self::get_or_create_archetype_static(
+            &mut self.archetypes,
+            &mut self.component_archetypes,
+            new_component_types.clone(),
+        );
+        let archetype_index = new_archetype.insert_raw(entity, entity_component_bundle);
+
+        entity_info.components = new_component_types;
+        entity_info.archetype_ptr = archetype_ptr;
+        entity_info.index = archetype_index;
+        return Some(removed_component);
     }
 
     // Gets the minimum OBB of the entity's voxel model.
@@ -773,15 +821,18 @@ impl ECSWorld {
                 }
             }
         } else {
-            let Ok(old_parent) = self.get::<&EntityParent>(entity) else {
+            let Ok(old_parent_ref) = self.get::<&EntityParent>(entity) else {
                 return;
             };
-            let mut parent_children = self
-                .get::<&mut EntityChildren>(old_parent.parent())
-                .unwrap();
+            let old_parent = old_parent_ref.parent();
+            let mut parent_children = self.get::<&mut EntityChildren>(old_parent).unwrap();
             parent_children.children.remove(&entity);
+            let remove_children_component = parent_children.children.is_empty();
             drop(parent_children);
-            drop(old_parent);
+            drop(old_parent_ref);
+            if remove_children_component {
+                self.remove_one::<EntityChildren>(old_parent);
+            }
             self.remove_one::<EntityParent>(entity);
         }
     }

@@ -110,7 +110,7 @@ pub mod editor {
         pub const DRAGGING_ROTATION_SENSITIVITY: f32 = 0.25;
     }
     pub const ENTITY_OUTLINE_THICKNESS: f32 = 0.03;
-    pub const DOUBLE_CLICK_TIME_SECS: f32 = 0.5;
+    pub const DOUBLE_CLICK_TIME_SECS: f32 = 0.2;
 }
 
 pub mod physics {

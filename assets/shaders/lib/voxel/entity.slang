@@ -52,7 +52,8 @@ public struct EntityData {
       if(hit_info.hit) {
         let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_rotation);
         if (model_test.did_hit && model_test.depth_t < min_test.depth_t) {
-          min_test = RayEntityTest.hit(model_test.color, model_test.normal, model_test.depth_t);
+          let world_normal = mul(transpose(entity_rotation), model_test.normal);
+          min_test = RayEntityTest.hit(model_test.color, world_normal, model_test.depth_t);
         }
       }
     }

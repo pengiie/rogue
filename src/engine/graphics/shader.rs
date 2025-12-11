@@ -307,6 +307,7 @@ impl ShaderCompiler {
                     .stage(options.stage.into())
                     .warnings_as_errors("all")
                     .emit_spirv_directly(true)
+                    .optimization(slang::OptimizationLevel::High)
                     // Enable for shader slang debugging.
                     //.dump_intermediates(true)
                     .vk_use_entry_point_name(true)

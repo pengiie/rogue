@@ -82,13 +82,12 @@ impl PlayerController {
         };
 
         if controller.input_state.movement_axes.norm_squared() != 0.0 {
-            log::debug!(
-                "Applying movement axes: {:?}",
-                controller.input_state.movement_axes
-            );
+            // Get yaw from rotation
+            let forward = transform.rotation * Vector3::z_axis();
+            let yaw = forward.z.atan2(forward.x);
             let y_rotation = UnitQuaternion::from_axis_angle(
                 &Vector3::y_axis(),
-                transform.rotation.euler_angles().1,
+                -yaw - std::f32::consts::FRAC_PI_2,
             );
             let translation = y_rotation
                 * Vector3::new(
@@ -99,6 +98,20 @@ impl PlayerController {
                 .normalize();
             rigid_body.apply_force(ForceType::VelocityChange, translation);
         }
+
+        let jump_height = 6.0;
+        // Time until apex of the jump.
+        let jump_time = 0.75;
+        let player_gravity = 75.0;
+        if controller.input_state.did_jump {
+            rigid_body.apply_force(ForceType::VelocityChange, Vector3::new(0.0, 30.0, 0.0));
+        }
+
+        // Apply player-specific gravity.
+        rigid_body.apply_force(
+            ForceType::VelocityChange,
+            Vector3::new(0.0, -player_gravity, 0.0) * physics_world.time_step().as_secs_f32(),
+        );
 
         controller.input_state.reset();
     }

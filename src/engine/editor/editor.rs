@@ -192,7 +192,7 @@ impl Editor {
         let mut md = input.mouse_delta();
         if (md.x != 0.0 || md.y != 0.0) && window.is_cursor_locked() {
             // Clamp up and down yaw.
-            md *= settings.mouse_sensitivity;
+            md *= settings.editor_mouse_sensitivity;
 
             editor_camera.euler.x = (editor_camera.euler.x - md.y)
                 .clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
@@ -253,24 +253,23 @@ impl Editor {
         voxel_world.update_render_center(editor_camera.rotation_anchor);
 
         if input.is_mouse_button_down(mouse::Button::Middle) {
-            let delta =
-                -input.mouse_delta() * settings.mouse_sensitivity * editor_camera.distance.max(1.0);
+            let delta = -input.mouse_delta()
+                * settings.editor_mouse_sensitivity
+                * editor_camera.distance.max(1.0);
             let up = editor_transform.rotation.transform_vector(&Vector3::y());
             let right = editor_transform.rotation.transform_vector(&Vector3::x());
             editor_camera.rotation_anchor += delta.x * right + delta.y * up;
         }
 
         if input.is_mouse_button_down(mouse::Button::Right) {
-            let delta = input.mouse_delta() * settings.mouse_sensitivity * 0.8;
+            let delta = input.mouse_delta() * settings.editor_mouse_sensitivity * 0.8;
             editor_camera.euler.x = (editor_camera.euler.x - delta.y)
                 .clamp(-f32::consts::FRAC_PI_2, f32::consts::FRAC_PI_2);
             editor_camera.euler.y += delta.x;
         }
 
-        let scroll_delta = input.mouse().scroll_delta();
-        editor_camera.distance = (editor_camera.distance.powf(1.0 / 1.7) + scroll_delta * 0.07)
-            .powf(1.7)
-            .max(0.01);
+        let mut scroll_delta = input.mouse().scroll_delta() * 0.05;
+        editor_camera.distance = (editor_camera.distance * (1.0 + scroll_delta)).max(0.01);
 
         let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), editor_camera.euler.y)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -editor_camera.euler.x);
