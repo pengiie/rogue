@@ -132,15 +132,12 @@ public struct SFT {
             if (let pt_material = this.load_ptmaterial(voxel_addr)) {
               var color = pt_material;
               let normal = this.load_normal(voxel_addr);
-              let rot_normal = mul(rotation, normal);
-
-              return RayModelTest.hit(color, rot_normal, distance_to_voxel);
+              return RayModelTest.hit(color, normal, distance_to_voxel);
             } else if (let material = this.load_bmat(voxel_addr)) {
               let hit_voxel_position = (int3) floor(hit_position / consts::METERS_PER_VOXEL);
               var color = color::srgb_to_lsrgb(material.calculate_color(hit_voxel_position));
               let normal = material.normal;
-              let rot_normal = mul(rotation, normal);
-              return RayModelTest.hit(color, rot_normal, distance_to_voxel);
+              return RayModelTest.hit(color, normal, distance_to_voxel);
             }
 
             return RayModelTest.hit(float3(1.0, 0.0, 0.0), float3(0.0), distance_to_voxel);

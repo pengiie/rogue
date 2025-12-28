@@ -73,18 +73,20 @@ public struct BMaterial {
   }
 
   public float3 calculate_color(int3 world_voxel_position) {
-    switch (index) {
-      case consts::bmat::GRASS:
-        return calc_grass_color(world_voxel_position);
-      case consts::bmat::DIRT:
-        return calc_dirt_color(world_voxel_position);
-      default:
-        return calc_unknown_color(world_voxel_position);
-    }
+    Material material = MaterialBank.get_material(this.index);
+    let tri = fract((float3) world_voxel_position * (consts::METERS_PER_VOXEL / 64));
+
+    var weights = abs(normal);
+    weights /= (weights.x + weights.y + weights.z);
+  
+    let uv_x = material.get_color(tri.zy) * weights.x;
+    let uv_y = material.get_color(tri.xz) * weights.y;
+    let uv_z = material.get_color(tri.xy) * weights.z;
+    return (uv_x + uv_y + uv_z).xyz;
   }
 
   float checker_pattern_t(int3 world_voxel_position) {
-    world_voxel_position /= 16;
+    world_voxel_position /= 4;
     let checker_zero = (world_voxel_position.z % 2);
     return (float) ((world_voxel_position.x % 2) == ((world_voxel_position.y + checker_zero) % 2));
   }

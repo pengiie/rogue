@@ -10,6 +10,8 @@ public ParameterBlock<uniforms::FrameUniforms> u_frame;
 namespace uniforms {
 
   public struct FrameUniforms {
+    public MaterialBank material_bank;
+
     public FrameInfo frame_info;
     public FrameWorldInfo world_info;
     public VoxelUniforms voxel;

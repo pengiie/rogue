@@ -1,5 +1,5 @@
 [package]
-name = "rogue-macros"
+name = "rogue_macros"
 version = "0.1.0"
 edition = "2021"
 

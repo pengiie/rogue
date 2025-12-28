@@ -138,14 +138,14 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
         [unroll]
         for (int z = -2; z <= 2; z++) {
           int3 offset = int3(x,y,z);
-          if (any(offset == int3(0,0,0))) {
+          if (all(offset == int3(0,0,0))) {
             continue;
           }
 
           let sample_pos = world_voxel_pos + offset;
           var sample_hit = world_voxel_exists(sample_pos);
           if (!sample_hit) {
-            normal += (float3) offset;
+            normal += (float3) (sign(offset) * length(offset));
           }
         }
       }
@@ -163,7 +163,7 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
           let sample_pos = base_voxel_pos + offset;
           var sample_hit = world_voxel_exists(sample_pos);
           if (!sample_hit) {
-            offset = select(offset > 0, offset - 3, offset);
+            offset = select(offset > 0, offset - 3, offset + 3);
             normal += (float3) offset;
           }
         }
@@ -182,7 +182,7 @@ void normal_calc_sft(uint chunk_model_ptr, uint3 local_voxel_pos) {
           let sample_pos = base_voxel_pos + offset;
           var sample_hit = world_voxel_exists(sample_pos);
           if (!sample_hit) {
-            offset = select(offset > 0, offset - 15, offset);
+            offset = select(offset > 0, offset - 15, offset + 15);
             normal += (float3) offset;
           }
         }

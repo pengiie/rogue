@@ -26,27 +26,31 @@ void main(uint3 id: SV_DispatchThreadID) {
   let ray = u_frame.world_info.camera.create_ray((float2) coord, (float2) dimensions);
   let sky_color = sample_sky(ray);
   var depth = u_frame.world_info.camera.far_plane;
+
+  var normal = float3(0);
   var out_color = sky_color;
+
+  let ray_terrain = voxel::Terrain.trace(ray);
+  if (ray_terrain.did_hit && ray_terrain.depth_t < depth) {
+    depth = ray_terrain.depth_t;
+    out_color = ray_terrain.color;
+    normal = normalize(ray_terrain.normal);
+  }
+
 
   // If the hit entity is closer than the hit terrain, use the
   // entities hit.
   let ray_entity = voxel::EntityData.trace(ray);
-  if (ray_entity.did_hit) {
-    if (ray_entity.depth_t < depth) {
-      var color = ray_entity.color;
-      let normal = ray_entity.normal;
-      let sun_dir = normalize(-float3(0.7,-1,-0.4));
-      let l = max(dot(normal, sun_dir), 0.035);
-      color = color * l;
-      depth = ray_entity.depth_t;
-      out_color = color;
-    }
+  if (ray_entity.did_hit && ray_entity.depth_t < depth) {
+    depth = ray_entity.depth_t;
+    out_color = ray_entity.color;
+    normal = normalize(ray_entity.normal);
   }
 
-  let ray_terrain = voxel::Terrain.trace(ray);
-  if (ray_terrain.did_hit) {
-    depth = ray_terrain.depth_t;
-    out_color = ray_terrain.color;
+  if (any(normal != float3(0))) {
+    let sun_dir = normalize(-float3(0.7,-1,-0.4));
+    let l = clamp(pow(dot(normal, sun_dir) + 0.3, 2.0), 0.035, 1.0);
+    out_color = out_color * l;
   }
 
   let normalized_depth = depth / u_frame.world_info.camera.far_plane;

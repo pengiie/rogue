@@ -1,0 +1,259 @@
+{
+  "editor_settings": {
+    "editor_camera_transform": {
+      "position": [
+        8.747305,
+        59.332806,
+        -82.97357
+      ],
+      "rotation": [
+        0.33811396,
+        -0.23778778,
+        0.08871783,
+        0.90623677
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "editor_camera": {
+      "fov": 1.5707964,
+      "near_plane": 0.01,
+      "far_plane": 10000.0
+    },
+    "editor_rotation_anchor": [
+      -31.198137,
+      -11.194103,
+      -12.095995
+    ]
+  },
+  "project_settings": {
+    "terrain_asset_path": null,
+    "game_camera": "ccc6052b-8be8-4b82-91db-43b438589a65"
+  },
+  "materials": [
+    {
+      "name": "Grass",
+      "color_texture": {
+        "asset_path": "textures::rocky_terrain_02_1k::textures::rocky_terrain_02_diff_1k::jpg"
+      }
+    },
+    {
+      "name": "Dirt",
+      "color_texture": {
+        "asset_path": "textures::gravel_road_1k::textures::gravel_road_diff_1k::jpg"
+      }
+    }
+  ],
+  "scene": {
+    "entities": [
+      {
+        "components": [
+          {
+            "name": "CameraController",
+            "data": null
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                -35.83,
+                34.25,
+                13.28
+              ],
+              "rotation": [
+                0.28809097,
+                0.057616606,
+                -0.017368048,
+                0.95571035
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "ccc6052b-8be8-4b82-91db-43b438589a65",
+              "name": "Camera"
+            }
+          },
+          {
+            "name": "Camera",
+            "data": {
+              "fov": 1.7453293,
+              "near_plane": 0.01,
+              "far_plane": 10000.0
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "8081e919-6a4c-4407-928f-7b7b40e2e18d",
+              "name": "fake ground collider"
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -10.0,
+                        -0.5,
+                        -10.0
+                      ],
+                      "max": [
+                        10.0,
+                        0.5,
+                        10.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                1.0999999,
+                0.0
+              ],
+              "rotation": [
+                0.004363265,
+                0.0043632677,
+                -0.000019038454,
+                0.9999809
+              ],
+              "scale": [
+                0.25,
+                0.25,
+                0.25
+              ]
+            }
+          },
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Kinematic",
+              "mass": 1.0,
+              "restitution": 0.0,
+              "friction": 0.3,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
+              "name": "Player"
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "PlayerController",
+            "data": null
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
