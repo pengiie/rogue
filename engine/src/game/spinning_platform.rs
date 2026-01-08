@@ -1,18 +1,14 @@
 use nalgebra::{UnitQuaternion, Vector3};
 use rogue_macros::game_component;
 
-use crate::{
-    common::serde_util::impl_unit_type_serde,
-    engine::{
-        entity::ecs_world::ECSWorld,
-        physics::{
-            physics_world::PhysicsWorld,
-            rigid_body::{RigidBody, RigidBodyType},
-            transform::Transform,
-        },
-        resource::{Res, ResMut},
-    },
+use crate::common::serde_util::impl_unit_type_serde;
+use crate::entity::ecs_world::ECSWorld;
+use crate::physics::{
+    physics_world::PhysicsWorld,
+    rigid_body::{RigidBody, RigidBodyType},
+    transform::Transform,
 };
+use crate::resource::{Res, ResMut};
 
 #[derive(Clone, Default)]
 #[game_component(name = "SpinningPlatform")]

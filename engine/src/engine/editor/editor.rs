@@ -7,7 +7,6 @@ use nalgebra::{
 use rogue_macros::Resource;
 
 use crate::common::geometry::ray::Ray;
-use crate::engine::asset::repr::editor_settings::EditorUserSettingsAsset;
 use crate::engine::editor::brush::editing::EditorWorldEditing;
 use crate::engine::editor::clipboard::Clipboard;
 use crate::engine::editor::events::EventEditorZoom;

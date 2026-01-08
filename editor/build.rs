@@ -2,14 +2,18 @@ use std::env;
 
 fn main() {
     let assets_path = format!(
-        "{}/assets",
+        "{}/../assets",
         env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap()
     );
     let assets_out_path = format!(
-        "{}/target/{}/assets",
+        "{}/../target/{}/assets",
         env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap(),
         env::var_os("PROFILE").unwrap().to_str().unwrap(),
     );
+
+    if let Err(err) = std::fs::metadata(&assets_path) {
+        panic!("Error with finding src asset path {}: {}", assets_path, err);
+    }
 
     if std::fs::symlink_metadata(assets_out_path.clone()).is_err() {
         if cfg!(unix) {

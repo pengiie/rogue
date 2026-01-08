@@ -17,10 +17,7 @@ use crate::{
     engine::{
         asset::{
             asset::{impl_asset_load_save_serde, AssetHandle, AssetPath, Assets},
-            repr::{
-                editor_settings::{self, EditorUserSettingsAsset},
-                project::EditorProjectAsset,
-            },
+            repr::project::ProjectAsset,
         },
         editor::editor::Editor,
         entity::{
@@ -69,37 +66,6 @@ impl ProjectEditorSettings {
 }
 
 impl_asset_load_save_serde!(ProjectEditorSettings);
-
-#[derive(Clone)]
-pub struct ProjectSettings {
-    pub terrain_asset_path: Option<PathBuf>,
-    pub game_camera: Option<Entity>,
-}
-
-impl ProjectSettings {
-    pub fn new_empty() -> Self {
-        Self {
-            terrain_asset_path: None,
-            game_camera: None,
-        }
-    }
-
-    pub fn serialize(&self, ecs_world: &ECSWorld) -> ProjectSettingsSerializable {
-        let game_camera_uuid = self
-            .game_camera
-            .map(|e| ecs_world.get::<&GameEntity>(e).unwrap().uuid.clone());
-        ProjectSettingsSerializable {
-            terrain_asset_path: self.terrain_asset_path.clone(),
-            game_camera: game_camera_uuid,
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct ProjectSettingsSerializable {
-    pub terrain_asset_path: Option<PathBuf>,
-    pub game_camera: Option<Uuid>,
-}
 
 /// Manages the state of the project and handles the serialization/deserialization and
 /// initialization of:
@@ -322,7 +288,7 @@ impl EditorSession {
             },
         );
 
-        let project_asset = match EditorProjectAsset::serialize(
+        let project_asset = match ProjectAsset::serialize(
             session,
             editor,
             ecs_world,

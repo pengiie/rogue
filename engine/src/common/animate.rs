@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::engine::window::time::Instant;
+use crate::window::time::Instant;
 
 pub trait Animatable {
     fn get_vals_mut(&mut self) -> Vec<&mut f32>;

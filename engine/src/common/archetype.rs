@@ -1,14 +1,10 @@
 use rogue_macros::generate_tuples;
 use std::{mem::offset_of, u64};
 
-use crate::{
-    common::{
-        dyn_vec::{DynVec, DynVecCloneable, TypeInfoCloneable},
-        freelist::FreeListHandle,
-    },
-    engine::entity::component::Bundle,
+use crate::common::{
+    dyn_vec::{DynVecCloneable, TypeInfoCloneable},
+    freelist::FreeListHandle,
 };
-
 use super::dyn_vec::TypeInfo;
 
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.

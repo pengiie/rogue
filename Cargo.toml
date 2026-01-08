@@ -1,9 +1,8 @@
 [workspace]
-members = [
-  "engine", 
-  "editor",
-  "macros"
-]
+members = [ "engine", 
+            "editor",
+            "macros", 
+            "game" ]
 resolver = "3"
 
 [profile.dev]

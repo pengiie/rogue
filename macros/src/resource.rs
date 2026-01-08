@@ -8,7 +8,7 @@ pub fn impl_derive_resource(input: TokenStream) -> TokenStream {
     let name = &ast.ident;
 
     let gen = quote! {
-        impl crate::engine::resource::Resource for #name {}
+        impl crate::resource::Resource for #name {}
     };
 
     gen.into()

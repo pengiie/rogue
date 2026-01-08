@@ -27,7 +27,7 @@ pub mod voxel {
     pub const VOXEL_METER_LENGTH: f32 = 1.0 / VOXELS_PER_METER as f32;
 
     pub mod attachment {
-        use crate::engine::voxel::attachment::AttachmentId;
+        use crate::voxel::attachment::AttachmentId;
 
         pub const MAX_ID: AttachmentId = 2;
     }
@@ -55,7 +55,7 @@ pub mod io {
 
 pub mod actions {
     pub mod keybind {
-        use crate::engine::input::keyboard::Key;
+        use crate::input::keyboard::Key;
 
         pub const EDITOR_TOGGLE: Key = Key::F2;
         pub const EDITOR_TOGGLE_DEBUG: Key = Key::C;

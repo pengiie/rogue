@@ -3,15 +3,13 @@ use rogue_macros::game_component;
 
 use crate::{
     common::serde_util::impl_unit_type_serde,
-    engine::{
-        entity::{ecs_world::ECSWorld, EntityParent},
-        input::{keyboard::Key, Input},
-        physics::{rigid_body::RigidBody, transform::Transform},
-        resource::{Res, ResMut},
-        window::window::Window,
-    },
     game::player_controller::PlayerController,
 };
+use crate::entity::ecs_world::ECSWorld;
+use crate::input::{keyboard::Key, Input};
+use crate::physics::{rigid_body::RigidBody, transform::Transform};
+use crate::resource::{Res, ResMut};
+use crate::window::window::Window;
 
 #[derive(Clone)]
 #[game_component(name = "CameraController")]

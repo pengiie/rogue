@@ -2,7 +2,7 @@ use std::ops::Rem;
 
 use nalgebra::Vector3;
 
-use crate::engine::physics::collider::{ContactManifold, ContactPair, ContactPoint};
+use crate::physics::collider::{ContactManifold, ContactPair, ContactPoint};
 
 pub type Vertex = Vector3<f32>;
 pub struct Face {

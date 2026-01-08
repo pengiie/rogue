@@ -1,19 +1,13 @@
 use std::{
-    collections::HashSet,
     f32::consts,
-    num::{NonZero, NonZeroUsize},
+    num::NonZeroUsize,
 };
 
-use downcast::Any;
-use log::debug;
-use nalgebra::{Vector2, Vector3};
+use nalgebra::Vector2;
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
-
-use crate::engine::{
-    asset::repr::settings::UserSettingsAsset,
-    graphics::{backend::GfxPresentMode, renderer::Antialiasing},
-};
+use crate::asset::repr::settings::UserSettingsAsset;
+use crate::graphics::{backend::GfxPresentMode, renderer::Antialiasing};
 
 /// Called/recieved whenever a graphics setting is changed.
 pub enum GraphicsSettingsEvent {

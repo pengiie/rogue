@@ -1,39 +1,53 @@
 use std::{
-    ops::Deref,
+    collections::HashMap,
     sync::mpsc::{channel, Receiver, Sender},
 };
 
-use log::{debug, info};
-use nalgebra::Vector2;
-use raw_window_handle::HasWindowHandle;
 use winit::{
-    application::ApplicationHandler,
-    event::{ElementState, WindowEvent as WinitWindowEvent},
-    event_loop::EventLoop,
+    application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
-use crate::{
-    engine::{
-        self,
-        asset::asset::Assets,
-        audio::Audio,
-        editor::editor::Editor,
-        entity::ecs_world::ECSWorld,
-        event::{EventReader, Events},
-        graphics::{backend::GraphicsBackendEvent, device::DeviceResource, renderer::Renderer},
-        input::Input,
-        physics::physics_world::PhysicsWorld,
-        resource::{Res, ResMut, Resource, ResourceBank},
-        system::System,
-        ui::{gui::Egui, UI},
-        window::{time::Time, window::Window},
-    },
-    game, game_loop,
-    settings::Settings,
+use crate::asset::{
+    asset::Assets,
+    repr::{project::ProjectAsset, settings::UserSettingsAsset},
 };
+use crate::audio::Audio;
+use crate::entity::scripting::Scripts;
+use crate::event::{EventReader, Events};
+use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
+use crate::input::Input;
+use crate::resource::{Res, ResMut, Resource, ResourceBank};
+use crate::system::{System, SystemErased};
+use crate::task::task_arbiter::TaskArbiter;
+use crate::window::{time::Time, window::Window};
+use crate::{game_loop, settings::Settings};
 
 enum AppEvent {
     Init { device: DeviceResource },
+}
+
+pub struct AppCreateInfo {
+    pub project: ProjectAsset,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub enum AppStage {
+    /// The functions to call to initialize the application resources after we have a valid
+    /// gpu device handle. This is where a render graph should be submitted to the renderer.
+    /// This stage only runs once during app initialization and not again.
+    InitPostGraphics,
+
+    /// Runs during the physics update, where you should update velocities and apply forces
+    /// which will be integrated the same physics update. You should use `Physics::curr_timestep`
+    /// when calculting using delta time.
+    FixedUpdate,
+
+    /// Happens before any physics or rendering this frame. Where most logic should go.
+    Update,
+
+    /// Where you should write any render graph image or pass reference, as well as uniforms for
+    /// shaders.
+    RenderWrite,
 }
 
 pub struct App {
@@ -43,30 +57,75 @@ pub struct App {
     did_first_resize: bool,
     initialized_graphics: bool,
     graphics_event_reader: EventReader<GraphicsBackendEvent>,
+
     resource_bank: ResourceBank,
+    systems: HashMap<AppStage, Vec<SystemErased>>,
 
     event_sender: Sender<AppEvent>,
     event_receiver: Receiver<AppEvent>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(create_info: AppCreateInfo) -> Self {
         let event_loop = EventLoop::new().expect("Failed to create event loop");
 
         let (event_sender, event_receiver) = channel::<AppEvent>();
 
-        Self {
+        let mut app = Self {
             event_loop: Some(event_loop),
 
             initialized_window: false,
             did_first_resize: false,
             initialized_graphics: false,
             graphics_event_reader: EventReader::new(),
+
             resource_bank: ResourceBank::new(),
+            systems: HashMap::new(),
 
             event_sender,
             event_receiver,
+        };
+
+        app.insert_resource(TaskArbiter::new());
+        app.insert_resource(Events::new());
+        app.insert_resource(Scripts::new());
+        app.insert_resource(Settings::from(&UserSettingsAsset::default()));
+        app.insert_resource(Input::new());
+        app.insert_resource(Time::new());
+        app.insert_resource(Audio::new());
+        app.insert_resource(MainCamera::new_empty());
+
+        let project = create_info.project;
+        app.insert_resource(project.ecs_world);
+        app.insert_resource(project.voxel_registry);
+        app.insert_resource(project.physics_world);
+        app.insert_resource(project.material_bank);
+        app.insert_resource(Assets::new(project.project_dir));
+
+        app
+    }
+
+    fn init_post_graphics(&mut self) {
+        if let Some(init_systems) = self.systems.get(&AppStage::InitPostGraphics) {
+            for system in init_systems {
+                system.run(self.resource_bank());
+            }
         }
+    }
+
+    pub fn systems(&self, stage: AppStage) -> Option<&Vec<SystemErased>> {
+        self.systems.get(&stage)
+    }
+
+    pub fn insert_system<Marker>(
+        &mut self,
+        stage: AppStage,
+        system: impl System<Marker> + 'static,
+    ) {
+        self.systems
+            .entry(stage)
+            .or_insert_with(Vec::new)
+            .push(SystemErased::new(system));
     }
 
     pub fn resource_bank(&self) -> &ResourceBank {
@@ -92,7 +151,7 @@ impl App {
         self.resource_bank.insert(resource);
     }
 
-    pub fn run(mut self) {
+    pub fn run_with_window(mut self) {
         let event_loop = self.event_loop.take().unwrap();
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
         cfg_if::cfg_if! {
@@ -131,18 +190,18 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         // If egui exists then input exists.
-        if self.resource_bank().has_resource::<Egui>() {
-            let window = self.resource_bank().get_resource::<Window>();
-            if !window.is_cursor_locked() {
-                let egui_consumed = self
-                    .resource_bank()
-                    .get_resource_mut::<Egui>()
-                    .handle_window_event(&window, &event);
-                if egui_consumed {
-                    return;
-                }
-            }
-        }
+        //if self.resource_bank().has_resource::<Egui>() {
+        //    let window = self.resource_bank().get_resource::<Window>();
+        //    if !window.is_cursor_locked() {
+        //        let egui_consumed = self
+        //            .resource_bank()
+        //            .get_resource_mut::<Egui>()
+        //            .handle_window_event(&window, &event);
+        //        if egui_consumed {
+        //            return;
+        //        }
+        //    }
+        //}
         if self.resource_bank().has_resource::<Input>() {
             self.resource_bank()
                 .get_resource_mut::<Input>()
@@ -172,13 +231,12 @@ impl winit::application::ApplicationHandler for App {
                     }
                     drop(events);
 
-                    // Graphics backend isn't ready yet.
+                    // Graphics backend still isn't ready yet.
                     if !self.initialized_graphics {
                         return;
                     }
 
-                    engine::init::init_post_graphics(self);
-                    game::init::init_post_graphics(self);
+                    self.init_post_graphics();
                 }
 
                 game_loop::game_loop(self);
@@ -190,8 +248,6 @@ impl winit::application::ApplicationHandler for App {
             WinitWindowEvent::Resized(new_size) => {
                 if !self.did_first_resize && new_size.width > 0 && new_size.height > 0 {
                     self.did_first_resize = true;
-
-                    engine::init::init_pre_graphics(self);
 
                     let mut gfx_device = DeviceResource::new();
                     gfx_device.init(
@@ -229,31 +285,31 @@ impl winit::application::ApplicationHandler for App {
         device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
-        if self.resource_bank().has_resource::<Input>() && self.resource_bank().has_resource::<UI>()
-        {
-            let window = self.resource_bank().get_resource::<Window>();
-            let ui = self.resource_bank().get_resource::<UI>();
-            let editor = self.resource_bank().get_resource::<Editor>();
-            let mut input = self.resource_bank().get_resource_mut::<Input>();
-            let mouse_pos = input.mouse_position();
-            let is_within_content = ui.content_padding.z <= mouse_pos.x
-                && mouse_pos.x <= window.inner_size_vec2().x as f32 - ui.content_padding.w
-                && ui.content_padding.x <= mouse_pos.y
-                && mouse_pos.y <= window.inner_size_vec2().y as f32 - ui.content_padding.y;
-            if !is_within_content {
-                match &event {
-                    winit::event::DeviceEvent::Key(winit::event::RawKeyEvent {
-                        state: ElementState::Pressed,
-                        ..
-                    })
-                    | winit::event::DeviceEvent::MouseWheel { .. } => {
-                        return;
-                    }
-                    _ => {}
-                }
-            }
+        //if self.resource_bank().has_resource::<Input>() && self.resource_bank().has_resource::<UI>()
+        //{
+        //    let window = self.resource_bank().get_resource::<Window>();
+        //    //let ui = self.resource_bank().get_resource::<UI>();
+        //    //let editor = self.resource_bank().get_resource::<Editor>();
+        //    let mouse_pos = input.mouse_position();
+        //    let is_within_content = ui.content_padding.z <= mouse_pos.x
+        //        && mouse_pos.x <= window.inner_size_vec2().x as f32 - ui.content_padding.w
+        //        && ui.content_padding.x <= mouse_pos.y
+        //        && mouse_pos.y <= window.inner_size_vec2().y as f32 - ui.content_padding.y;
+        //    if !is_within_content {
+        //        match &event {
+        //            winit::event::DeviceEvent::Key(winit::event::RawKeyEvent {
+        //                state: ElementState::Pressed,
+        //                ..
+        //            })
+        //            | winit::event::DeviceEvent::MouseWheel { .. } => {
+        //                return;
+        //            }
+        //            _ => {}
+        //        }
+        //    }
 
-            input.handle_winit_device_event(device_id, event);
-        }
+        //}
+        let mut input = self.resource_bank().get_resource_mut::<Input>();
+        input.handle_winit_device_event(device_id, event);
     }
 }

@@ -1,6 +1,5 @@
 [package]
 name = "rogue_engine"
-build = "build.rs"
 version = "0.1.0"
 edition = "2021"
 

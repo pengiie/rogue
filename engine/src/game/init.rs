@@ -1,10 +1,8 @@
-use crate::{
-    engine::entity::ecs_world::ECSWorld,
-    game::{
-        camera_controller::CameraController, player_controller::PlayerController,
-        spinning_platform::SpinningPlatform,
-    },
+use crate::game::{
+    camera_controller::CameraController, player_controller::PlayerController,
+    spinning_platform::SpinningPlatform,
 };
+use crate::entity::ecs_world::ECSWorld;
 
 /// The graphics context and project has been initialized before this.
 pub fn init_post_graphics(app: &mut crate::app::App) {}

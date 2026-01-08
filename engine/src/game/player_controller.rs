@@ -1,20 +1,15 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::game_component;
 
-use crate::{
-    common::serde_util::impl_unit_type_serde,
-    consts,
-    engine::{
-        entity::ecs_world::ECSWorld,
-        input::{keyboard::Key, Input},
-        physics::{
-            physics_world::PhysicsWorld,
-            rigid_body::{ForceType, RigidBody},
-            transform::Transform,
-        },
-        resource::{Res, ResMut},
-    },
+use crate::common::serde_util::impl_unit_type_serde;
+use crate::entity::ecs_world::ECSWorld;
+use crate::input::{keyboard::Key, Input};
+use crate::physics::{
+    physics_world::PhysicsWorld,
+    rigid_body::{ForceType, RigidBody},
+    transform::Transform,
 };
+use crate::resource::{Res, ResMut};
 
 #[derive(Clone)]
 #[game_component(name = "PlayerController")]

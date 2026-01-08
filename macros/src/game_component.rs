@@ -66,14 +66,14 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
     let gen = quote! {
         #item
 
-        impl crate::engine::entity::component::GameComponent for #name {
+        impl crate::entity::component::GameComponent for #name {
             const NAME: &str = #game_component_serde_name;
 
             #constructible_impl
 
             fn clone_component(
                 &self,
-                ctx: &mut crate::engine::entity::component::GameComponentCloneContext<'_>,
+                ctx: &mut crate::entity::component::GameComponentCloneContext<'_>,
                 dst_ptr: *mut u8,
             ) {
                 let dst_ptr = dst_ptr as *mut Self;
@@ -83,14 +83,14 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
 
             fn serialize_component(
                 &self,
-                ctx: &crate::engine::entity::component::GameComponentSerializeContext<'_>,
+                ctx: &crate::entity::component::GameComponentSerializeContext<'_>,
                 ser: &mut dyn erased_serde::Serializer,
             ) -> erased_serde::Result<()> {
                 erased_serde::Serialize::erased_serialize(self, ser)
             }
 
             unsafe fn deserialize_component(
-                ctx: &mut crate::engine::entity::component::GameComponentDeserializeContext<'_>,
+                ctx: &mut crate::entity::component::GameComponentDeserializeContext<'_>,
                 de: &mut dyn erased_serde::Deserializer,
                 dst_ptr: *mut u8,
             ) -> erased_serde::Result<()> {
