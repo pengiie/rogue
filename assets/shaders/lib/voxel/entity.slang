@@ -2,7 +2,7 @@ implementing lib;
 
 namespace voxel {
 
-// Total size 80
+// Total size 80 bytes
 public struct EntityInfo {
   float3 aabb_min; // offset = 0
   float3 aabb_max; // offset = 16
@@ -30,7 +30,6 @@ public struct RayEntityTest {
 public struct EntityData {
   public uint entity_count;
   public StructuredBuffer<EntityInfo> accel_buf;
-
 
   public static RayEntityTest trace(Ray ray) {
     let entity_data = u_frame.voxel.entity_data;

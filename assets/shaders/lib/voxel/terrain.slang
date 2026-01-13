@@ -37,7 +37,7 @@ public struct Terrain {
   // Traverses the region tree and returns the voxel model info ptr
   // that was hit, if any.
   public Optional<uint> traverse_region_tree(Ray ray, uint region_ptr) {
-
+    return none;
   }
 
   // World-space AABB corresponding to the entire renderable terrain's bounds.

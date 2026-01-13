@@ -7,19 +7,26 @@ use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
-use crate::asset::{
-    asset::Assets,
-    repr::{project::ProjectAsset, settings::UserSettingsAsset},
-};
-use crate::audio::Audio;
-use crate::entity::scripting::Scripts;
-use crate::event::{EventReader, Events};
 use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
 use crate::input::Input;
 use crate::resource::{Res, ResMut, Resource, ResourceBank};
 use crate::system::{System, SystemErased};
 use crate::task::task_arbiter::TaskArbiter;
 use crate::window::{time::Time, window::Window};
+use crate::{
+    asset::{
+        asset::Assets,
+        repr::{project::ProjectAsset, settings::UserSettingsAsset},
+    },
+    graphics::renderer::Renderer,
+    material::material_gpu::MaterialBankGpu,
+};
+use crate::{audio::Audio, world::world_renderable::WorldRenderable};
+use crate::{debug::DebugRenderer, entity::scripting::Scripts};
+use crate::{
+    event::{EventReader, Events},
+    voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
+};
 use crate::{game_loop, settings::Settings};
 
 enum AppEvent {
@@ -28,15 +35,11 @@ enum AppEvent {
 
 pub struct AppCreateInfo {
     pub project: ProjectAsset,
+    pub post_graphics_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub enum AppStage {
-    /// The functions to call to initialize the application resources after we have a valid
-    /// gpu device handle. This is where a render graph should be submitted to the renderer.
-    /// This stage only runs once during app initialization and not again.
-    InitPostGraphics,
-
     /// Runs during the physics update, where you should update velocities and apply forces
     /// which will be integrated the same physics update. You should use `Physics::curr_timestep`
     /// when calculting using delta time.
@@ -60,6 +63,7 @@ pub struct App {
 
     resource_bank: ResourceBank,
     systems: HashMap<AppStage, Vec<SystemErased>>,
+    post_graphics_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
 
     event_sender: Sender<AppEvent>,
     event_receiver: Receiver<AppEvent>,
@@ -81,6 +85,7 @@ impl App {
 
             resource_bank: ResourceBank::new(),
             systems: HashMap::new(),
+            post_graphics_fn: create_info.post_graphics_fn,
 
             event_sender,
             event_receiver,
@@ -105,11 +110,22 @@ impl App {
         app
     }
 
+    /// Called after we get a valid DeviceResource graphics context, allowing us to setup resources that rely on that.
     fn init_post_graphics(&mut self) {
-        if let Some(init_systems) = self.systems.get(&AppStage::InitPostGraphics) {
-            for system in init_systems {
-                system.run(self.resource_bank());
-            }
+        let mut device_resource = self.get_resource_mut::<DeviceResource>();
+        let renderer = Renderer::new(&mut device_resource);
+        let voxel_registry_gpu = VoxelModelRegistryGpu::new(&mut device_resource);
+        let world_renderable = WorldRenderable::new(&mut device_resource);
+        drop(device_resource);
+        self.insert_resource(renderer);
+        self.insert_resource(MaterialBankGpu::new());
+
+        self.insert_resource(DebugRenderer::new());
+        self.insert_resource(world_renderable);
+        self.insert_resource(voxel_registry_gpu);
+
+        if let Some(init_fn) = &self.post_graphics_fn {
+            (*init_fn)(&mut self.resource_bank);
         }
     }
 

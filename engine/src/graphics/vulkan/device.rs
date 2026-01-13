@@ -23,21 +23,20 @@ use nalgebra::{Vector2, Vector3};
 use parking_lot::lock_api::RwLock;
 use raw_window_handle::{HasDisplayHandle, HasRawWindowHandle, HasWindowHandle};
 
+use super::{executor::VulkanFrameGraphExecutor, recorder::VulkanRecorder};
 use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::event::Events;
 use crate::graphics::{
     backend::{
-        BindGroup, Binding, Buffer, ComputePipeline, GfxAddressMode, GfxBlendFactor,
-        GfxBlendOp, GfxBufferCreateInfo, GfxBufferInfo, GfxComputePipelineCreateInfo,
-        GfxComputePipelineInfo, GfxCullMode, GfxDeviceInfo, GfxFilterMode, GfxFrontFace,
-        GfxImageCreateInfo, GfxImageFormat, GfxImageInfo, GfxImageType, GfxImageWrite,
-        GfxLoadOp, GfxPresentMode, GfxRasterPipelineBlendStateAttachmentInfo,
-        GfxRasterPipelineBlendStateCreateInfo, GfxRasterPipelineCreateInfo,
-        GfxSamplerCreateInfo, GfxSwapchainInfo, GfxVertexAttribute,
-        GfxVertexAttributeFormat, GfxVertexFormat, GraphicsBackendDevice,
-        GraphicsBackendEvent, GraphicsBackendFrameGraphExecutor, Image, Memory,
-        RasterPipeline, ResourceId, Sampler, ShaderSetData, ShaderWriter, UniformSetData,
-        Untyped,
+        BindGroup, Binding, Buffer, ComputePipeline, GfxAddressMode, GfxBlendFactor, GfxBlendOp,
+        GfxBufferCreateInfo, GfxBufferInfo, GfxComputePipelineCreateInfo, GfxComputePipelineInfo,
+        GfxCullMode, GfxDeviceInfo, GfxFilterMode, GfxFrontFace, GfxImageCreateInfo,
+        GfxImageFormat, GfxImageInfo, GfxImageType, GfxImageWrite, GfxLoadOp, GfxPresentMode,
+        GfxRasterPipelineBlendStateAttachmentInfo, GfxRasterPipelineBlendStateCreateInfo,
+        GfxRasterPipelineCreateInfo, GfxSamplerCreateInfo, GfxSwapchainInfo, GfxVertexAttribute,
+        GfxVertexAttributeFormat, GfxVertexFormat, GraphicsBackendDevice, GraphicsBackendEvent,
+        GraphicsBackendFrameGraphExecutor, Image, Memory, RasterPipeline, ResourceId, Sampler,
+        ShaderSetData, ShaderWriter, UniformSetData, Untyped,
     },
     gpu_allocator::{Allocation, AllocatorTree},
     shader::{
@@ -49,7 +48,6 @@ use crate::window::{
     time::Instant,
     window::{Window, WindowHandle},
 };
-use super::{executor::VulkanFrameGraphExecutor, recorder::VulkanRecorder};
 
 pub const VK_STAGING_BUFFER_MIN_SIZE: u64 = 1 << 23; // 8 MiB
 
@@ -731,7 +729,8 @@ impl VulkanDevice {
                     surface_capabilities.max_image_extent.height,
                 ),
             };
-            let swapchain_image_usage = ash::vk::ImageUsageFlags::TRANSFER_DST;
+            let swapchain_image_usage =
+                ash::vk::ImageUsageFlags::TRANSFER_DST | ash::vk::ImageUsageFlags::COLOR_ATTACHMENT;
 
             let swapchain_create_info = ash::vk::SwapchainCreateInfoKHR::default()
                 .surface(surface)

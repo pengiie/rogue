@@ -423,6 +423,14 @@ impl FrameGraph {
 
         used_passes.reverse();
 
+        log::info!(
+            "We have passes {:?}",
+            used_passes
+                .iter()
+                .map(|p| &builder.resource_infos[p.id.id as usize].name)
+                .collect::<Vec<_>>()
+        );
+
         // TODO: Warn about unreachable resources in the pass graph.
 
         let resource_name_map = builder

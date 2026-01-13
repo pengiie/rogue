@@ -76,7 +76,7 @@ impl Assets {
     }
 
     pub fn check_assets_dir_for_updates(&mut self) {
-        let assets_path = PathBuf::from("../../../assets").canonicalize().unwrap();
+        let assets_path = PathBuf::from("./assets").canonicalize().unwrap();
 
         let mut dir_metadata = std::fs::metadata(&assets_path).expect("Failed to read assets dir.");
         assert!(dir_metadata.is_dir());

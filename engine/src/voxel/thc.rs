@@ -12,7 +12,7 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,
     voxel::{
-        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete,
+        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods,
         VoxelModelImpl, VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
@@ -586,11 +586,11 @@ impl Clone for VoxelModelTHCGpu {
     }
 }
 
-impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
-    fn new() -> Self {
+impl VoxelModelGpuImpl for VoxelModelTHCGpu {
+    fn construct() -> Self {
         Self {
             compressed_model: None,
-            compressed_model_gpu: VoxelModelTHCCompressedGpu::new(),
+            compressed_model_gpu: VoxelModelTHCCompressedGpu::construct(),
 
             initialized_data: false,
             update_tracker: 0,
@@ -598,7 +598,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelTHCGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelTHCGpu {
+impl VoxelModelGpuImplMethods for VoxelModelTHCGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         self.compressed_model_gpu.aggregate_model_info()
     }
@@ -621,7 +621,7 @@ impl VoxelModelGpuImpl for VoxelModelTHCGpu {
             }
 
             self.compressed_model = Some(compressed_model);
-            self.compressed_model_gpu = VoxelModelTHCCompressedGpu::new();
+            self.compressed_model_gpu = VoxelModelTHCCompressedGpu::construct();
         }
 
         if let Some(compressed_model) = &self.compressed_model {
@@ -910,8 +910,8 @@ impl Clone for VoxelModelTHCCompressedGpu {
     }
 }
 
-impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {
-    fn new() -> Self {
+impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
+    fn construct() -> Self {
         Self {
             side_length: 0,
             nodes_allocation: None,
@@ -923,7 +923,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelTHCCompressedGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
+impl VoxelModelGpuImplMethods for VoxelModelTHCCompressedGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         let Some(data_allocation) = &self.nodes_allocation else {
             return None;

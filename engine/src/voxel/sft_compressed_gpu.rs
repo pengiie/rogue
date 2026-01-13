@@ -7,7 +7,7 @@ use super::{
     sft_compressed::{
         SFTAttachmentLookupNodeCompressed, SFTNodeCompressed, VoxelModelSFTCompressed,
     },
-    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImplMethods},
+    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImplMethods},
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
 
@@ -24,7 +24,7 @@ pub struct VoxelModelSFTCompressedGpu {
 
 impl Clone for VoxelModelSFTCompressedGpu {
     fn clone(&self) -> Self {
-        Self::new()
+        Self::construct()
     }
 }
 
@@ -104,8 +104,8 @@ impl VoxelModelSFTCompressedGpu {
     }
 }
 
-impl VoxelModelGpuImplConcrete for VoxelModelSFTCompressedGpu {
-    fn new() -> Self {
+impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
+    fn construct() -> Self {
         Self {
             side_length: 0,
             nodes_allocation: None,
@@ -118,7 +118,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelSFTCompressedGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
+impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         let Some(data_allocation) = &self.nodes_allocation else {
             return None;

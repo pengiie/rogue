@@ -5,14 +5,6 @@ use nalgebra::{Matrix3, Matrix4, UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    common::color::Color,
-    settings::{GraphicsSettings, Settings},
-};
-use crate::entity::{self, ecs_world::ECSWorld};
-use crate::material::material_gpu::MaterialBankGpu;
-use crate::resource::{Res, ResMut};
-use crate::window::{time::Time, window::Window};
 use super::{
     backend::{
         Binding, GfxBlendFactor, GfxBlendOp, GfxCullMode, GfxFilterMode, GfxFrontFace,
@@ -29,6 +21,21 @@ use super::{
         FrameGraphVertexFormat,
     },
     shader::ShaderCompiler,
+};
+use crate::window::{time::Time, window::Window};
+use crate::{
+    common::color::Color,
+    settings::{GraphicsSettings, Settings},
+};
+use crate::{
+    entity::{self, ecs_world::ECSWorld},
+    graphics::camera::Camera,
+    physics::transform::Transform,
+};
+use crate::{material::material_gpu::MaterialBankGpu, world::world_renderable::WorldRenderable};
+use crate::{
+    resource::{Res, ResMut},
+    voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -48,22 +55,22 @@ pub struct Renderer {
 // pub struct GraphConstantsEditorUI {
 //     pub buffer_vertex_buffer: &'static str,
 //     pub buffer_index_buffer: &'static str,
-// 
+//
 //     pub pipeline_raster_ui: &'static str,
 //     pub pipeline_raster_ui_info: FrameGraphRasterInfo<'static>,
 //     pub pass_ui: &'static str,
 // }
-// 
+//
 // pub struct GraphConstantsDebug3D {
 //     pub buffer_lines: &'static str,
 //     pub buffer_rings: &'static str,
 //     pub buffer_planes: &'static str,
-// 
+//
 //     pub pipeline_compute_shapes: &'static str,
 //     pub pipeline_compute_shapes_info: FrameGraphComputeInfo<'static>,
 //     pub pass_debug: &'static str,
 // }
-// 
+//
 // pub struct GraphConstantsNormalCalc {
 //     pub pipeline_compute_terrain: &'static str,
 //     pub pipeline_compute_terrain_info: FrameGraphComputeInfo<'static>,
@@ -71,41 +78,40 @@ pub struct Renderer {
 //     pub pipeline_compute_standalone_info: FrameGraphComputeInfo<'static>,
 //     pub pass_normal_calc: &'static str,
 // }
-// 
+//
 // pub struct GraphConstantsVoxel {
 //     pub buffer_terrain_acceleration_data: &'static str,
 //     pub buffer_model_info_data: &'static str,
 //     pub buffer_model_voxel_data: &'static str,
 // }
-// 
+//
 // pub struct GraphConstantsRT {
 //     pub image_size: &'static str,
 //     pub image_albedo: &'static str,
 //     pub image_depth: &'static str,
-// 
+//
 //     pub pipeline_compute_prepass: &'static str,
 //     pub pipeline_compute_prepass_info: FrameGraphComputeInfo<'static>,
 //     pub pass_prepass: &'static str,
-// 
+//
 //     pub pipeline_compute_gi_sample: &'static str,
 //     pub pipeline_compute_gi_sample_info: FrameGraphComputeInfo<'static>,
 //     pub pass_gi_sample: &'static str,
 // }
-// 
+//
 // pub struct GraphConstantsPostProcess {
 //     pub pipeline_compute_post_process: &'static str,
 //     pub pipeline_compute_post_process_info: FrameGraphComputeInfo<'static>,
 //     pub pass_post_process: &'static str,
 // }
-// 
+//
 pub struct GraphConstants {
     pub image_swapchain: &'static str,
     pub image_swapchain_size: &'static str,
 }
 
 impl Renderer {
-
-     pub const GRAPH: GraphConstants = GraphConstants {
+    pub const GRAPH: GraphConstants = GraphConstants {
         image_swapchain: "rogue_swapchain_image",
         image_swapchain_size: "rogue_swapchain_image_size",
     };
@@ -235,6 +241,10 @@ impl Renderer {
 
     pub fn set_frame_graph(&mut self, frame_graph: FrameGraph) {
         self.frame_graph = Some(frame_graph);
+    }
+
+    pub fn executor(&mut self) -> &mut dyn GraphicsBackendFrameGraphExecutor {
+        &mut *self.frame_graph_executor
     }
 
     // fn construct_frame_graph(gfx_settings: &GraphicsSettings) -> FrameGraph {
@@ -407,12 +417,10 @@ impl Renderer {
     ) {
         let renderer: &mut Renderer = &mut renderer;
 
-        let Some(frame_graph) = renderer
-            .frame_graph
-            .take() else {
-                log::error!("No frame graph has been submitted to the renderer.");
-                return;
-            };
+        let Some(frame_graph) = renderer.frame_graph.take() else {
+            log::error!("No frame graph has been submitted to the renderer.");
+            return;
+        };
         renderer.frame_graph_executor.begin_frame(frame_graph);
         renderer.acquired_swapchain = false;
     }
@@ -423,6 +431,8 @@ impl Renderer {
         ecs_world: Res<ECSWorld>,
         main_camera: Res<MainCamera>,
         material_bank_gpu: Res<MaterialBankGpu>,
+        world_gpu: ResMut<WorldRenderable>,
+        voxel_registry_gpu: Res<VoxelModelRegistryGpu>,
     ) {
         assert!(renderer.acquired_swapchain);
         // let content_size = ui
@@ -452,11 +462,13 @@ impl Renderer {
                 );
 
                 // FrameWorldInfo struct
-                if let Some((camera_local_transform, camera)) =
-                    ecs_world.get_main_camera(&main_camera).get()
-                {
-                    let camera_world_transform = ecs_world
-                        .get_world_transform(main_camera.camera().unwrap(), camera_local_transform);
+                if let Some(main_camera) = main_camera.camera() {
+                    let (camera_transform, camera) = ecs_world
+                        .query_one::<(&Transform, &Camera)>(main_camera)
+                        .get()
+                        .expect("Main camera should have a transform and camera component.");
+                    let camera_world_transform =
+                        ecs_world.get_world_transform(main_camera, camera_transform);
 
                     // let proj_view_matrix = camera.projection_matrix(backbuffer_aspect_ratio)
                     //     * camera_world_transform.to_view_matrix();
@@ -484,7 +496,6 @@ impl Renderer {
                         camera.far_plane(),
                     );
                 } else {
-                    log::error!("Main camera doesn't exist.");
                     writer.write_uniform_mat4(
                         "u_frame.world_info.camera.proj_view",
                         &Matrix4::zeros(),
@@ -529,56 +540,62 @@ impl Renderer {
                 );
 
                 // // Voxel entity bindings
-                // writer.write_binding(
-                //     "u_frame.voxel.entity_data.accel_buf",
-                //     *voxel_world_gpu.world_entity_acceleration_buffer(),
-                // );
-                // writer.write_uniform(
-                //     "u_frame.voxel.entity_data.entity_count",
-                //     voxel_world_gpu.rendered_voxel_model_entity_count(),
-                // );
+                writer.write_binding(
+                    "u_frame.voxel.entity_data.accel_buf",
+                    *world_gpu.entities_accel_buf(),
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.entity_data.entity_count",
+                    world_gpu.entities_accel_buf_count(),
+                );
 
                 // Voxel model bindings
-                // writer.write_binding(
-                //     "u_frame.voxel.model_info_data",
-                //     *voxel_world_gpu.world_voxel_model_info_buffer(),
-                // );
-                // let world_data_buffers = voxel_world_gpu
-                //     .world_data_buffers()
-                //     .into_iter()
-                //     .map(|b| Some(b))
-                //     .collect::<Vec<_>>();
-                // writer.write_binding_array(
-                //     "u_frame.voxel.model_voxel_data.model_voxel_data",
-                //     &world_data_buffers,
-                // );
-                // writer.write_binding_array(
-                //     "u_frame.voxel.model_voxel_data.model_voxel_data_rw",
-                //     &world_data_buffers,
-                // );
+                writer.write_binding(
+                    "u_frame.voxel.model_info_data",
+                    *voxel_registry_gpu.voxel_model_info_buffer(),
+                );
+                let world_data_buffers = voxel_registry_gpu
+                    .voxel_data_allocator()
+                    .buffers()
+                    .into_iter()
+                    .map(|b| Some(b))
+                    .collect::<Vec<_>>();
+                writer.write_binding_array(
+                    "u_frame.voxel.model_voxel_data.model_voxel_data",
+                    &world_data_buffers,
+                );
+                writer.write_binding_array(
+                    "u_frame.voxel.model_voxel_data.model_voxel_data_rw",
+                    &world_data_buffers,
+                );
 
                 // // Voxel terrain data
-                // writer.write_binding(
-                //     "u_frame.voxel.terrain.data",
-                //     *voxel_world_gpu.world_terrain_acceleration_buffer(),
-                // );
-                // writer.write_uniform(
-                //     "u_frame.voxel.terrain.side_length",
-                //     voxel_world_gpu.terrain_side_length(),
-                // );
-                // writer.write_uniform(
-                //     "u_frame.voxel.terrain.volume",
-                //     voxel_world_gpu.terrain_side_length().pow(3),
-                // );
-                // writer.write_uniform(
-                //     "u_frame.voxel.terrain.anchor",
-                //     voxel_world_gpu.renderable_chunks.terrain_anchor,
-                // );
-                // writer.write_uniform(
-                //     "u_frame.voxel.terrain.window_offset",
-                //     voxel_world_gpu.renderable_chunks.terrain_window_offset,
-                // );
+                writer.write_binding(
+                    "u_frame.voxel.terrain.region_data",
+                    *world_gpu.region_data_buffer(),
+                );
+                writer.write_binding(
+                    "u_frame.voxel.terrain.region_ptrs_window",
+                    *world_gpu.region_window_buffer(),
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.side_length",
+                    world_gpu.region_window_side_length(),
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.region_anchor",
+                    world_gpu.region_window_anchor(),
+                );
+                writer.write_uniform(
+                    "u_frame.voxel.terrain.region_offset",
+                    world_gpu.region_window_offset(),
+                );
             });
+    }
+
+    /// Size of the last acquired swapchain image.
+    pub fn swapchain_size(&self) -> Vector2<u32> {
+        self.swapchain_size
     }
 
     pub fn acquire_swapchain_image(

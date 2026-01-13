@@ -3,18 +3,24 @@ use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
     path::Path,
+    ptr::NonNull,
 };
 
 use rogue_macros::Resource;
 
+use super::{
+    flat::{VoxelModelFlat, VoxelModelFlatGpu},
+    sft::VoxelModelSFT,
+    sft_compressed::VoxelModelSFTCompressed,
+    sft_compressed_gpu::VoxelModelSFTCompressedGpu,
+    sft_gpu::VoxelModelSFTGpu,
+    thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
+    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl, VoxelModelImplMethods},
+};
 use crate::common::{
     archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
     dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable},
     freelist::{FreeList, FreeListHandle},
-};
-use crate::asset::{
-    asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
-    repr::voxel::any::VoxelModelAsset,
 };
 use crate::entity::{
     ecs_world::{ECSWorld, Entity},
@@ -25,14 +31,12 @@ use crate::resource::{Res, ResMut};
 use crate::voxel::{
     voxel_allocator::VoxelDataAllocator, voxel_events::EventVoxelRenderableEntityLoad,
 };
-use super::{
-    flat::{VoxelModelFlat, VoxelModelFlatGpu},
-    sft::VoxelModelSFT,
-    sft_compressed::VoxelModelSFTCompressed,
-    sft_compressed_gpu::VoxelModelSFTCompressedGpu,
-    sft_gpu::VoxelModelSFTGpu,
-    thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
-    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl, VoxelModelImplMethods},
+use crate::{
+    asset::{
+        asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
+        repr::voxel::any::VoxelModelAsset,
+    },
+    common::vtable,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -76,7 +80,7 @@ pub struct VoxelModelInfo {
 
 pub struct VoxelModelTypeInfo {
     // Vtable to VoxelModelImplMethods.
-    model_impl_vtable: *mut (),
+    model_impl_vtable: *const (),
     model_type_info: TypeInfoCloneable,
 }
 
@@ -90,6 +94,7 @@ pub struct VoxelModelRegistry {
     ///// Each archetype is (VoxelModel<T>)
     //standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
     pub voxel_model_types: HashMap<TypeId, VoxelModelTypeInfo>,
+    pub voxel_model_type_names: HashMap<String, TypeId>,
     pub voxel_model_data: HashMap<TypeId, DynVec>,
     pub voxel_model_info: FreeList<VoxelModelInfo>,
 
@@ -107,6 +112,7 @@ impl VoxelModelRegistry {
     pub fn new() -> Self {
         let mut s = Self {
             voxel_model_types: HashMap::new(),
+            voxel_model_type_names: HashMap::new(),
             voxel_model_data: HashMap::new(),
             voxel_model_info: FreeList::new(),
 
@@ -124,7 +130,33 @@ impl VoxelModelRegistry {
     }
 
     pub fn register_voxel_model_type<T: VoxelModelImpl>(&mut self) {
-        todo!();
+        let type_id = std::any::TypeId::of::<T>();
+        if self.voxel_model_types.contains_key(&type_id) {
+            return;
+        }
+
+        // Basically copied from `ECSWorld::register_game_component`.
+        // Safety: We never access the contents of the pointer, only extracting the vtable, so
+        // should be okay right? Use `without_provenance_mut` since this ptr isn't actually
+        // associated with a memory allocation.
+        let null = unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut::<T>(0x1234)) };
+        let dyn_ref = unsafe { null.as_ref() } as &dyn VoxelModelImplMethods;
+        // Safety: This reference is in fact a dyn ref.
+        let vtable_ptr = unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn VoxelModelImplMethods) };
+        self.voxel_model_types.insert(
+            type_id,
+            VoxelModelTypeInfo {
+                model_impl_vtable: vtable_ptr,
+                model_type_info: TypeInfoCloneable::new::<T>(),
+            },
+        );
+
+        let old = self
+            .voxel_model_type_names
+            .insert(T::NAME.to_owned(), type_id);
+        assert!(old.is_none(),
+                "{} voxel model type has a duplicate VoxelModelImpl::NAME with another already registered voxel model type with a different TypeId.", 
+                std::any::type_name::<T>());
     }
 
     //pub fn set_voxel_model_asset_path(
@@ -749,7 +781,10 @@ pub struct RenderableVoxelModelIter<'a> {
 impl<'a> std::iter::Iterator for RenderableVoxelModelIter<'a> {
     type Item = (
         VoxelModelId,
-        (&'a dyn VoxelModelImplMethods, &'a dyn VoxelModelGpuImpl),
+        (
+            &'a dyn VoxelModelImplMethods,
+            &'a dyn VoxelModelGpuImplMethods,
+        ),
     );
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -777,7 +812,7 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIter<'a> {
 
         let voxel_model_gpu_ref = {
             let fat_ptr = (ptrs[1].1, *curr_model_gpu_vtable);
-            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelGpuImpl;
+            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelGpuImplMethods;
 
             // TODO: Write why this is safe.
             unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
@@ -802,7 +837,7 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
         VoxelModelId,
         (
             &'a mut dyn VoxelModelImplMethods,
-            &'a mut dyn VoxelModelGpuImpl,
+            &'a mut dyn VoxelModelGpuImplMethods,
         ),
     );
 
@@ -831,7 +866,8 @@ impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
 
         let voxel_model_gpu_ref = {
             let fat_ptr = (ptrs[1].1, *curr_model_gpu_vtable);
-            let mut dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelGpuImpl;
+            let mut dyn_ptr_ptr =
+                std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelGpuImplMethods;
 
             // TODO: Write why this is safe.
             unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }

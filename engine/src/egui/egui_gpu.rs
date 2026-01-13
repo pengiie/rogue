@@ -5,12 +5,17 @@ use std::{
 
 use crate::graphics::{
     backend::{
-        GfxAddressMode, GfxBlitInfo, GfxFilterMode, GfxImageCreateInfo, GfxImageFormat,
-        GfxImageType, GfxImageWrite, GfxRenderPassAttachment, GfxSamplerCreateInfo,
-        GraphicsBackendDevice, GraphicsBackendRecorder, Image, ResourceId, Sampler,
+        GfxAddressMode, GfxBlendFactor, GfxBlendOp, GfxBlitInfo, GfxCullMode, GfxFilterMode,
+        GfxFrontFace, GfxImageCreateInfo, GfxImageFormat, GfxImageType, GfxImageWrite,
+        GfxRasterPipelineBlendStateAttachmentInfo, GfxRenderPassAttachment, GfxSamplerCreateInfo,
+        GfxVertexAttribute, GfxVertexAttributeFormat, GraphicsBackendDevice,
+        GraphicsBackendRecorder, Image, ResourceId, Sampler,
     },
     device::DeviceResource,
-    frame_graph::{FrameGraphContext, IntoFrameGraphResourceUntyped, Pass},
+    frame_graph::{
+        FrameGraphContext, FrameGraphRasterBlendInfo, FrameGraphRasterInfo, FrameGraphVertexFormat,
+        IntoFrameGraphResourceUntyped, Pass,
+    },
     renderer::Renderer,
 };
 use crate::resource::{Res, ResMut};
@@ -27,6 +32,7 @@ use rogue_macros::Resource;
 pub struct EguiGpuGraphConstants {
     pub pass_name: &'static str,
     pub raster_pipeline_name: &'static str,
+    pub raster_pipeline_info: FrameGraphRasterInfo<'static>,
     pub vertex_buffer_name: &'static str,
     pub index_buffer_name: &'static str,
 }
@@ -53,8 +59,7 @@ pub struct EguiGpu {
     ui_textures: HashMap<egui::TextureId, (ResourceId<Image>, ResourceId<Sampler>)>,
     ui_samplers: HashMap<egui::TextureOptions, ResourceId<Sampler>>,
 
-    input_framebuffer: Option<FrameGraphResource<Image>>,
-    output_framebuffer: Option<FrameGraphResource<Image>>,
+    graph_framebuffer: Option<FrameGraphResource<Image>>,
 
     last_required_vertex_size: usize,
     last_required_index_size: usize,
@@ -67,6 +72,42 @@ impl EguiGpu {
     const GRAPH: EguiGpuGraphConstants = EguiGpuGraphConstants {
         pass_name: "egui_ui_pass",
         raster_pipeline_name: "egui_ui_raster_pipeline",
+        raster_pipeline_info: FrameGraphRasterInfo {
+            vertex_shader_path: "egui",
+            vertex_entry_point_fn: "main_vs",
+            fragment_shader_path: "egui",
+            fragment_entry_point_fn: "main_fs",
+            vertex_format: FrameGraphVertexFormat {
+                attributes: &[
+                    GfxVertexAttribute {
+                        location: 0,
+                        format: GfxVertexAttributeFormat::Float2,
+                    },
+                    GfxVertexAttribute {
+                        location: 1,
+                        format: GfxVertexAttributeFormat::Float2,
+                    },
+                    GfxVertexAttribute {
+                        location: 2,
+                        format: GfxVertexAttributeFormat::Uint,
+                    },
+                ],
+            },
+            blend_state: FrameGraphRasterBlendInfo {
+                attachments: &[GfxRasterPipelineBlendStateAttachmentInfo {
+                    enable_blend: true,
+                    // Egui uses premultiplied alpha colors which is why we use `One`.
+                    src_color_blend_factor: GfxBlendFactor::One,
+                    dst_color_blend_factor: GfxBlendFactor::OneMinusSrcAlpha,
+                    color_blend_op: GfxBlendOp::Add,
+                    src_alpha_blend_factor: GfxBlendFactor::One,
+                    dst_alpha_blend_factor: GfxBlendFactor::Zero,
+                    alpha_blend_op: GfxBlendOp::Add,
+                }],
+            },
+            cull_mode: GfxCullMode::None,
+            front_face: GfxFrontFace::Clockwise,
+        },
         vertex_buffer_name: "egui_ui_vertex_buffer",
         index_buffer_name: "egui_ui_index_buffer",
     };
@@ -75,8 +116,7 @@ impl EguiGpu {
         return Self {
             ui_textures: HashMap::new(),
             ui_samplers: HashMap::new(),
-            input_framebuffer: None,
-            output_framebuffer: None,
+            graph_framebuffer: None,
             last_required_vertex_size: 0,
             last_required_index_size: 0,
             ui_render_prims: Vec::new(),
@@ -84,27 +124,38 @@ impl EguiGpu {
         };
     }
 
-    pub fn write_graph_egui_pass(
+    pub fn set_graph_egui_pass(
         &mut self,
         fg: &mut FrameGraphBuilder,
-        input_framebuffer: impl IntoFrameGraphResource<Image>,
-        output_framebuffer: impl IntoFrameGraphResource<Image>,
+        framebuffer: impl IntoFrameGraphResource<Image>,
         dependencies: &[&FrameGraphResource<Pass>],
     ) -> FrameGraphResource<Pass> {
-        let input_framebuffer = input_framebuffer.handle(fg);
-        let output_framebuffer = output_framebuffer.handle(fg);
+        let framebuffer = framebuffer.handle(fg);
         let mut inputs = dependencies
             .into_iter()
             .map(|x| *x as &dyn IntoFrameGraphResourceUntyped)
             .collect::<Vec<_>>();
-        inputs.push(&input_framebuffer);
-        let outputs = [&output_framebuffer] as [&dyn IntoFrameGraphResourceUntyped; _];
-        self.input_framebuffer = Some(input_framebuffer);
-        self.output_framebuffer = Some(output_framebuffer);
+        inputs.push(&framebuffer);
+
+        let raster_pipeline = fg.create_raster_pipeline(
+            Self::GRAPH.raster_pipeline_name,
+            Self::GRAPH.raster_pipeline_info,
+            &[&framebuffer],
+            None,
+        );
+        inputs.push(&raster_pipeline);
+
+        let vertex_buffer = fg.create_frame_buffer(Self::GRAPH.vertex_buffer_name);
+        let index_vuffer = fg.create_frame_buffer(Self::GRAPH.index_buffer_name);
+        inputs.push(&vertex_buffer);
+        inputs.push(&index_vuffer);
+
+        let outputs = [&framebuffer] as [&dyn IntoFrameGraphResourceUntyped; _];
+        self.graph_framebuffer = Some(framebuffer);
         fg.create_input_pass(Self::GRAPH.pass_name, &inputs, &outputs)
     }
 
-    pub fn write_debug_ui_render_data(
+    pub fn write_render_data(
         mut ui_pass: ResMut<EguiGpu>,
         mut renderer: ResMut<Renderer>,
         mut device: ResMut<DeviceResource>,
@@ -300,25 +351,18 @@ impl EguiGpu {
         egui: Res<Egui>,
     ) {
         let egui_gpu: &mut EguiGpu = &mut egui_gpu;
-        let input_image_handle = egui_gpu.input_framebuffer.as_ref().expect(
-            "Should not be writing egui pass without setting it up in the render graph first.",
-        );
-        let output_image_handle = egui_gpu.output_framebuffer.as_ref().expect(
+        let framebuffer_image_handle = egui_gpu.graph_framebuffer.as_ref().expect(
             "Should not be writing egui pass without setting it up in the render graph first.",
         );
         renderer.frame_graph_executor.supply_pass_ref(
             Self::GRAPH.pass_name,
             &mut |recorder: &mut dyn GraphicsBackendRecorder, ctx: &FrameGraphContext<'_>| {
-                let input_image = ctx.get_image(input_image_handle);
-                let input_image_info = recorder.get_image_info(&input_image);
-                let output_image = ctx.get_image(output_image_handle);
-                let output_image_info = recorder.get_image_info(&output_image);
-
-                recorder.clear_color(output_image, Color::new_srgb(0.0, 0.0, 0.0));
+                let framebuffer_image = ctx.get_image(framebuffer_image_handle);
+                let framebuffer_image_info = recorder.get_image_info(&framebuffer_image);
 
                 // Backbuffer is already sized correctly according to the padding.
-                let dst_offset = egui.content_padding.zx().map(|x| x as u32);
-                recorder.blit(GfxBlitInfo { src: input_image, src_offset: Vector2::zeros(), src_length: input_image_info.resolution_xy(), dst:output_image, dst_offset, dst_length: input_image_info.resolution_xy(), filter: GfxFilterMode::Linear });
+//                let dst_offset = egui.content_padding.zx().map(|x| x as u32);
+//                recorder.blit(GfxBlitInfo { src: input_image, src_offset: Vector2::zeros(), src_length: input_image_info.resolution_xy(), dst:output_image, dst_offset, dst_length: input_image_info.resolution_xy(), filter: GfxFilterMode::Linear });
 
                 if egui_gpu.ui_render_prims.is_empty() {
                     return;
@@ -330,10 +374,11 @@ impl EguiGpu {
 
                 let raster_pipeline =
                     ctx.get_raster_pipeline(Self::GRAPH.raster_pipeline_name);
-                let mut render_pass = recorder.begin_render_pass(raster_pipeline, &[GfxRenderPassAttachment::new_load(output_image)], None);
+                let mut render_pass = recorder.begin_render_pass(raster_pipeline, &[GfxRenderPassAttachment::new_load(framebuffer_image)], None);
 
                 let pixels_per_point = egui_gpu.pixels_per_egui_point;
-                let logical_screen_size = Vector2::new(output_image_info.resolution.x as f32 / pixels_per_point, output_image_info.resolution.y as f32 / pixels_per_point);
+                        let framebuffer_size = framebuffer_image_info.resolution_xy();
+                let logical_screen_size = framebuffer_size.xy().cast::<f32>() * (1.0 / pixels_per_point);
                 for EguiRenderPrim {
                     clip_rect,
                     vertex_slice,
@@ -361,11 +406,10 @@ impl EguiGpu {
                         let clip_max_y = clip_max_y.round() as u32;
 
                         // Clamp:
-                        let texture_size = output_image_info.resolution_xy();
-                        let clip_min_x = clip_min_x.clamp(0, texture_size.x);
-                        let clip_min_y = clip_min_y.clamp(0, texture_size.y);
-                        let clip_max_x = clip_max_x.clamp(clip_min_x, texture_size.x);
-                        let clip_max_y = clip_max_y.clamp(clip_min_y, texture_size.y);
+                        let clip_min_x = clip_min_x.clamp(0, framebuffer_size.x);
+                        let clip_min_y = clip_min_y.clamp(0, framebuffer_size.y);
+                        let clip_max_x = clip_max_x.clamp(clip_min_x, framebuffer_size.x);
+                        let clip_max_y = clip_max_y.clamp(clip_min_y, framebuffer_size.y);
                         render_pass.set_scissor(
                             clip_min_x,
                             clip_min_y,

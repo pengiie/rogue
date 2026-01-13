@@ -93,11 +93,11 @@ downcast!(dyn VoxelModelImplMethods);
 
 /// Function for constructing a voxel model gpu impl.
 pub type VoxelModelGpuConstructFnPtr = unsafe fn(/*dst_ptr: */ *mut u8);
-pub trait VoxelModelGpuImplConcrete: VoxelModelGpuImpl + Clone {
-    fn new() -> Self;
+pub trait VoxelModelGpuImpl: VoxelModelGpuImplMethods + Clone {
+    fn construct() -> Self;
 }
 
-pub trait VoxelModelGpuImpl: Send + Sync + Any {
+pub trait VoxelModelGpuImplMethods: Send + Sync + Any {
     // Returns the pointers required to traverse this data structure.
     // Can encode other model specific data here as well.
     fn aggregate_model_info(&self) -> Option<Vec<u32>>;
@@ -121,7 +121,7 @@ pub trait VoxelModelGpuImpl: Send + Sync + Any {
     fn deallocate(&mut self, allocator: &mut VoxelDataAllocator);
 }
 
-downcast!(dyn VoxelModelGpuImpl);
+downcast!(dyn VoxelModelGpuImplMethods);
 
 #[derive(Clone)]
 pub struct VoxelMaterialSet {

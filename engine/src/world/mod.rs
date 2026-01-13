@@ -6,4 +6,4 @@ pub use world::*;
 pub mod region;
 pub mod region_asset;
 pub mod region_map;
-pub mod terrain_renderable;
+pub mod world_renderable;

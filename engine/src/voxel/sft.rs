@@ -9,7 +9,7 @@ use super::{
     sft_gpu::VoxelModelSFTGpu,
     thc::VoxelModelTHCCompressed,
     voxel::{
-        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl,
         VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},

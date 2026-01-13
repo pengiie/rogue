@@ -2,13 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use nalgebra::Vector2;
 
+use super::device::{VulkanComputePipeline, VulkanContext, VulkanRasterPipeline};
 use crate::common::color::{Color, ColorSpaceSrgb};
 use crate::graphics::backend::{
-    Buffer, ComputePass, ComputePipeline, GfxBlitInfo, GfxImageInfo,
-    GfxRenderPassAttachment, GraphicsBackendComputePass, GraphicsBackendRecorder,
-    GraphicsBackendRenderPass, Image, RasterPipeline, RenderPass, ResourceId, ShaderWriter,
+    Buffer, ComputePass, ComputePipeline, GfxBlitInfo, GfxImageInfo, GfxRenderPassAttachment,
+    GraphicsBackendComputePass, GraphicsBackendRecorder, GraphicsBackendRenderPass, Image,
+    RasterPipeline, RenderPass, ResourceId, ShaderWriter,
 };
-use super::device::{VulkanComputePipeline, VulkanContext, VulkanRasterPipeline};
 
 pub struct VulkanRecorder {
     ctx: Arc<VulkanContext>,
@@ -103,6 +103,12 @@ impl VulkanRecorder {
                     }
                     // TODO: Track the previous pipeline stage.
                     ash::vk::ImageLayout::GENERAL => ash::vk::PipelineStageFlags::ALL_COMMANDS,
+                    ash::vk::ImageLayout::PRESENT_SRC_KHR => {
+                        ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE
+                    }
+                    ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL => {
+                        ash::vk::PipelineStageFlags::ALL_GRAPHICS
+                    }
                     _ => todo!(),
                 });
 

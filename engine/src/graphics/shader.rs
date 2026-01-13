@@ -16,11 +16,11 @@ use nalgebra::{Vector, Vector3};
 use pollster::FutureExt;
 use rogue_macros::Resource;
 
-use crate::consts;
+use super::device::DeviceResource;
 use crate::asset::asset::{AssetFile, AssetLoadFuture, AssetLoader, Assets};
+use crate::consts;
 use crate::resource::ResMut;
 use crate::window::time::Instant;
-use super::device::DeviceResource;
 
 pub const SHADER_DIR: &'static str = "assets/shaders/";
 
@@ -968,6 +968,7 @@ impl ShaderPath {
         Self { path }
     }
 
+    /// Path in the form of dir::file
     pub fn new(path: String) -> anyhow::Result<Self> {
         let regex =
             regex::Regex::new(r"^(([a-zA-Z]+)(_[a-zA-Z]+)*)(::(([a-zA-Z]+)(_[a-zA-Z]+)*))*$")

@@ -10,7 +10,7 @@ public static const float TERRAIN_CHUNK_METER_LENGTH = METERS_PER_VOXEL * (float
 public static const uint TERRAIN_REGION_VOXEL_LENGTH = CONST_TERRAIN_REGION_VOXEL_LENGTH;
 public static const float TERRAIN_REGION_METER_LENGTH = METERS_PER_VOXEL * (float) TERRAIN_REGION_VOXEL_LENGTH;
 
-public static const uint VOXEL_MODEL_SCHEMA_ESVO = CONST_VOXEL_MODEL_SCHEMA_ESVO;
+public static const uint VOXEL_MODEL_SCHEMA_ESVO = 1;
 public static const uint VOXEL_MODEL_SCHEMA_FLAT = 2;
 // Relates to consts::voxel::MODEL_THC_COMPRESSED_SCHEMA.
 public static const uint VOXEL_MODEL_SCHEMA_THC = 3;

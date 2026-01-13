@@ -21,11 +21,11 @@ rogue_engine = { path = "../engine" }
 # 
 # # Egui
 # catppuccin-egui = { version = "5.5.0", default-features = false, features = ["egui31"] }
-# egui = { version = "0.31.1", features = ["bytemuck"] }
+egui = { version = "0.31.1", features = ["bytemuck"] }
 # egui_dock = "0.16"
 # egui_plot = "0.32.1"
 # egui-winit = { version = "0.31.1", default-features = false, features = [] }
-# epaint = { version = "0.31.1", features = ["bytemuck"] }
+epaint = { version = "0.31.1", features = ["bytemuck"] }
 # 
 # # Utility
 anyhow = { version = "1.0.89" }
@@ -48,7 +48,7 @@ serde_json = "1.0.140"
 # uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
 # 
 # # Math/physics
-# nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
+nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
 # noise = "0.9.0"
 # 
 # # Scripting

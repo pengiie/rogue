@@ -4,7 +4,7 @@ use super::{
     sft::VoxelModelSFT,
     sft_compressed::VoxelModelSFTCompressed,
     sft_compressed_gpu::VoxelModelSFTCompressedGpu,
-    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImplMethods},
+    voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImplMethods},
     voxel_allocator::VoxelDataAllocator,
 };
 
@@ -18,15 +18,15 @@ pub struct VoxelModelSFTGpu {
 
 impl Clone for VoxelModelSFTGpu {
     fn clone(&self) -> Self {
-        VoxelModelSFTGpu::new()
+        VoxelModelSFTGpu::construct()
     }
 }
 
-impl VoxelModelGpuImplConcrete for VoxelModelSFTGpu {
-    fn new() -> Self {
+impl VoxelModelGpuImpl for VoxelModelSFTGpu {
+    fn construct() -> Self {
         Self {
             compressed_model: None,
-            compressed_model_gpu: VoxelModelSFTCompressedGpu::new(),
+            compressed_model_gpu: VoxelModelSFTCompressedGpu::construct(),
 
             initialized_data: false,
             update_tracker: 0,
@@ -34,7 +34,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelSFTGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelSFTGpu {
+impl VoxelModelGpuImplMethods for VoxelModelSFTGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         self.compressed_model_gpu.aggregate_model_info()
     }
@@ -57,7 +57,7 @@ impl VoxelModelGpuImpl for VoxelModelSFTGpu {
             }
 
             self.compressed_model = Some(compressed_model);
-            self.compressed_model_gpu = VoxelModelSFTCompressedGpu::new();
+            self.compressed_model_gpu = VoxelModelSFTCompressedGpu::construct();
         }
 
         if let Some(compressed_model) = &self.compressed_model {

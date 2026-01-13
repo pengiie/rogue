@@ -11,12 +11,12 @@ use uuid::Uuid;
 use super::{
     scripting::ScriptableEntity, EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
 };
+use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
+use crate::asset::repr::project::ProjectSceneDeserializeContext;
 use crate::common::dyn_vec::TypeInfo;
 use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::common::geometry::obb::OBB;
 use crate::common::vtable;
-use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
-use crate::asset::repr::project::ProjectSceneDeserializeContext;
 use crate::entity::archetype::ComponentArchetype;
 use crate::entity::component::{
     Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentCloneContext,
@@ -24,18 +24,16 @@ use crate::entity::component::{
     GameComponentMethodsVtablePtr, GameComponentSerializeContext, GameComponentType,
 };
 use crate::entity::ecs_world;
-use crate::entity::query::{
-    Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne,
-};
+use crate::entity::query::{Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne};
 use crate::event::{EventReader, Events};
-use crate::physics::collider_component::EntityColliders;
-use crate::resource::ResMut;
-use crate::voxel::voxel_registry::VoxelModelRegistry;
-use crate::system::SystemParam;
 use crate::game;
 use crate::graphics::camera::{Camera, MainCamera};
+use crate::physics::collider_component::EntityColliders;
 use crate::physics::{rigid_body::RigidBody, transform::Transform};
+use crate::resource::ResMut;
+use crate::system::SystemParam;
 use crate::voxel::voxel::VoxelModelImplMethods;
+use crate::voxel::voxel_registry::VoxelModelRegistry;
 
 pub type Entity = FreeListHandle<EntityInfo>;
 pub struct EventEntityDespawn(pub Entity);
@@ -125,14 +123,6 @@ impl ECSWorld {
             }
         }
         return constructible;
-    }
-
-    pub fn total_kinetic_energy(&mut self) -> f32 {
-        let mut energy = 0.0;
-        for (_, rigid_body) in self.query_mut::<&RigidBody>().into_iter() {
-            energy += rigid_body.kinetic_energy();
-        }
-        return energy;
     }
 
     /// Returns a serde serializable object which holds references to the required data structures
@@ -865,14 +855,6 @@ impl ECSWorld {
         let archetype = &mut self.archetypes[entity_info.archetype_ptr];
         archetype.remove(entity_info.index);
         self.entities.remove(entity);
-    }
-
-    pub fn get_main_camera(&self, main_camera: &MainCamera) -> QueryOne<'_, (&Transform, &Camera)> {
-        self.query_one::<(&Transform, &Camera)>(
-            main_camera
-                .camera()
-                .expect("Main camera has not been set yet."),
-        )
     }
 
     pub fn get_world_transform(

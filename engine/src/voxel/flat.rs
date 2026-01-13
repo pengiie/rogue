@@ -16,7 +16,7 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     thc::VoxelModelTHCCompressed,
     voxel::{
-        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplConcrete, VoxelModelImpl,
+        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl,
         VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
@@ -746,8 +746,8 @@ impl VoxelModelFlatGpu {
     }
 }
 
-impl VoxelModelGpuImplConcrete for VoxelModelFlatGpu {
-    fn new() -> Self {
+impl VoxelModelGpuImpl for VoxelModelFlatGpu {
+    fn construct() -> Self {
         VoxelModelFlatGpu {
             flat_length: Vector3::zeros(),
             voxel_presence_allocation: None,
@@ -760,7 +760,7 @@ impl VoxelModelGpuImplConcrete for VoxelModelFlatGpu {
     }
 }
 
-impl VoxelModelGpuImpl for VoxelModelFlatGpu {
+impl VoxelModelGpuImplMethods for VoxelModelFlatGpu {
     fn aggregate_model_info(&self) -> Option<Vec<u32>> {
         let Some(voxel_presence_allocation) = &self.voxel_presence_allocation else {
             return None;

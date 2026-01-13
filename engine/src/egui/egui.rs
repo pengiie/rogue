@@ -14,11 +14,6 @@ pub struct Egui {
 
     textures_delta: Option<egui::TexturesDelta>,
     primitives: Vec<egui::ClippedPrimitive>,
-
-    /// How much padding there is for the screen backbuffer, used for the editor
-    /// so the game image is blitted onto the screen with the right size and position.
-    /// Top, Bottom, Left, Right
-    pub content_padding: Vector4<f32>,
 }
 
 impl Egui {
@@ -47,8 +42,6 @@ impl Egui {
 
             textures_delta: None,
             primitives: Vec::new(),
-
-            content_padding: Vector4::zeros(),
         }
     }
 

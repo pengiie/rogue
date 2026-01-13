@@ -3093,8 +3093,11 @@ dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "console_log",
+ "egui",
  "env_logger",
+ "epaint",
  "log",
+ "nalgebra",
  "rayon",
  "rogue_engine",
  "rogue_macros",
@@ -3160,6 +3163,7 @@ dependencies = [
 name = "rogue_macros"
 version = "0.1.0"
 dependencies = [
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.111",

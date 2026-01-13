@@ -6,6 +6,8 @@ use std::{
 
 use downcast::{downcast, Any};
 
+use crate::system::System;
+
 pub trait Resource: Any {}
 downcast!(dyn Resource);
 
@@ -61,5 +63,9 @@ impl ResourceBank {
     pub fn insert<R: Resource>(&mut self, resource: R) {
         self.resources
             .insert(TypeId::of::<R>(), RefCell::new(Box::new(resource)));
+    }
+
+    pub fn run_system<Marker>(&self, mut system: impl System<Marker>) {
+        system.run(self);
     }
 }

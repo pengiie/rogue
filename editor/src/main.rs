@@ -4,12 +4,23 @@ use std::path::PathBuf;
 
 use rogue_engine::{
     app::{App, AppCreateInfo, AppStage},
-    asset::asset::{AssetPath, Assets},
-    consts, impl_asset_load_save_serde,
+    asset::{
+        asset::{AssetPath, Assets},
+        repr::project::ProjectAsset,
+    },
+    consts,
+    egui::{egui_gpu::EguiGpu, Egui},
+    entity::ecs_world::ECSWorld,
+    impl_asset_load_save_serde,
+    resource::ResourceBank,
+    window::window::Window,
 };
 
-mod init;
+use crate::{render_graph::EditorRenderGraph, session::Session, ui::EditorUI};
+
 mod render_graph;
+pub mod session;
+pub mod ui;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct EditorUserSettingsAsset {
@@ -44,8 +55,56 @@ fn main() {
         last_project_dir: None,
     });
 
-    let mut app = App::new(AppCreateInfo { project: todo!() });
-    init::init_post_graphics(&mut app);
+    let project = editor_settings
+        .last_project_dir
+        .as_ref()
+        .map(|last_project_dir| {
+            ProjectAsset::from_existing_raw(last_project_dir, init_ecs_world())
+                .map_err(|err| {
+                    log::error!(
+                        "Error when trying to deserialize last project. Error: {:?}",
+                        err
+                    );
+                    err
+                })
+                .ok()
+        })
+        .flatten()
+        .unwrap_or_else(|| ProjectAsset::new_empty(init_ecs_world()));
+
+    let mut app = App::new(AppCreateInfo {
+        project,
+        post_graphics_fn: Some(Box::new(init_post_graphics)),
+    });
+
+    // Calls the immediate mode ui stuff.
+    app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);
+
+    app.insert_system(
+        AppStage::RenderWrite,
+        EditorRenderGraph::write_general_inputs,
+    );
+    // Write the images and vertex/index buffers to render the ui.
+    app.insert_system(AppStage::RenderWrite, EguiGpu::write_render_data);
+    // Write the render graph pass input for rasterizing the ui.
+    app.insert_system(AppStage::RenderWrite, EguiGpu::write_ui_pass);
 
     app.run_with_window();
+}
+
+fn init_post_graphics(rb: &mut ResourceBank) {
+    rb.insert(Session::new());
+    rb.insert(EditorUI::new());
+
+    let egui = Egui::new(&rb.get_resource::<Window>());
+    rb.insert(egui);
+    rb.insert(EguiGpu::new());
+
+    rb.run_system(EditorRenderGraph::init_render_graph);
+}
+
+fn init_ecs_world() -> ECSWorld {
+    let mut e = ECSWorld::new();
+    // TODO: Register game components
+    e
 }

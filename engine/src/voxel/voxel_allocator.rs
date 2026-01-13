@@ -166,6 +166,7 @@ impl VoxelDataAllocator {
         self.total_allocation_size -= allocation.length_bytes();
     }
 
+    /// Returns the buffer with each index corresponding to the shader binding array index.
     pub fn buffers(&self) -> Vec<ResourceId<Buffer>> {
         self.allocators
             .iter()
