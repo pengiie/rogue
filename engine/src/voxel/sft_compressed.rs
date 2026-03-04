@@ -12,14 +12,11 @@ use super::{
     voxel::{VoxelModelImpl, VoxelModelImplMethods},
 };
 use crate::common::geometry::ray::Ray;
-use crate::{
-    common::morton,
-    consts,
-};
 use crate::voxel::{
     attachment::{AttachmentMap, BuiltInMaterial},
     voxel::VoxelModelTrace,
 };
+use crate::{common::morton, consts};
 
 #[derive(Clone)]
 pub struct SFTNodeCompressed {
@@ -102,6 +99,10 @@ impl VoxelModelSFTCompressed {
             attachment_raw_data: AttachmentMap::new(),
             attachment_map: AttachmentMap::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.node_data[0].child_mask == 0
     }
 
     pub fn in_bounds_local(&self, local_position: Vector3<i32>) -> bool {
@@ -474,15 +475,33 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
 
         let attachment_info_map = flat.attachment_map.clone();
 
-        let mut node_list_rev: Vec<SFTNodeCompressed> = Vec::new();
+        // Under-estimate with 64 voxel per leaf node. This assumes each voxel perfectly fills
+        // up a leaf node but realistically the voxels will be sparse and there are internal
+        // nodes.
+        let mut reserved_estimate_node_count =
+            flat.presence_data.one_bits() / /*leaves per node*/64;
+        let mut node_list_rev: Vec<SFTNodeCompressed> =
+            Vec::with_capacity(reserved_estimate_node_count);
         let mut attachment_lookup_data: AttachmentMap<Vec<SFTAttachmentLookupNodeCompressed>> =
             AttachmentMap::new();
         for (attachment_id, _) in flat.attachment_map.iter() {
-            attachment_lookup_data.insert(attachment_id, Vec::new());
+            attachment_lookup_data.insert(
+                attachment_id,
+                Vec::with_capacity(reserved_estimate_node_count),
+            );
         }
         let mut attachment_raw_data: AttachmentMap<Vec<u32>> = AttachmentMap::new();
         for (attachment_id, _) in flat.attachment_map.iter() {
-            attachment_raw_data.insert(attachment_id, Vec::new());
+            // Attrachment per leaf node with this attachment.
+            let reserve_estimate = flat
+                .attachment_presence_data
+                .get(attachment_id)
+                .unwrap()
+                .one_bits();
+            // TODO: This estimate is bad since according to heaptrack we leak a lot with this if
+            // we don't shrink so try to figure out why the estimate is bad since to me it looks
+            // good idk.
+            attachment_raw_data.insert(attachment_id, Vec::with_capacity(reserve_estimate));
         }
 
         for i in 0..volume {
@@ -571,13 +590,13 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
                                 curr_lookup_node.data_ptr = attachment_ptr;
                             }
                         }
-                        SFTFlatNode::Child((child_node, child_lookup_node)) => {
+                        SFTFlatNode::Child((child_node, child_lookup_nodes)) => {
                             homogenous = false;
                             let child_bit = 1 << child_index;
                             child_mask |= child_bit;
                             child_ptr = node_list_rev.len() as u32;
                             node_list_rev.push(child_node);
-                            for (attachment_id, lookup_node) in child_lookup_node.into_iter() {
+                            for (attachment_id, lookup_node) in child_lookup_nodes.into_iter() {
                                 attachment_lookup_data
                                     .get_mut(attachment_id)
                                     .unwrap()
@@ -668,18 +687,21 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
         for (attachment_id, lookup_data) in attachment_lookup_data.iter_mut() {
             let raw_data = attachment_raw_data.get_mut(attachment_id).unwrap();
             let raw_data_len = raw_data.len() as u32;
-            for lookup_node in lookup_data.iter_mut() {
-                if raw_data_len == 0 {
-                    assert!(raw_data_len == 1);
+
+            if raw_data_len > 0 {
+                for lookup_node in lookup_data.iter_mut() {
+                    lookup_node.data_ptr = raw_data_len - 1 - lookup_node.data_ptr;
                 }
-                lookup_node.data_ptr = raw_data_len - 1 - lookup_node.data_ptr;
+                raw_data.reverse();
             }
 
             lookup_data.reverse();
-            raw_data.reverse();
         }
 
-        log::info!("Finished SFT compressed");
+        for (_, attachment_data) in attachment_raw_data.iter_mut() {
+            attachment_data.shrink_to_fit();
+        }
+
         return VoxelModelSFTCompressed {
             side_length: length,
             attachment_map: attachment_info_map,

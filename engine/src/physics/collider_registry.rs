@@ -1,14 +1,8 @@
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
-use nalgebra::Vector3;
-use crate::common::{
-    dyn_vec::{DynVecCloneable, TypeInfoCloneable},
-    vtable,
-};
 use crate::entity::ecs_world::{ECSWorld, Entity};
 use crate::physics::{
-    box_collider::{self, BoxCollider}
-    ,
+    box_collider::{self, BoxCollider},
     collider::{
         Collider, ColliderDeserializeFnPtr, ColliderIntersectionTest,
         ColliderIntersectionTestCaller, ColliderMethods, ContactManifold,
@@ -17,6 +11,14 @@ use crate::physics::{
     transform::Transform,
 };
 use crate::world::region_map::RegionMap;
+use crate::{
+    common::{
+        dyn_vec::{DynVecCloneable, TypeInfoCloneable},
+        vtable,
+    },
+    world::region_map::RegionPos,
+};
+use nalgebra::Vector3;
 
 // The Collider::NAME lexographically sorted so a < b.
 #[derive(Hash, PartialEq, Eq)]
@@ -192,8 +194,8 @@ impl ColliderRegistry {
             let world_transform = ecs_world.get_world_transform(entity, transform);
             for collider_id in &colliders.colliders {
                 let aabb = self.get_collider_dyn(collider_id).aabb(&world_transform);
-                let region_min = RegionMap::world_to_region_pos(&aabb.min);
-                let region_max = RegionMap::world_to_region_pos(&aabb.max);
+                let region_min = RegionPos::from_world_pos(&aabb.min);
+                let region_max = RegionPos::from_world_pos(&aabb.max);
                 for region_x in region_min.x..=region_max.x {
                     for region_y in region_min.y..=region_max.y {
                         for region_z in region_min.z..=region_max.z {

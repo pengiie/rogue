@@ -5,9 +5,8 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::world::region_map::RegionMap;
+use crate::{material::MaterialBankDeserializer, world::region_map::RegionMap};
 
-use serde::{ser::SerializeStruct, Deserializer};
 use crate::asset::{
     asset::{AssetPath, Assets},
     repr::TextAsset,
@@ -21,6 +20,7 @@ use crate::graphics::camera::MainCamera;
 use crate::material::{Material, MaterialBank};
 use crate::physics::physics_world::PhysicsWorld;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
+use serde::{ser::SerializeStruct, Deserializer};
 
 #[derive(Clone)]
 pub struct ProjectSettings {
@@ -66,6 +66,16 @@ pub struct ProjectAsset {
     pub material_bank: MaterialBank,
 }
 
+pub struct ProjectSerializeContext<'a> {
+    pub ecs_world: &'a ECSWorld,
+    pub physics_world: &'a PhysicsWorld,
+    pub voxel_registry: &'a VoxelModelRegistry,
+    pub material_bank: &'a MaterialBank,
+    pub main_camera: &'a MainCamera,
+    pub region_map: &'a RegionMap,
+    pub game_camera: Option<Entity>,
+}
+
 impl ProjectAsset {
     pub fn new_empty(ecs_world: ECSWorld) -> Self {
         Self {
@@ -84,7 +94,7 @@ impl ProjectAsset {
         ))?;
         let mut de = serde_json::Deserializer::from_str(&json_text.contents);
 
-        const FIELDS: [&str; 3] = ["editor_settings", "project_settings", "entities"];
+        const FIELDS: [&str; 3] = ["materials", "project_settings", "scene"];
         Ok(de.deserialize_struct(
             "project",
             &FIELDS,
@@ -95,25 +105,18 @@ impl ProjectAsset {
         )?)
     }
 
-    pub fn serialize(
-        ecs_world: &ECSWorld,
-        physics_world: &PhysicsWorld,
-        voxel_registry: &VoxelModelRegistry,
-        region_map: &RegionMap,
-        material_bank: &MaterialBank,
-        main_camera: &MainCamera,
-    ) -> anyhow::Result<TextAsset> {
+    pub fn serialize(context: ProjectSerializeContext<'_>) -> anyhow::Result<TextAsset> {
         let project_settings = ProjectSettings {
-            terrain_asset_path: region_map.regions_data_path.clone(),
-            game_camera: main_camera.camera(),
+            terrain_asset_path: context.region_map.regions_data_path.clone(),
+            game_camera: context.game_camera,
         };
 
         let mut str = serde_json::to_string_pretty(&ProjectSerializer {
-            project_settings: project_settings.as_serializable(ecs_world),
-            ecs_world,
-            physics_world,
-            voxel_registry,
-            material_bank,
+            project_settings: project_settings.as_serializable(context.ecs_world),
+            ecs_world: context.ecs_world,
+            physics_world: context.physics_world,
+            voxel_registry: context.voxel_registry,
+            material_bank: context.material_bank,
         })?;
         return Ok(TextAsset { contents: str });
     }
@@ -200,6 +203,7 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
                     if visited_scene {
                         return Err(serde::de::Error::duplicate_field("scene"));
                     }
+                    visited_scene = true;
                     let visitor = ProjectSceneVisitor {
                         ctx: &mut ProjectSceneDeserializeContext {
                             ecs_world: &mut ecs_world,
@@ -220,10 +224,9 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
                         return Err(serde::de::Error::duplicate_field("materials"));
                     }
                     visited_materials = true;
-                    let materials: Vec<Material> = map.next_value()?;
-                    for material in materials {
-                        material_bank.register_material(material);
-                    }
+                    map.next_value_seed(MaterialBankDeserializer {
+                        material_bank: &mut material_bank,
+                    })?;
                 }
             }
         }

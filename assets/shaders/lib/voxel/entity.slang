@@ -14,7 +14,7 @@ public struct EntityInfo {
 
 public struct RayEntityTest {
   public bool did_hit;
-  public float3 color;
+  public float3 albedo;
   public float3 normal;
   public float depth_t;
 
@@ -22,8 +22,8 @@ public struct RayEntityTest {
     return RayEntityTest(false, float3(0.0), 0.0);
   }
 
-  static RayEntityTest hit(float3 color, float3 normal, float depth_t) {
-    return RayEntityTest(true, color, normal, depth_t);
+  static RayEntityTest hit(float3 albedo, float3 normal, float depth_t) {
+    return RayEntityTest(true, albedo, normal, depth_t);
   }
 }
 
@@ -49,10 +49,10 @@ public struct EntityData {
       let hit_info = rotated_ray.test_aabb(entity_aabb);
 
       if(hit_info.hit) {
-        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr, entity_rotation);
-        if (model_test.did_hit && model_test.depth_t < min_test.depth_t) {
+        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr);
+        if (model_test.did_hit && model_test.ray_t.x < min_test.depth_t) {
           let world_normal = mul(transpose(entity_rotation), model_test.normal);
-          min_test = RayEntityTest.hit(model_test.color, world_normal, model_test.depth_t);
+          min_test = RayEntityTest.hit(model_test.albedo, world_normal, model_test.ray_t.x);
         }
       }
     }

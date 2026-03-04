@@ -3,7 +3,7 @@ use nalgebra::Vector4;
 use parking_lot::Mutex;
 use rogue_macros::Resource;
 
-use crate::window::window::Window;
+use crate::{resource::ResMut, window::window::Window};
 
 /// Rendering found in graphics/egui.rs
 #[derive(Resource)]
@@ -136,6 +136,11 @@ impl Egui {
             .run(raw_input, |ui| {
                 func(ui, window);
             });
+
+        // Update window cursor, open links, etc. from the egui output.
+        self.primary_state
+            .get_mut()
+            .handle_platform_output(window.handle(), full_output.platform_output);
 
         self.primitives = self
             .ctx

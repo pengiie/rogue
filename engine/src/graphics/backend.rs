@@ -17,14 +17,14 @@ use nalgebra::{Vector2, Vector3};
 use ron::to_string;
 use serde::{Deserialize, Serialize};
 
-use crate::common::color::{Color, ColorSpaceSrgb};
-use crate::event::Events;
-use crate::graphics::shader::{ShaderBinding, ShaderBindingType};
-use crate::window::window::{Window, WindowHandle};
 use super::{
     frame_graph::{FrameGraph, FrameGraphContext, FrameGraphContextImpl},
     shader::{Shader, ShaderCompiler, ShaderPath, ShaderSetBinding},
 };
+use crate::common::color::{Color, ColorSpaceSrgb};
+use crate::event::Events;
+use crate::graphics::shader::{ShaderBinding, ShaderBindingType};
+use crate::window::window::{Window, WindowHandle};
 
 #[derive(Clone)]
 pub enum GraphicsBackendEvent {
@@ -831,9 +831,7 @@ impl ShaderSetData {
 
     pub fn take_bindings(&mut self) -> HashMap<u32, Binding> {
         match self {
-            ShaderSetData::Defined {
-                ref mut bindings, ..
-            } => std::mem::replace(bindings, HashMap::new()),
+            ShaderSetData::Defined { bindings, .. } => std::mem::replace(bindings, HashMap::new()),
             ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call take_bindings() on cached uniform set data.")
             }
@@ -842,9 +840,7 @@ impl ShaderSetData {
 
     pub fn set_bindings(&mut self, in_bindings: HashMap<u32, Binding>) {
         match self {
-            ShaderSetData::Defined {
-                ref mut bindings, ..
-            } => *bindings = in_bindings,
+            ShaderSetData::Defined { bindings, .. } => *bindings = in_bindings,
             ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call set_bindings() on cached uniform set data.")
             }
@@ -853,10 +849,9 @@ impl ShaderSetData {
 
     pub fn take_uniform_data(&mut self) -> UniformSetData {
         match self {
-            ShaderSetData::Defined {
-                ref mut uniform_data,
-                ..
-            } => std::mem::replace(uniform_data, UniformSetData::new()),
+            ShaderSetData::Defined { uniform_data, .. } => {
+                std::mem::replace(uniform_data, UniformSetData::new())
+            }
             ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't take uniform data on a cached set.")
             }
@@ -865,10 +860,7 @@ impl ShaderSetData {
 
     pub fn set_uniform_data(&mut self, data: UniformSetData) {
         match self {
-            ShaderSetData::Defined {
-                ref mut uniform_data,
-                ..
-            } => *uniform_data = data,
+            ShaderSetData::Defined { uniform_data, .. } => *uniform_data = data,
             ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't set uniform data on a cached set.")
             }
@@ -886,10 +878,7 @@ impl ShaderSetData {
 
     pub fn uniform_data_mut(&mut self) -> &mut UniformSetData {
         match self {
-            ShaderSetData::Defined {
-                ref mut uniform_data,
-                ..
-            } => uniform_data,
+            ShaderSetData::Defined { uniform_data, .. } => uniform_data,
             ShaderSetData::CacheSlot(_) => {
                 panic!("Shouldn't call bindings() on cached uniform set data.")
             }

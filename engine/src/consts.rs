@@ -6,13 +6,13 @@ pub mod voxel {
     pub const TERRAIN_REGION_METER_LENGTH: f32 =
         TERRAIN_REGION_CHUNK_LENGTH as f32 * TERRAIN_CHUNK_METER_LENGTH;
     // Must be a power of 4 to be compatible with 64-trees.
-    pub const TERRAIN_REGION_CHUNK_LENGTH: u32 = 16;
+    pub const TERRAIN_REGION_CHUNK_LENGTH: u32 = 64;
     pub const TERRAIN_REGION_VOXEL_LENGTH: u32 =
         TERRAIN_REGION_CHUNK_LENGTH * TERRAIN_CHUNK_VOXEL_LENGTH;
     const _: () = {
         assert!(is_power_of_four(TERRAIN_REGION_CHUNK_LENGTH));
     };
-    pub const TERRAIN_REGION_TREE_HEIGHT: u32 = TERRAIN_REGION_CHUNK_LENGTH.trailing_zeros();
+    pub const TERRAIN_REGION_TREE_HEIGHT: u32 = TERRAIN_REGION_CHUNK_LENGTH.trailing_zeros() / 2;
 
     pub const TERRAIN_CHUNK_METER_LENGTH: f32 =
         TERRAIN_CHUNK_VOXEL_LENGTH as f32 * VOXEL_METER_LENGTH;
@@ -44,7 +44,6 @@ pub mod gfx {
 }
 
 pub mod io {
-    pub const EDITOR_USER_SETTINGS_FILE: &str = "editor::editor_settings::json";
     pub const GAME_USER_SETTINGS_FILE: &str = "user_settings::json";
 
     pub const REGION_FILE_HEADER: &str = "vcr ";

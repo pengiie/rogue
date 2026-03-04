@@ -1,15 +1,12 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::game_component;
 
-use crate::{
-    common::serde_util::impl_unit_type_serde,
-    game::player_controller::PlayerController,
-};
 use crate::entity::ecs_world::ECSWorld;
 use crate::input::{keyboard::Key, Input};
 use crate::physics::{rigid_body::RigidBody, transform::Transform};
 use crate::resource::{Res, ResMut};
 use crate::window::window::Window;
+use crate::{common::serde_util::impl_unit_type_serde, game::player_controller::PlayerController};
 
 #[derive(Clone)]
 #[game_component(name = "CameraController")]
@@ -39,7 +36,7 @@ impl CameraController {
     pub fn on_update(ecs_world: ResMut<ECSWorld>, input: Res<Input>, mut window: ResMut<Window>) {
         if input.is_key_pressed(Key::Escape) {
             let is_locked = window.is_cursor_locked();
-            window.set_curser_lock(!is_locked);
+            window.set_cursor_lock(!is_locked);
         }
 
         let Some((camera_entity, (camera_transform, controller))) = ecs_world

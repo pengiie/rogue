@@ -33,8 +33,34 @@ impl Bitset {
         }
     }
 
+    pub fn one_bits(&self) -> usize {
+        self.data.iter().map(|x| x.count_ones() as usize).sum()
+    }
+
     pub fn get_bit(&self, bit: usize) -> bool {
         (self.data[bit / 32] & (1 << (bit % 32))) > 0
+    }
+
+    // Starting with the most lsb for values.
+    pub fn set_bits(&mut self, start_bit: usize, count: u32, values: u32) {
+        assert!(
+            start_bit + count as usize <= self.bits,
+            "Cannot set bits out of range of this bitset."
+        );
+        assert!(
+            values.leading_zeros() >= 32 - count,
+            "Values cannot contain more bits than in count, unused bits should be zero."
+        );
+        let n = start_bit / 32;
+        let bit_offset = start_bit as u32 % 32;
+        let mask = (1u32 << count) - 1;
+        self.data[n] &= !(mask << bit_offset);
+        self.data[n] |= (values & mask) << bit_offset;
+        if bit_offset + count > 32 {
+            let remaining_bits = count - (32 - bit_offset);
+            self.data[n + 1] &= !((1 << remaining_bits) - 1);
+            self.data[n + 1] |= values >> (count - (remaining_bits as u32));
+        }
     }
 
     /// Length of the bitset in the number of bits.

@@ -37,6 +37,7 @@ pub struct Window {
     winit_window: WindowHandle,
     is_first_frame: bool,
     cursor_locked: bool,
+    locked_cursor_position: Option<(i32, i32)>,
 }
 
 impl raw_window_handle::HasDisplayHandle for Window {
@@ -84,6 +85,7 @@ impl Window {
             winit_window: WindowHandle::new(winit_window),
             is_first_frame: true,
             cursor_locked: false,
+            locked_cursor_position: None,
         }
     }
 
@@ -97,6 +99,10 @@ impl Window {
 
     pub fn is_cursor_locked(&self) -> bool {
         self.cursor_locked
+    }
+
+    pub fn update_cursor(&mut self) {
+        if self.cursor_locked {}
     }
 
     pub fn inner_size_vec2(&self) -> Vector2<u32> {
@@ -122,10 +128,20 @@ impl Window {
         }
     }
 
-    pub fn set_curser_lock(&mut self, locked: bool) {
+    pub fn set_cursor_lock(&mut self, locked: bool) {
         self.set_cursor_visible(!locked);
         self.set_cursor_grabbed(locked);
         self.cursor_locked = locked;
+    }
+
+    pub fn set_cursor_position(&mut self, position: Vector2<i32>) {
+        let _ = self
+            .winit_window
+            .set_cursor_position(winit::dpi::PhysicalPosition::new(position.x, position.y));
+    }
+
+    pub fn set_cursor_icon(&mut self, icon: winit::window::CursorIcon) {
+        self.winit_window.set_cursor(icon);
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {

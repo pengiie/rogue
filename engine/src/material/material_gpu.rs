@@ -3,23 +3,23 @@ use std::collections::{HashMap, HashSet};
 use nalgebra::Vector2;
 use rogue_macros::Resource;
 
-use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::asset::{
     asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
     repr::image::ImageAsset,
 };
+use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::event::{EventReader, Events};
 use crate::graphics::{
     backend::{
         Buffer, GfxAddressMode, GfxBufferCreateInfo, GfxFilterMode, GfxImageCreateInfo,
-        GfxImageFormat, GfxImageType, GfxImageWrite, GfxSamplerCreateInfo, Image,
-        ResourceId, Sampler,
+        GfxImageFormat, GfxImageType, GfxImageWrite, GfxSamplerCreateInfo, Image, ResourceId,
+        Sampler,
     },
     device::DeviceResource,
 };
 use crate::material::{
-    MaterialBank, MaterialCreateEvent, MaterialId, MaterialSamplerOptions,
-    MaterialTextureType, MaterialUpdateEvent,
+    MaterialBank, MaterialCreateEvent, MaterialId, MaterialSamplerOptions, MaterialTextureType,
+    MaterialUpdateEvent,
 };
 use crate::resource::{Res, ResMut};
 
@@ -122,7 +122,7 @@ impl MaterialBankGpu {
 
         // Not loaded yet, start loading.
         let image_asset_path =
-            asset_path.as_file_asset_path(assets.project_assets_dir().as_ref().unwrap());
+            asset_path.as_file_asset_path(assets.project_dir().as_ref().unwrap());
         let image_asset_handle = assets.load_asset::<ImageAsset>(image_asset_path);
         let loading_texture = LoadingTexture {
             asset_handle: image_asset_handle,
@@ -189,13 +189,16 @@ impl MaterialBankGpu {
                     finished_textures.push(loading_path.clone());
                 }
                 AssetStatus::NotFound => {
-                    log::error!("Failed to find texture asset at path {:?}", loading_path,);
+                    log::error!(
+                        "Failed to find texture asset at path {:?}",
+                        loading_texture.asset_handle
+                    );
                     finished_textures.push(loading_path.clone());
                 }
                 AssetStatus::Error(error) => {
                     log::error!(
                         "Failed while loading texture at path {:?}. Error: {}",
-                        loading_path,
+                        loading_texture.asset_handle,
                         error
                     );
                     finished_textures.push(loading_path.clone());

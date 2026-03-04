@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 
+use super::ecs_world::Entity;
+use crate::asset::asset::{AssetHandle, AssetPath, GameAssetPath};
+use crate::entity::component::GameComponentSerializeContext;
+use crate::entity::component::{GameComponent, GameComponentDeserializeContext};
+use crate::voxel::voxel_registry::VoxelModelId;
 use erased_serde::Serialize;
 use rogue_macros::game_component;
 use serde::de::DeserializeSeed;
 use uuid::serde::braced::serialize;
-use crate::asset::asset::{AssetHandle, AssetPath, GameAssetPath};
-use super::ecs_world::Entity;
-use crate::entity::component::GameComponentSerializeContext;
-use crate::voxel::voxel_registry::VoxelModelId;
-use crate::entity::component::{GameComponent, GameComponentDeserializeContext};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[game_component(name = "GameEntity", constructible = false)]

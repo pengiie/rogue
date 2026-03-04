@@ -1,7 +1,4 @@
-use nalgebra::{
-    AbstractRotation, Matrix4, Translation3
-    , UnitQuaternion, Vector3,
-};
+use nalgebra::{AbstractRotation, Matrix4, Translation3, UnitQuaternion, Vector3};
 use rogue_macros::game_component;
 
 use crate::common::geometry::aabb::AABB;

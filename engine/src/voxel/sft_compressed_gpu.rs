@@ -19,6 +19,7 @@ pub struct VoxelModelSFTCompressedGpu {
     attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
 
     initialized_data: bool,
+    invalidated_material: bool,
     update_tracker: u32,
 }
 
@@ -65,7 +66,6 @@ impl VoxelModelSFTCompressedGpu {
                 return false;
             }
             None => {
-                log::info!("SFT node data allocation");
                 let new_allocation = allocator
                     .allocate(device, required_size)
                     .expect("Failed to allocate voxel model data.");
@@ -93,7 +93,6 @@ impl VoxelModelSFTCompressedGpu {
                 return false;
             }
             None => {
-                log::info!("SFT attachment {:?} allocation data", attachment_id);
                 let new_allocation = allocator
                     .allocate(device, required_size)
                     .expect("Failed to allocate attachment data.");
@@ -105,6 +104,8 @@ impl VoxelModelSFTCompressedGpu {
 }
 
 impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
+    const SCHEMA: u32 = 0;
+
     fn construct() -> Self {
         Self {
             side_length: 0,
@@ -113,6 +114,7 @@ impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
             attachment_raw_allocations: HashMap::new(),
 
             initialized_data: false,
+            invalidated_material: false,
             update_tracker: 0,
         }
     }
@@ -243,9 +245,14 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
     ) {
         let model = model.downcast_ref::<VoxelModelSFTCompressed>().unwrap();
 
+        let mut should_write_raw_data = self.invalidated_material;
+        self.invalidated_material = false;
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
         if !self.initialized_data && self.nodes_allocation.is_some() {
+            should_write_raw_data = true;
+            self.initialized_data = true;
+
             {
                 let mut node_data_packed = Vec::with_capacity(
                     model.node_data.len() * SFTNodeCompressed::U32_SIZE as usize,
@@ -286,7 +293,9 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
                 let lookup_data_bytes = bytemuck::cast_slice::<u32, u8>(&lookup_data_packed);
                 allocator.write_allocation_data(device, allocation, lookup_data_bytes);
             }
+        }
 
+        if should_write_raw_data {
             for (attachment, raw_data) in model.attachment_raw_data.iter() {
                 let allocation = self
                     .attachment_raw_allocations
@@ -300,9 +309,12 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
                 );
             }
 
-            self.initialized_data = true;
             return;
         }
+    }
+
+    fn invalidate_material(&mut self) {
+        self.invalidated_material = true;
     }
 
     fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {

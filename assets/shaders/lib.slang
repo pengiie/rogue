@@ -12,7 +12,7 @@ __include "lib/world.slang";
 
 __include "lib/voxel/allocator.slang";
 __include "lib/voxel/attachment.slang";
-__include "lib/voxel/common.slang";
+__include "lib/voxel/model.slang";
 __include "lib/voxel/entity.slang";
 __include "lib/voxel/flat.slang";
 __include "lib/voxel/sft.slang";

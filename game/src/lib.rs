@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use rogue_engine::{app::App, system::SystemErased};
 
 mod init;

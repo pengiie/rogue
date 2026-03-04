@@ -70,7 +70,6 @@ impl VoxelModelId {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct VoxelModelInfo {
-    pub name: String,
     pub model_type_id: std::any::TypeId,
     /// The index within the DynVec the model is assigned to.
     index: u64,
@@ -290,52 +289,20 @@ impl VoxelModelRegistry {
         }
     }
 
-    ///// Noop if model is already unloaded or doesn't exist.
-    //pub fn unload_model(&mut self, id: VoxelModelId, voxel_allocator: &mut VoxelDataAllocator) {
-    //    let info_handle = id.handle;
-    //    let Some(info) = self.voxel_model_info.get(info_handle) else {
-    //        return;
-    //    };
-    //    if info.gpu_type.is_some() {
-    //        let mut dynegpu = self.get_dyn_gpu_model_mut(id);
-    //        dyn_gpu.deallocate(voxel_allocator);
-
-    //        let info = self.voxel_model_info.get(info_handle).unwrap();
-    //        self.renderable_voxel_model_archtypes
-    //            .get_mut(&info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //            .remove(info.archetype_index);
-    //    } else {
-    //        self.standalone_voxel_model_archtypes
-    //            .get_mut(&info.model_type_id)
-    //            .unwrap()
-    //            .remove(info.archetype_index);
-    //    }
-    //    self.voxel_model_info.remove(info_handle);
-    //}
-
-    //fn convert_model<T: VoxelModelImplConcrete, C: VoxelModelImplConcrete + for<'a> From<&'a T>>(
-    //    &mut self,
-    //    renderable_voxel_model: &mut RenderableVoxelEntity,
-    //    info: &VoxelModelInfo,
-    //    original_id: VoxelModelId,
-    //) {
-    //    //let converted_model = C::from(voxel_world.registry.get_model::<T>(original_id));
-    //    //let converted_model_id = voxel_world
-    //    //    .registry
-    //    //    .register_renderable_voxel_model(&info.name, VoxelModel::new(converted_model));
-    //    //voxel_world
-    //    //    .registry
-    //    //    .set_voxel_model_asset_path(converted_model_id, info.asset_path.clone());
-    //    //renderable_voxel_model.set_model(converted_model_id);
-
-    //    ////voxel_world.to_update_normals.insert(converted_model_id);
-    //}
-    //
-
     pub fn register_voxel_model<T: VoxelModelImpl>(&mut self, voxel_model: T) -> VoxelModelId {
-        todo!()
+        let type_id = std::any::TypeId::of::<T>();
+        let data = self
+            .voxel_model_data
+            .entry(type_id)
+            .or_insert_with(|| DynVec::new(TypeInfo::new::<T>()));
+        let index = data.len() as u64;
+        data.push(voxel_model);
+        let voxel_id = self.voxel_model_info.push(VoxelModelInfo {
+            model_type_id: type_id,
+            index,
+            asset_path: None,
+        });
+        VoxelModelId::new(voxel_id)
     }
 
     pub fn register_voxel_model_asset(&mut self, asset: VoxelModelAsset) -> VoxelModelId {
@@ -523,7 +490,22 @@ impl VoxelModelRegistry {
     //}
 
     pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImplMethods {
-        todo!()
+        let info = self
+            .voxel_model_info
+            .get(id.handle)
+            .expect("Given id doesn't exist.");
+        let data = self
+            .voxel_model_data
+            .get(&info.model_type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+        let data_ptr = data.get_bytes(info.index as usize).as_ptr();
+        let vtable_ptr = self
+            .voxel_model_types
+            .get(&info.model_type_id)
+            .expect("Type should exist")
+            .model_impl_vtable;
+        // Safety: Dyn ref is just a fat pointer with ptr to data and ptr to the vtable.
+        return unsafe { std::mem::transmute((data_ptr, vtable_ptr)) };
     }
 
     pub fn get_dyn_model_mut<'a>(

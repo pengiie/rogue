@@ -55,14 +55,33 @@ public float3 octahedral_normal_decode(uint2 compressed, uint bits_per_component
 }
 
 public struct BMaterial {
-  public uint index;
+  public float3 albedo;
   public float3 normal;
 
+  public static bool is_bmaterial(uint comp) {
+    return (comp & 0x80000000) > 0;
+  }
+
   public static BMaterial decode(uint comp) {
-    let octahedral_coords = uint2((comp >> 16) & 0xFF, (comp >> 24) & 0xFF);
+    // 16 bits for normal.
+    let octahedral_coords = uint2((comp >> 15) & 0xFF, (comp >> 23) & 0xFF);
     let normal = octahedral_normal_decode(octahedral_coords, /*bits_per_component*/8);
-    let id = comp & 0xFFFF;
-    return BMaterial(id, normal);
+    // 565 encoding gives us 16 bits for color.
+    let r = (float) ((comp >> 10) & 0b11111) / 0b11111;
+    let g = (float) ((comp >> 5) & 0b11111) / 0b11111;
+    let b = (float) (comp & 0b11111) / 0b11111;
+
+    return BMaterial(float3(r, g, b), normal);
+  }
+
+  public uint encode() {
+    let octahedral_coords = octahedral_normal_encode(this.normal, /*bits_per_component*/8);
+    let normal_comp = ((octahedral_coords.x & 0xFF) << 15) | ((octahedral_coords.y & 0xFF) << 23);
+    let r = (uint) floor(this.albedo.x * 0b11111) & 0b11111;
+    let g = (uint) floor(this.albedo.y * 0b11111) & 0b11111;
+    let b = (uint) floor(this.albedo.z * 0b11111) & 0b11111;
+    let color_comp = (r << 10) | (g << 5) | b;
+    return normal_comp | color_comp | 0x80000000;
   }
 
   public static uint update_normals(uint compressed, float3 normal) {
@@ -72,18 +91,18 @@ public struct BMaterial {
     return compressed;
   }
 
-  public float3 calculate_color(int3 world_voxel_position) {
-    Material material = MaterialBank.get_material(this.index);
-    let tri = fract((float3) world_voxel_position * (consts::METERS_PER_VOXEL / 64));
+  //public float3 calculate_color(int3 world_voxel_position) {
+  //  Material material = MaterialBank.get_material(this.index);
+  //  let tri = fract((float3) world_voxel_position * (consts::METERS_PER_VOXEL / 64));
 
-    var weights = abs(normal);
-    weights /= (weights.x + weights.y + weights.z);
-  
-    let uv_x = material.get_color(tri.zy) * weights.x;
-    let uv_y = material.get_color(tri.xz) * weights.y;
-    let uv_z = material.get_color(tri.xy) * weights.z;
-    return (uv_x + uv_y + uv_z).xyz;
-  }
+  //  var weights = abs(normal);
+  //  weights /= (weights.x + weights.y + weights.z);
+  //
+  //  let uv_x = material.get_color(tri.zy) * weights.x;
+  //  let uv_y = material.get_color(tri.xz) * weights.y;
+  //  let uv_z = material.get_color(tri.xy) * weights.z;
+  //  return (uv_x + uv_y + uv_z).xyz;
+  //}
 
   float checker_pattern_t(int3 world_voxel_position) {
     world_voxel_position /= 4;

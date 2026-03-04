@@ -1,431 +1,567 @@
 {
-  "editor_camera_transform": {
-    "transform": {
-      "position": [
-        2.0139172,
-        43.67447,
-        -38.172073
-      ],
-      "rotation": [
-        -0.08947454,
-        0.047320656,
-        -0.0042558894,
-        -0.9948552
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    }
+  "project_settings": {
+    "terrain_asset_path": null,
+    "game_camera": "ccc6052b-8be8-4b82-91db-43b438589a65"
   },
-  "editor_camera": {
-    "camera": {
-      "fov": 1.5707964,
-      "near_plane": 0.01,
-      "far_plane": 10000.0
-    }
-  },
-  "rotation_anchor": [
-    0.0,
-    39.826794,
-    -17.05001
-  ],
-  "terrain_asset_path": "/home/nathan/dev/paratym/rogue/project_data/assets/terrain/sft_test",
-  "game_camera": "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
-  "game_entities": [
+  "materials": [
     {
-      "name": "ground_plane",
-      "uuid": "b5e456b1-c69f-4637-9079-91e5eea112ae",
-      "parent": null,
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.6630009,
-              31.634605,
-              -19.10953
-            ],
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RigidBody": {
-            "rigid_body_type": "Static",
-            "mass": 1.0,
-            "restitution": 1.0
-          }
-        },
-        {
-          "Colliders": {
-            "colliders": [
-              {
-                "collider_type": "Box",
-                "index": 1
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "camera",
-      "uuid": "3c4ec113-7ad1-4d5b-965c-a54cad62c466",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              4.73,
-              9.050012,
-              -13.050017
-            ],
-            "rotation": [
-              0.15102473,
-              -0.055179216,
-              0.008443591,
-              0.9869526
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.22
-            ]
-          }
-        },
-        {
-          "Camera": {
-            "fov": 1.5707964
-          }
-        }
-      ]
-    },
-    {
-      "name": "player",
-      "uuid": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "parent": null,
-      "children": [
-        "efc1972d-3265-4c87-86e6-9f806c84a522",
-        "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
-        "7c5659dc-4740-4447-86de-1cadd45a4be9",
-        "31841ea3-b0bd-4e41-9ac9-16c291460915",
-        "b595d7f1-d402-4c03-ac20-247a464b6244",
-        "ef50abac-9c19-49e5-b1ec-66b28ba62aec",
-        "3c4ec113-7ad1-4d5b-965c-a54cad62c466"
-      ],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.0,
-              54.899822,
-              -17.05001
-            ],
-            "rotation": [
-              0.0,
-              -0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "ScriptableEntity": {
-            "script_asset_paths": [
-              "scripts::test::lua"
-            ]
-          }
-        },
-        {
-          "RigidBody": {
-            "rigid_body_type": "Dynamic",
-            "mass": 1.0,
-            "restitution": 1.0
-          }
-        },
-        {
-          "Colliders": {
-            "colliders": [
-              {
-                "collider_type": "Box",
-                "index": 0
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "player_head",
-      "uuid": "efc1972d-3265-4c87-86e6-9f806c84a522",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.7000004,
-              2.1500006,
-              1.4799995
-            ],
-            "rotation": [
-              -0.30076587,
-              0.92841315,
-              -0.067229316,
-              -0.20752373
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_head::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": "player_body",
-      "uuid": "ef50abac-9c19-49e5-b1ec-66b28ba62aec",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.0,
-              0.0,
-              0.0
-            ],
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_torso::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": " player_arm_right",
-      "uuid": "42774a70-e8d5-475b-9c7e-ce6cba2b42bf",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              1.5047038,
-              0.31397337,
-              0.098401785
-            ],
-            "rotation": [
-              0.0,
-              0.0,
-              0.35224944,
-              0.93590456
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_arm::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": "player_arm_left",
-      "uuid": "7c5659dc-4740-4447-86de-1cadd45a4be9",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              -1.5023365,
-              0.37399668,
-              0.11634065
-            ],
-            "rotation": [
-              0.0,
-              0.0,
-              -0.39273807,
-              0.9196498
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_arm::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": "player_leg_right",
-      "uuid": "b595d7f1-d402-4c03-ac20-247a464b6244",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              0.39666516,
-              -1.3831187,
-              -0.5401012
-            ],
-            "rotation": [
-              0.284015,
-              0.0,
-              0.0,
-              0.9588185
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_arm::rvox"
-          }
-        }
-      ]
-    },
-    {
-      "name": "player_leg_left",
-      "uuid": "31841ea3-b0bd-4e41-9ac9-16c291460915",
-      "parent": "10857122-7467-4700-b661-d6c0d2d954e3",
-      "children": [],
-      "components": [
-        {
-          "Transform": {
-            "position": [
-              -0.25333482,
-              -1.7831185,
-              1.2598988
-            ],
-            "rotation": [
-              -0.2588188,
-              0.0,
-              0.0,
-              0.965925
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ]
-          }
-        },
-        {
-          "RenderableVoxelEntity": {
-            "model_asset_path": "models::player::player_arm::rvox"
-          }
-        }
-      ]
+      "id": 0,
+      "asset": {
+        "asset_path": "materials::grass::grass_mat::json"
+      }
     }
   ],
-  "collider_registry": {
-    "Box": [
+  "scene": {
+    "entities": [
       {
-        "obb": {
-          "aabb": {
-            "min": [
-              -1.92,
-              -5.9700003,
-              -1.55
-            ],
-            "max": [
-              1.92,
-              4.0299997,
-              1.55
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "738b3250-b9bd-4564-811a-737c16230e99"
+            }
+          },
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Static",
+              "mass": 1.0,
+              "restitution": 1.0,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
             ]
           },
-          "rotation": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "rotation_anchor": [
-            0.0,
-            0.0,
-            0.0
-          ]
-        }
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "953b55bb-ee0f-4172-8812-605c8741ae18",
+              "name": "Ground copy"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                -185.66,
+                0.0
+              ],
+              "rotation": [
+                -8.6478586e-8,
+                0.9238795,
+                6.9275856e-8,
+                0.3826835
+              ],
+              "scale": [
+                80.0,
+                80.0,
+                80.0
+              ]
+            }
+          }
+        ]
       },
       {
-        "obb": {
-          "aabb": {
-            "min": [
-              -11.95,
-              -0.35,
-              -8.17
-            ],
-            "max": [
-              11.95,
-              0.35,
-              8.17
+        "components": [
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Kinematic",
+              "mass": 1.0,
+              "restitution": 0.0,
+              "friction": 0.3,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
             ]
           },
-          "rotation": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "rotation_anchor": [
-            0.0,
-            0.0,
-            0.0
-          ]
-        }
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          },
+          {
+            "name": "PlayerController",
+            "data": null
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
+              "name": "Player"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                -14.0,
+                4.74999,
+                0.0
+              ],
+              "rotation": [
+                0.004363265,
+                0.0043632677,
+                -0.000019038454,
+                0.9999809
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Dynamic",
+              "mass": 1.0,
+              "restitution": 0.0,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "9d838daf-e1bd-4c40-855a-e525cbeeacae",
+              "name": "Cube"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                1.3999921,
+                4.3499866,
+                -9.849999
+              ],
+              "rotation": [
+                -0.46537736,
+                0.37480512,
+                0.5446571,
+                0.5884665
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Dynamic",
+              "mass": 1.0,
+              "restitution": 0.0,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "382bc762-0e3f-4636-8667-d1c2994b4f34",
+              "name": "Cube copy"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                1.190524,
+                9.667986,
+                8.775861
+              ],
+              "rotation": [
+                0.282557,
+                -0.83484143,
+                0.22186612,
+                -0.41711274
+              ],
+              "scale": [
+                2.0,
+                2.0,
+                2.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "738b3250-b9bd-4564-811a-737c16230e99",
+              "name": "terrain_group"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "CameraController",
+            "data": null
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "ccc6052b-8be8-4b82-91db-43b438589a65",
+              "name": "Camera"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                6.65,
+                -9.650015
+              ],
+              "rotation": [
+                0.19765733,
+                0.0,
+                0.0,
+                0.98027116
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "name": "Camera",
+            "data": {
+              "fov": 1.7453293,
+              "near_plane": 0.01,
+              "far_plane": 10000.0
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "SpinningPlatform",
+            "data": null
+          },
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "738b3250-b9bd-4564-811a-737c16230e99"
+            }
+          },
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Static",
+              "mass": 1.0,
+              "restitution": 1.0,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "BoxCollider",
+                "data": {
+                  "obb": {
+                    "aabb": {
+                      "min": [
+                        -2.0,
+                        -2.0,
+                        -2.0
+                      ],
+                      "max": [
+                        2.0,
+                        2.0,
+                        2.0
+                      ]
+                    },
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "rotation_anchor": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "cube::rvox"
+              },
+              "is_dynamic": false
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "2cc86ecf-308b-4ed0-b1fd-16c520387975",
+              "name": "Ground"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                15.0,
+                1.0,
+                15.0
+              ]
+            }
+          }
+        ]
       }
     ]
   }

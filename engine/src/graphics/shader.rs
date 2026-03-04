@@ -211,6 +211,10 @@ impl ShaderCompiler {
                 consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH.to_string(),
             );
             map.insert(
+                "CONST_TERRAIN_REGION_CHUNK_LENGTH".to_owned(),
+                consts::voxel::TERRAIN_REGION_CHUNK_LENGTH.to_string(),
+            );
+            map.insert(
                 "CONST_TERRAIN_REGION_VOXEL_LENGTH".to_owned(),
                 consts::voxel::TERRAIN_REGION_VOXEL_LENGTH.to_string(),
             );

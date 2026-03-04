@@ -1,8 +1,22 @@
 use rogue_engine::entity::ecs_world::ECSWorld;
 
-use crate::ui::EditorUIContext;
+use crate::ui::{
+    pane::{EditorUIPane, EditorUIPaneMethods},
+    EditorUIContext,
+};
 
-pub struct EntityPropertiesPane {}
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct EntityPropertiesPane;
+
+impl EditorUIPane for EntityPropertiesPane {
+    const ID: &'static str = "entity_properties";
+    const NAME: &'static str = "Entity Properties";
+
+    fn show(&mut self, ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
+        Self::title_bar(ui, ctx.ecs_world);
+        ui.add_space(16.0);
+    }
+}
 
 impl EntityPropertiesPane {
     fn title_bar(ui: &mut egui::Ui, ecs_world: &mut ECSWorld) {
@@ -39,10 +53,5 @@ impl EntityPropertiesPane {
             //    });
             //}
         });
-    }
-
-    pub fn show(ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
-        Self::title_bar(ui, ctx.ecs_world);
-        ui.add_space(16.0);
     }
 }

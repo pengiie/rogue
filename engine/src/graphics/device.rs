@@ -13,16 +13,16 @@ use wgpu::{
     Backends, DeviceDescriptor, Features, InstanceDescriptor, Limits, SurfaceConfiguration,
 };
 
-use crate::settings::{GraphicsSettings, Settings};
-use crate::event::Events;
-use crate::resource::{Res, ResMut};
-use crate::window::{
-    time::Instant,
-    window::{Window, WindowHandle},
-};
 use super::{
     backend::{GfxSwapchainInfo, GraphicsBackendDevice},
     vulkan::device::{VulkanCreateInfo, VulkanDevice},
+};
+use crate::event::Events;
+use crate::resource::{Res, ResMut};
+use crate::settings::{GraphicsSettings, Settings};
+use crate::window::{
+    time::Instant,
+    window::{Window, WindowHandle},
 };
 
 pub type GfxDevice = Box<dyn GraphicsBackendDevice>;
@@ -59,7 +59,9 @@ impl DeviceResource {
         let device = if cfg!(target_arch = "wasm32") {
             unimplemented!("Wasm target not supported yet (if ever).");
         } else {
-            let enable_debug = std::env::var("ROGUE_GFX_DEBUG").is_ok();
+            let enable_debug = std::env::var("ROGUE_GFX_DEBUG")
+                .map(|v| v == "1")
+                .unwrap_or(false);
             VulkanDevice::init(VulkanCreateInfo {
                 window,
                 swapchain_info: GfxSwapchainInfo {

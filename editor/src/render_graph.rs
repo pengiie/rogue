@@ -42,7 +42,7 @@ impl EditorRenderGraph {
 
         renderer
             .executor()
-            .supply_input(Self::GRAPH.backbuffer_blit_offset_input, Box::new(pad.zy()));
+            .supply_input(Self::GRAPH.backbuffer_blit_offset_input, Box::new(pad.zx()));
     }
 
     pub fn init_render_graph(
@@ -61,6 +61,9 @@ impl EditorRenderGraph {
             .create_frame_image_with_ctx(Self::GRAPH.backbuffer_depth_name, move |ctx| {
                 FrameGraphImageInfo::new_r16float(ctx.get_vec2(backbuffer_size_input))
             });
+
+        // World model material baking pass
+        let bake_pass = world_gpu.set_graph_bake_pass(&mut fg);
 
         // World render pass, draws the terrain and entities.
         world_gpu.set_graph_render_pass(&mut fg, backbuffer, backbuffer_depth);
@@ -101,6 +104,9 @@ impl EditorRenderGraph {
 
         fg.present_image(swapchain_image);
 
-        renderer.set_frame_graph(fg.bake().expect("Frame graph has an error oops"));
+        renderer.set_frame_graph(
+            fg.bake().expect("Frame graph has an error oops"),
+            Self::GRAPH.backbuffer_size_input,
+        );
     }
 }

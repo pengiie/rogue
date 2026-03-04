@@ -1,7 +1,7 @@
 use std::io::BufReader;
 
-use nalgebra::Vector2;
 use crate::asset::asset::{AssetFile, AssetLoadError, AssetLoader};
+use nalgebra::Vector2;
 pub struct ImageAsset {
     pub data: Vec<u8>,
     pub format: ImageAssetFormat,
@@ -30,7 +30,10 @@ impl ImageAsset {
                 }
                 rgba_data
             }
-            ImageAssetFormat::RGBA => self.data.clone(),
+            ImageAssetFormat::RGBA => {
+                assert_eq!(self.data.len(), (self.size.x * self.size.y * 4) as usize);
+                self.data.clone()
+            }
         }
     }
 }
@@ -62,9 +65,21 @@ impl AssetLoader for ImageAsset {
 
                 let bytes = buf.into_boxed_slice()[0..info.buffer_size()].to_vec();
 
+                let format = match info.color_type {
+                    png::ColorType::Rgb => ImageAssetFormat::RGB,
+                    png::ColorType::Rgba => ImageAssetFormat::RGBA,
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Unsupported color type in png: {:?}",
+                            info.color_type
+                        )
+                        .into())
+                    }
+                };
+
                 Ok(ImageAsset {
                     data: bytes,
-                    format: ImageAssetFormat::RGBA,
+                    format,
                     size: Vector2::new(info.width, info.height),
                 })
             }

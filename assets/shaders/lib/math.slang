@@ -41,12 +41,16 @@ public struct Ray {
   }
 }
 
+public static int2 test_pixel = int2(0);
+
 public struct RayDDA {
   public int3 curr_grid;
   public int3 unit_grid;
   public float3 curr_t;
+  public float last_t;
   public float3 unit_t;
   public uint3 bounds;
+  public Ray normalized_ray;
 
   // Expects `in_ray` to be advanced to the aabb with an intersection
   // test prior to this in world-space, no epsilon is needed since it 
@@ -54,24 +58,28 @@ public struct RayDDA {
   public __init(Ray in_ray, AABB in_aabb, uint3 in_dda_bounds) {
     // Local-space position with the origin being the AABB minimum.
     let pos = in_ray.origin - in_aabb.min();
+    let aabb_test = in_ray.test_aabb(in_aabb);
+
     // Normalize the local-space to [0, 1), mapping from the AABB side length.
-    let norm_pos = clamp(pos / in_aabb.side_length(), 0.0, 0.99999);
+    let norm_pos = clamp(pos / in_aabb.side_length(), float3(0), float3(0.99999));
     // Turn the local-space position from [0, 1) to [0, in_dda_bounds).
     let norm_grid_pos = norm_pos * (float3) in_dda_bounds;
-    let norm_grid_ray = Ray(norm_grid_pos, in_ray.dir);
+    let norm_grid_dir = in_ray.dir;
+    normalized_ray = Ray(norm_grid_pos, norm_grid_dir);
 
     // Clamp the grid pos since `norm_grid_pos` can be `in_dda_bounds`
     // long though since we are indexing from 0 we must adjust this.
     curr_grid = (int3) floor(norm_grid_pos);
-    unit_grid = (int3) sign(in_ray.dir);
+    unit_grid = (int3) sign(normalized_ray.dir);
     // Selects are for fixing floating point divide by zero stuff.
     unit_grid = select(unit_grid == 0, int3(1), unit_grid); 
 
     let next_point = (float3) curr_grid + (/*Bit in parenthesis just maps [-1, 1] to [0, 1]*/
                                            (float3) unit_grid * 0.5 + 0.5);
-    curr_t = ray_point_test(norm_grid_ray, next_point);
-    curr_t = select(in_ray.dir == 0.0, float3(100000000.0), curr_t);
-    unit_t = abs(in_ray.inv_dir);
+    curr_t = ray_point_test(normalized_ray, next_point);
+    curr_t = select(normalized_ray.dir == 0.0, float3(100000000.0), curr_t);
+    last_t = 0.0;
+    unit_t = abs(normalized_ray.inv_dir);
     // TODO: Figure out why i need this, if the curr_t is correct then i dont need 
     // to worry about the unit_t, but it seems i still do, fix later i guess?
     unit_t = select(isinf(unit_t), float3(0.0), unit_t);
@@ -95,6 +103,7 @@ public struct RayDDA {
   [mutating]
   public void step() {
     let mask = this.curr_t <= min(curr_t.zxy, curr_t.yzx);
+    this.last_t = min3(this.curr_t.x, this.curr_t.y, this.curr_t.z);
     this.curr_grid += int3(mask) * this.unit_grid;
     this.curr_t += float3(mask) * this.unit_t;
   }

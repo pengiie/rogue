@@ -747,6 +747,8 @@ impl VoxelModelFlatGpu {
 }
 
 impl VoxelModelGpuImpl for VoxelModelFlatGpu {
+    const SCHEMA: u32 = u32::MAX;
+
     fn construct() -> Self {
         VoxelModelFlatGpu {
             flat_length: Vector3::zeros(),

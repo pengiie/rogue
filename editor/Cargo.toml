@@ -17,14 +17,14 @@ rogue_engine = { path = "../engine" }
 # raw-window-handle = "0.6.2"
 # shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs.git", rev = "60767e4" }
 # wgpu = { version = "22.1.0", features = ["webgpu", "vulkan-portability", "spirv"] }
-# winit = "0.30.5"
+winit = "0.30.5"
 # 
 # # Egui
 # catppuccin-egui = { version = "5.5.0", default-features = false, features = ["egui31"] }
 egui = { version = "0.31.1", features = ["bytemuck"] }
 # egui_dock = "0.16"
 # egui_plot = "0.32.1"
-# egui-winit = { version = "0.31.1", default-features = false, features = [] }
+egui-winit = { version = "0.31.1", default-features = false, features = [] }
 epaint = { version = "0.31.1", features = ["bytemuck"] }
 # 
 # # Utility
@@ -44,7 +44,9 @@ log = "0.4.21"
 # pollster = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
-# erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
+wide = "1.1.1"
+rand = "0.10.0"
+erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
 # uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
 # 
 # # Math/physics

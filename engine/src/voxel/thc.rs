@@ -587,6 +587,8 @@ impl Clone for VoxelModelTHCGpu {
 }
 
 impl VoxelModelGpuImpl for VoxelModelTHCGpu {
+    const SCHEMA: u32 = u32::MAX;
+
     fn construct() -> Self {
         Self {
             compressed_model: None,
@@ -911,6 +913,8 @@ impl Clone for VoxelModelTHCCompressedGpu {
 }
 
 impl VoxelModelGpuImpl for VoxelModelTHCCompressedGpu {
+    const SCHEMA: u32 = u32::MAX;
+
     fn construct() -> Self {
         Self {
             side_length: 0,

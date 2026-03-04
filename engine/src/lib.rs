@@ -16,6 +16,7 @@ pub mod graphics;
 pub mod init;
 pub mod input;
 pub mod material;
+pub mod noise;
 pub mod physics;
 pub mod resource;
 pub mod settings;

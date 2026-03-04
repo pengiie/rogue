@@ -26,7 +26,7 @@ impl RenderableChunks {
     pub fn new(render_distance: u32) -> Self {
         let side_length = render_distance * 2;
         Self {
-            side_length,
+            sede_length,
             chunk_model_pointers: vec![VoxelModelId::null(); side_length.pow(3) as usize],
             window_offset: Vector3::new(0, 0, 0),
             chunk_anchor: Vector3::new(0, 0, 0),

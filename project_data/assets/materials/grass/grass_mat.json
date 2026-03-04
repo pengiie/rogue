@@ -1,0 +1,6 @@
+{
+  "name": "Grass",
+  "color_texture": {
+    "asset_path": "materials::grass::grass_albedo::png"
+  }
+}

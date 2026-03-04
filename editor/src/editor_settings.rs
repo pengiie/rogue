@@ -1,0 +1,76 @@
+use std::path::PathBuf;
+
+use rogue_engine::{
+    asset::{
+        asset::{AssetPath, Assets},
+        repr::project::ProjectAsset,
+    },
+    impl_asset_load_save_serde, impl_asset_save_serde,
+};
+
+use crate::{init_ecs_world, ui::EditorUI};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct UserEditorSettingsAsset {
+    #[serde(default)]
+    pub last_project_dir: Option<PathBuf>,
+
+    /// Saved editor UI state.
+    #[serde(default = "EditorUI::new")]
+    pub editor_ui: EditorUI,
+}
+
+#[derive(serde::Serialize)]
+pub struct UserEditorSettingsAssetProxy<'a> {
+    pub last_project_dir: &'a Option<PathBuf>,
+    pub editor_ui: &'a EditorUI,
+}
+
+impl_asset_load_save_serde!(UserEditorSettingsAsset);
+impl_asset_save_serde!(UserEditorSettingsAssetProxy<'_>);
+
+impl UserEditorSettingsAsset {
+    const ASSET_PATH: &str = "editor::editor_settings::json";
+
+    pub fn load_editor_settings() -> Self {
+        let editor_settings_path = AssetPath::new_user_dir(Self::ASSET_PATH);
+        log::info!(
+            "Looking for editor user settings at {:?}",
+            editor_settings_path
+        );
+        Assets::load_asset_sync::<UserEditorSettingsAsset>(editor_settings_path).unwrap_or(Self {
+            last_project_dir: None,
+            editor_ui: EditorUI::new(),
+        })
+    }
+
+    pub fn load_project(&self) -> ProjectAsset {
+        log::info!(
+            "Trying to load last project from editor settings at {:?}",
+            self.last_project_dir
+        );
+        self.last_project_dir
+            .as_ref()
+            .map(|last_project_dir| {
+                log::info!("Deserializing last project at {:?}", last_project_dir);
+                ProjectAsset::from_existing_raw(last_project_dir, init_ecs_world())
+                    .map_err(|err| {
+                        log::error!(
+                            "Error when trying to deserialize last project. Error: {:?}",
+                            err
+                        );
+                        err
+                    })
+                    .ok()
+            })
+            .flatten()
+            .unwrap_or_else(|| ProjectAsset::new_empty(init_ecs_world()))
+    }
+}
+
+impl UserEditorSettingsAssetProxy<'_> {
+    pub fn save_settings(&self) {
+        let editor_settings_path = AssetPath::new_user_dir(UserEditorSettingsAsset::ASSET_PATH);
+        Assets::save_asset_sync(editor_settings_path, self).unwrap();
+    }
+}

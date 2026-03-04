@@ -7,11 +7,7 @@ use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
-use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
-use crate::input::Input;
-use crate::resource::{Res, ResMut, Resource, ResourceBank};
-use crate::system::{System, SystemErased};
-use crate::task::task_arbiter::TaskArbiter;
+use crate::task::tasks::Tasks;
 use crate::window::{time::Time, window::Window};
 use crate::{
     asset::{
@@ -28,6 +24,19 @@ use crate::{
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
 };
 use crate::{game_loop, settings::Settings};
+use crate::{
+    graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource},
+    world::region_map::RegionMap,
+};
+use crate::{input::Input, world::world_streaming::WorldStreamingOptions};
+use crate::{
+    resource::{Res, ResMut, Resource, ResourceBank},
+    world::world_streaming::WorldChunkStreamer,
+};
+use crate::{
+    system::{System, SystemErased},
+    world::sky::Sky,
+};
 
 enum AppEvent {
     Init { device: DeviceResource },
@@ -35,7 +44,9 @@ enum AppEvent {
 
 pub struct AppCreateInfo {
     pub project: ProjectAsset,
-    pub post_graphics_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
+    pub on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
+    pub on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent)>>,
+    pub on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent)>>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -63,7 +74,10 @@ pub struct App {
 
     resource_bank: ResourceBank,
     systems: HashMap<AppStage, Vec<SystemErased>>,
-    post_graphics_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
+
+    on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
+    on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent)>>,
+    on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent)>>,
 
     event_sender: Sender<AppEvent>,
     event_receiver: Receiver<AppEvent>,
@@ -85,13 +99,16 @@ impl App {
 
             resource_bank: ResourceBank::new(),
             systems: HashMap::new(),
-            post_graphics_fn: create_info.post_graphics_fn,
+
+            on_post_graphics_init_fn: create_info.on_post_graphics_init_fn,
+            on_window_event_fn: create_info.on_window_event_fn,
+            on_device_event_fn: create_info.on_device_event_fn,
 
             event_sender,
             event_receiver,
         };
 
-        app.insert_resource(TaskArbiter::new());
+        app.insert_resource(Tasks::new());
         app.insert_resource(Events::new());
         app.insert_resource(Scripts::new());
         app.insert_resource(Settings::from(&UserSettingsAsset::default()));
@@ -99,6 +116,7 @@ impl App {
         app.insert_resource(Time::new());
         app.insert_resource(Audio::new());
         app.insert_resource(MainCamera::new_empty());
+        app.insert_resource(Sky::new());
 
         let project = create_info.project;
         app.insert_resource(project.ecs_world);
@@ -106,6 +124,7 @@ impl App {
         app.insert_resource(project.physics_world);
         app.insert_resource(project.material_bank);
         app.insert_resource(Assets::new(project.project_dir));
+        app.insert_resource(RegionMap::new(None));
 
         app
     }
@@ -119,12 +138,13 @@ impl App {
         drop(device_resource);
         self.insert_resource(renderer);
         self.insert_resource(MaterialBankGpu::new());
+        self.insert_resource(WorldChunkStreamer::new(WorldStreamingOptions::default()));
 
         self.insert_resource(DebugRenderer::new());
         self.insert_resource(world_renderable);
         self.insert_resource(voxel_registry_gpu);
 
-        if let Some(init_fn) = &self.post_graphics_fn {
+        if let Some(init_fn) = &self.on_post_graphics_init_fn {
             (*init_fn)(&mut self.resource_bank);
         }
     }
@@ -205,19 +225,10 @@ impl winit::application::ApplicationHandler for App {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        // If egui exists then input exists.
-        //if self.resource_bank().has_resource::<Egui>() {
-        //    let window = self.resource_bank().get_resource::<Window>();
-        //    if !window.is_cursor_locked() {
-        //        let egui_consumed = self
-        //            .resource_bank()
-        //            .get_resource_mut::<Egui>()
-        //            .handle_window_event(&window, &event);
-        //        if egui_consumed {
-        //            return;
-        //        }
-        //    }
-        //}
+        if let Some(on_window_event_fn) = &self.on_window_event_fn {
+            (*on_window_event_fn)(&mut self.resource_bank, &event);
+        }
+
         if self.resource_bank().has_resource::<Input>() {
             self.resource_bank()
                 .get_resource_mut::<Input>()
@@ -301,6 +312,9 @@ impl winit::application::ApplicationHandler for App {
         device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
+        if let Some(on_device_event_fn) = &self.on_device_event_fn {
+            (*on_device_event_fn)(&mut self.resource_bank, &event);
+        }
         //if self.resource_bank().has_resource::<Input>() && self.resource_bank().has_resource::<UI>()
         //{
         //    let window = self.resource_bank().get_resource::<Window>();
@@ -324,7 +338,6 @@ impl winit::application::ApplicationHandler for App {
         //        }
         //    }
 
-        //}
         let mut input = self.resource_bank().get_resource_mut::<Input>();
         input.handle_winit_device_event(device_id, event);
     }

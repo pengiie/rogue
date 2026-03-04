@@ -23,6 +23,8 @@ impl Clone for VoxelModelSFTGpu {
 }
 
 impl VoxelModelGpuImpl for VoxelModelSFTGpu {
+    const SCHEMA: u32 = u32::MAX;
+
     fn construct() -> Self {
         Self {
             compressed_model: None,

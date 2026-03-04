@@ -388,15 +388,7 @@ impl FrameGraph {
         let mut used_passes = vec![];
         for pass_handle in builder.pass_order.iter().rev() {
             let mut pass_info = builder.passes.remove(&pass_handle).unwrap();
-            if !pass_info
-                .outputs
-                .iter()
-                .find(|output| required_resources.contains(*output))
-                .is_some()
-            {
-                // TODO: Figure out the buffer situation.
-                // continue;
-            }
+
             // Additional implicit inputs due to any raster pipeline inputs.
             let mut raster_image_inputs = Vec::new();
             for pass_input in &pass_info.inputs {

@@ -27,6 +27,7 @@ impl EventBank {
     pub fn new<T: 'static>(curr_frame_index: u32) -> Self {
         Self {
             curr_frame_index,
+            // Start at 1 since 0 acts as unread.
             event_id_tracker: 1,
             data: array::from_fn(|_| (0, DynVec::new(TypeInfo::new::<T>()))),
         }
@@ -66,11 +67,12 @@ impl<T: 'static> EventReader<T> {
 
     pub fn read<'a>(&'a mut self, events: &'a Events) -> EventReaderIter<T> {
         let event_bank = events.banks.get(&std::any::TypeId::of::<T>());
-        let last_event_id = self.last_event_id;
+        // Since event ids start at 0.
+        let curr_event_id = self.last_event_id + 1;
         EventReaderIter {
             event_reader: self,
             event_bank,
-            curr_event_id: last_event_id + 1,
+            curr_event_id,
             // Start with the opposite since it will have lower ids.
             curr_vec_index: (events.curr_frame_index + 1) % 2,
             marker: std::marker::PhantomData,

@@ -388,7 +388,7 @@ impl VulkanDevice {
         let entry = unsafe { ash::Entry::load() }?;
 
         let instance = {
-            let application_name = std::ffi::CString::new("Rogue").unwrap();
+            let application_name = std::ffi::CString::new("roxel").unwrap();
             let application_info = ash::vk::ApplicationInfo::default()
                 .engine_name(&application_name)
                 .application_name(&application_name)

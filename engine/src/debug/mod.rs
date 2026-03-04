@@ -1,11 +1,11 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::Resource;
 
-use crate::resource::{Res, ResMut};
-use crate::common::geometry::obb::OBB;
 use crate::common::color::{Color, ColorSpaceSrgb};
+use crate::common::geometry::obb::OBB;
 use crate::graphics::renderer::Renderer;
 use crate::input::Input;
+use crate::resource::{Res, ResMut};
 
 pub struct DebugGizmo {}
 
@@ -151,6 +151,9 @@ impl DebugRenderer {
         mut renderer: ResMut<Renderer>,
         input: Res<Input>,
     ) {
+        debug.debug_lines.clear();
+        debug.debug_rings.clear();
+        debug.debug_planes.clear();
         //let line_count = debug.debug_lines.len();
         //if line_count > 0 {
         //    let lines_byte_size = line_count * 48;

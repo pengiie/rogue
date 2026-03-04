@@ -21,7 +21,10 @@ use log::{debug, info};
 use regex::Regex;
 use rogue_macros::Resource;
 
-use crate::window::time::{Instant, Timer};
+use crate::{
+    asset::repr::project::{ProjectAsset, ProjectSerializeContext},
+    window::time::{Instant, Timer},
+};
 
 #[derive(Resource)]
 pub struct Assets {
@@ -114,12 +117,32 @@ impl Assets {
         }
     }
 
-    pub fn project_assets_dir(&self) -> &Option<PathBuf> {
+    pub fn project_dir(&self) -> &Option<PathBuf> {
         &self.project_dir
+    }
+
+    pub fn project_assets_dir(&self) -> Option<PathBuf> {
+        self.project_dir.as_ref().map(|dir| dir.join("assets"))
     }
 
     pub fn update(mut assets: ResMut<Assets>) {
         assets.update_impl();
+    }
+
+    pub fn save_project(&self, ser_context: ProjectSerializeContext<'_>) {
+        let project_dir = self
+            .project_dir
+            .as_ref()
+            .expect("Shouldn't save if no project exists.");
+        let project_asset_path = AssetPath::new_project_file(project_dir.clone());
+        let project_asset = match ProjectAsset::serialize(ser_context) {
+            Ok(ass) => ass,
+            Err(err) => {
+                log::error!("Error while trying to serialize project: {}", err);
+                return;
+            }
+        };
+        Self::save_asset_sync(project_asset_path, project_asset);
     }
 
     fn update_impl(&mut self) {
@@ -254,6 +277,14 @@ impl Assets {
                 }
             }
         }
+    }
+
+    pub fn save_asset_sync<T>(path: AssetPath, asset: T) -> anyhow::Result<()>
+    where
+        T: AssetSaver,
+    {
+        let storage = AssetFile::from_path(&path);
+        T::save(&asset, &storage)
     }
 
     pub fn load_asset_sync<T>(path: AssetPath) -> std::result::Result<T, AssetLoadError>
@@ -595,6 +626,50 @@ pub trait AssetSaver {
         Self: Sized;
 }
 
+#[macro_export]
+macro_rules! impl_asset_save_serde {
+    ($name:ty) => {
+        impl $crate::asset::asset::AssetSaver for $name {
+            fn save(data: &Self, out_file: &$crate::asset::asset::AssetFile) -> anyhow::Result<()>
+            where
+                Self: Sized,
+            {
+                match out_file.path().extension() {
+                    "json" => match out_file.write_contents(
+                        serde_json::to_string_pretty(data).expect("Failed to serialize."),
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(err) => match err.kind() {
+                            _ => Err(anyhow::anyhow!(err.to_string())),
+                        },
+                    },
+                    s => todo!("Support extension .{}", s),
+                }
+            }
+        }
+
+        impl $crate::asset::asset::AssetSaver for &'_ $name {
+            fn save(data: &Self, out_file: &$crate::asset::asset::AssetFile) -> anyhow::Result<()>
+            where
+                Self: Sized,
+            {
+                match out_file.path().extension() {
+                    "json" => match out_file.write_contents(
+                        serde_json::to_string_pretty(data).expect("Failed to serialize."),
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(err) => match err.kind() {
+                            _ => Err(anyhow::anyhow!(err.to_string())),
+                        },
+                    },
+                    s => todo!("Support extension .{}", s),
+                }
+            }
+        }
+    };
+}
+pub(crate) use impl_asset_save_serde;
+
 /// Implements `AssetLoader` and `AssetSaver` for a type that implements `serde::Serializer` and
 /// `serde::Deserializer` automatically by choosing the right serde implementation based on the
 /// file's extension.
@@ -632,6 +707,25 @@ macro_rules! impl_asset_load_save_serde {
         }
 
         impl $crate::asset::asset::AssetSaver for $name {
+            fn save(data: &Self, out_file: &$crate::asset::asset::AssetFile) -> anyhow::Result<()>
+            where
+                Self: Sized,
+            {
+                match out_file.path().extension() {
+                    "json" => match out_file.write_contents(
+                        serde_json::to_string_pretty(data).expect("Failed to serialize."),
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(err) => match err.kind() {
+                            _ => Err(anyhow::anyhow!(err.to_string())),
+                        },
+                    },
+                    s => todo!("Support extension .{}", s),
+                }
+            }
+        }
+
+        impl $crate::asset::asset::AssetSaver for &'_ $name {
             fn save(data: &Self, out_file: &$crate::asset::asset::AssetFile) -> anyhow::Result<()>
             where
                 Self: Sized,
@@ -708,7 +802,7 @@ impl GameAssetPath {
 
     pub fn as_file_asset_path(&self, project_dir: &Path) -> AssetPath {
         let rel = self.as_relative_path();
-        let full_path = project_dir.join("../../../assets").join(rel);
+        let full_path = project_dir.join("./assets").join(rel);
         AssetPath {
             asset_path: Some(self.clone()),
             path: full_path,
@@ -822,7 +916,7 @@ impl AssetPath {
 
     /// Searches in the projects assets directory for the editor and runtime.
     pub fn new_game_assets_dir(assets_dir: PathBuf, path: impl AsRef<str>) -> Self {
-        let path = GameAssetPath::new(path.as_ref()).unwrap();
+        let path = GameAssetPath::new(path.as_ref()).expect("Failed to parse asset_path");
         let path_buf = Self::into_file_path(&path.asset_path, &assets_dir);
         Self {
             asset_path: Some(path),
@@ -864,8 +958,7 @@ impl AssetPath {
 
     pub fn new_user_dir(sub_path: impl ToString) -> Self {
         let sub_path = format!("{}", sub_path.to_string());
-        let sub_path =
-            Self::into_file_path(&sub_path.to_string(), Path::new("../../../rogue_user_data"));
+        let sub_path = Self::into_file_path(&sub_path.to_string(), &Path::new("rogue_user_data"));
         let path = match std::env::consts::OS {
             "linux" => std::env::var("HOME")
                 .map(|home_dir| {

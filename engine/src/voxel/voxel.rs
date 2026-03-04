@@ -94,6 +94,8 @@ downcast!(dyn VoxelModelImplMethods);
 /// Function for constructing a voxel model gpu impl.
 pub type VoxelModelGpuConstructFnPtr = unsafe fn(/*dst_ptr: */ *mut u8);
 pub trait VoxelModelGpuImpl: VoxelModelGpuImplMethods + Clone {
+    const SCHEMA: u32;
+
     fn construct() -> Self;
 }
 
@@ -101,6 +103,10 @@ pub trait VoxelModelGpuImplMethods: Send + Sync + Any {
     // Returns the pointers required to traverse this data structure.
     // Can encode other model specific data here as well.
     fn aggregate_model_info(&self) -> Option<Vec<u32>>;
+
+    fn invalidate_material(&mut self) {
+        unimplemented!()
+    }
 
     /// Makes any necessary allocations for the model to work and returns true if the
     /// model info needs to be re-registered, i.e. model allocation pointers have changed.

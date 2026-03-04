@@ -1,7 +1,7 @@
 [package]
 name = "rogue_engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 # Macros
@@ -42,6 +42,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
 erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
 uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
+wide = "1.1.1"
 
 # Math/physics
 nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }

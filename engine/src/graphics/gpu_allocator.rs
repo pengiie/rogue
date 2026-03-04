@@ -45,13 +45,13 @@ impl GpuBufferAllocator {
 
         let allocation = self.allocations.allocate(allocation_size, 4);
         self.total_allocated_size += allocation_size;
-        log::info!(
-            "Allocator {} allocated just allocated {} bytes, {}/{} remaining",
-            self.allocator_name,
-            allocation_size,
-            self.allocations.size - self.total_allocated_size,
-            self.allocations.size
-        );
+        //log::info!(
+        //    "Allocator {} allocated just allocated {} bytes, {}/{} remaining",
+        //    self.allocator_name,
+        //    allocation_size,
+        //    self.allocations.size - self.total_allocated_size,
+        //    self.allocations.size
+        //);
 
         allocation
     }

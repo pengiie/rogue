@@ -1,1 +1,1 @@
-pub mod task_arbiter;
+pub mod tasks;

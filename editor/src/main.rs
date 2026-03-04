@@ -8,26 +8,29 @@ use rogue_engine::{
         asset::{AssetPath, Assets},
         repr::project::ProjectAsset,
     },
-    consts,
+    consts::{self, editor},
     egui::{egui_gpu::EguiGpu, Egui},
     entity::ecs_world::ECSWorld,
+    graphics::camera::MainCamera,
     impl_asset_load_save_serde,
     resource::ResourceBank,
+    task::tasks::Tasks,
     window::window::Window,
 };
 
-use crate::{render_graph::EditorRenderGraph, session::Session, ui::EditorUI};
+use crate::{
+    editor_settings::UserEditorSettingsAsset, game_session::GameSession,
+    render_graph::EditorRenderGraph, session::EditorSession, ui::EditorUI,
+    world::generator::WorldGenerator,
+};
 
+pub mod camera_controller;
+pub mod editor_settings;
+pub mod game_session;
 mod render_graph;
 pub mod session;
 pub mod ui;
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct EditorUserSettingsAsset {
-    pub last_project_dir: Option<PathBuf>,
-}
-
-impl_asset_load_save_serde!(EditorUserSettingsAsset);
+pub mod world;
 
 fn main() {
     std::panic::set_hook(Box::new(rogue_engine::util::fun_panic_hook));
@@ -48,34 +51,66 @@ fn main() {
         .filter(Some("sctk"), log::LevelFilter::Info)
         .init();
 
-    let mut editor_settings = Assets::load_asset_sync::<EditorUserSettingsAsset>(
-        AssetPath::new_user_dir(consts::io::EDITOR_USER_SETTINGS_FILE),
-    )
-    .unwrap_or(EditorUserSettingsAsset {
-        last_project_dir: None,
-    });
+    log::info!("curr_dir is {:?}", std::env::current_dir());
 
-    let project = editor_settings
-        .last_project_dir
-        .as_ref()
-        .map(|last_project_dir| {
-            ProjectAsset::from_existing_raw(last_project_dir, init_ecs_world())
-                .map_err(|err| {
-                    log::error!(
-                        "Error when trying to deserialize last project. Error: {:?}",
-                        err
-                    );
-                    err
-                })
-                .ok()
-        })
-        .flatten()
-        .unwrap_or_else(|| ProjectAsset::new_empty(init_ecs_world()));
+    let editor_settings = UserEditorSettingsAsset::load_editor_settings();
+    let project = editor_settings.load_project();
+
+    let game_session = GameSession {
+        game_camera: project.settings.game_camera,
+    };
 
     let mut app = App::new(AppCreateInfo {
         project,
-        post_graphics_fn: Some(Box::new(init_post_graphics)),
+        on_post_graphics_init_fn: Some(Box::new(on_post_graphics_init)),
+        on_window_event_fn: Some(Box::new(on_window_event)),
+        on_device_event_fn: Some(Box::new(on_device_event)),
     });
+    app.insert_resource(game_session);
+
+    /// Initialize the saved editor ui layout.
+    app.insert_resource(editor_settings.editor_ui);
+
+    setup_editor_systems(&mut app);
+
+    app.run_with_window();
+}
+
+/// Called only once after graphics initialization.
+fn on_post_graphics_init(rb: &mut ResourceBank) {
+    let session = EditorSession::new(
+        &mut rb.get_resource_mut::<ECSWorld>(),
+        &mut rb.get_resource_mut::<MainCamera>(),
+    );
+    rb.insert(session);
+
+    let egui = Egui::new(&rb.get_resource::<Window>());
+    rb.insert(egui);
+    rb.insert(EguiGpu::new());
+
+    let world_generator = WorldGenerator::new(&rb.get_resource::<Tasks>());
+    rb.insert(world_generator);
+
+    rb.run_system(EditorRenderGraph::init_render_graph);
+}
+
+fn on_window_event(rb: &mut ResourceBank, event: &winit::event::WindowEvent) {
+    if rb.has_resource::<Egui>() {
+        let window = rb.get_resource::<Window>();
+        // We can't force the cursor position on wayland only confine it so ignore any cursor inputs when it is locked.
+        if !window.is_cursor_locked() {
+            rb.get_resource_mut::<Egui>()
+                .handle_window_event(&window, &event);
+        }
+    }
+}
+
+fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) {}
+
+fn setup_editor_systems(app: &mut App) {
+    app.insert_system(AppStage::Update, EditorSession::update_editor_camera);
+    app.insert_system(AppStage::Update, WorldGenerator::update);
+    app.insert_system(AppStage::Update, EditorSession::update_settings_save);
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);
@@ -88,19 +123,6 @@ fn main() {
     app.insert_system(AppStage::RenderWrite, EguiGpu::write_render_data);
     // Write the render graph pass input for rasterizing the ui.
     app.insert_system(AppStage::RenderWrite, EguiGpu::write_ui_pass);
-
-    app.run_with_window();
-}
-
-fn init_post_graphics(rb: &mut ResourceBank) {
-    rb.insert(Session::new());
-    rb.insert(EditorUI::new());
-
-    let egui = Egui::new(&rb.get_resource::<Window>());
-    rb.insert(egui);
-    rb.insert(EguiGpu::new());
-
-    rb.run_system(EditorRenderGraph::init_render_graph);
 }
 
 fn init_ecs_world() -> ECSWorld {
