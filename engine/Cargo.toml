@@ -58,6 +58,7 @@ cpal = "0.15.3"
 gilrs = "0.11.0"
 
 # IO related
+gltf = "1.4.1"
 png = "0.17.16"
 zune-jpeg = "0.5.6"
 rfd = "0.15.3"

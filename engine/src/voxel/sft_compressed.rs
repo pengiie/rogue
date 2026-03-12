@@ -11,11 +11,11 @@ use super::{
     thc::VoxelModelTHCCompressed,
     voxel::{VoxelModelImpl, VoxelModelImplMethods},
 };
-use crate::common::geometry::ray::Ray;
 use crate::voxel::{
     attachment::{AttachmentMap, BuiltInMaterial},
     voxel::VoxelModelTrace,
 };
+use crate::{common::geometry::ray::Ray, voxel::voxel::VoxelEditData};
 use crate::{common::morton, consts};
 
 #[derive(Clone)]
@@ -288,8 +288,42 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
         return None;
     }
 
-    fn set_voxel_range_impl(&mut self, range: &super::voxel::VoxelModelEdit) {
-        unimplemented!("Use VoxelModelSFT for editing.");
+    fn set_voxel_range_impl(&mut self, edit: &super::voxel::VoxelModelEdit) {
+        let sl = self.side_length;
+        let is_entire_bounds =
+            edit.min == Vector3::new(0, 0, 0) && edit.max == Vector3::new(sl, sl, sl);
+        match edit.data {
+            VoxelEditData::Fill { material } => {
+                if is_entire_bounds {
+                    // Create full tree
+                    let height = self.tree_height();
+                    let n = (64u32.pow(height) - 1) / 63;
+                    self.node_data = Vec::with_capacity(n as usize);
+                    self.attachment_lookup_data
+                        .insert(Attachment::BMAT_ID, Vec::with_capacity(n as usize));
+                    self.attachment_raw_data.insert(
+                        Attachment::BMAT_ID,
+                        vec![BuiltInMaterial::new(material.index() as u16).encode(); n as usize],
+                    );
+                    for i in 0..n {
+                        let child_ptr = if i < (n - 1) / 64 {
+                            (i + 1) / 64 * 64
+                        } else {
+                            u32::MAX
+                        };
+                        self.node_data.push(SFTNodeCompressed {
+                            child_ptr,
+                            child_mask: u64::MAX,
+                            leaf_mask: u64::MAX,
+                        });
+                    }
+                    return;
+                }
+                todo!()
+            }
+        }
+
+        todo!();
     }
 
     fn length(&self) -> Vector3<u32> {

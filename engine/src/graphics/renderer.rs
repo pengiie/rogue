@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{
     common::color::Color,
+    debug::debug_renderer::DebugRenderer,
     graphics::backend::ResourceId,
     settings::{GraphicsSettings, Settings},
     world::sky::Sky,
@@ -137,6 +138,7 @@ impl Renderer {
         material_bank_gpu: Res<MaterialBankGpu>,
         world_gpu: ResMut<WorldRenderable>,
         voxel_registry_gpu: Res<VoxelModelRegistryGpu>,
+        debug_renderer: Res<DebugRenderer>,
         sky: Res<Sky>,
     ) {
         let renderer = &mut *renderer;
@@ -277,6 +279,8 @@ impl Renderer {
                     "u_frame.voxel.terrain.region_offset",
                     world_gpu.region_window_offset(),
                 );
+
+                debug_renderer.write_global_uniforms(writer);
             });
     }
 
@@ -294,7 +298,10 @@ impl Renderer {
             Ok(image) => Some(image),
             Err(err) => {
                 let inner_size = window.inner_size();
-                warn!("Tried to acquire swapchain error but got an error `{}`, trying to resize swapchain to {}x{}.", err, inner_size.width, inner_size.height);
+                warn!(
+                    "Tried to acquire swapchain error but got an error `{}`, trying to resize swapchain to {}x{}.",
+                    err, inner_size.width, inner_size.height
+                );
                 device.resize_swapchain(inner_size, true);
                 None
             }

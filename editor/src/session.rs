@@ -62,10 +62,10 @@ impl EditorSession {
     }
 
     fn init_editor_camera(ecs_world: &mut ECSWorld) -> Entity {
-        ecs_world.spawn((Transform::new(), Camera::new(100.0f32.to_radians())))
+        ecs_world.spawn((Transform::new(), Camera::new(90.0f32.to_radians())))
     }
 
-    pub fn update_editor_camera(
+    pub fn update_editor_camera_controller(
         mut session: ResMut<EditorSession>,
         ecs_world: ResMut<ECSWorld>,
         input: Res<Input>,
@@ -84,7 +84,7 @@ impl EditorSession {
         &self.editor_camera_controller
     }
 
-    pub fn update_settings_save(
+    pub fn update_editor_events(
         assets: Res<Assets>,
         editor_ui: Res<EditorUI>,
         events: Res<Events>,

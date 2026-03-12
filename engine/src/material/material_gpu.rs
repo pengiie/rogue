@@ -220,8 +220,8 @@ impl MaterialBankGpu {
                 .contains_key(&event.material_id)
             {
                 panic!(
-                    "Got creation event for material id {:?} twice which shouldn't happen.",
-                    event.material_id
+                    "Got creation event for material id {:?} twice which shouldn't happen. {:?}, {:?}",
+                    event.material_id, material.name, material.asset_path
                 );
             }
 
@@ -269,6 +269,11 @@ impl MaterialBankGpu {
 
         // Update any existing material with changed textures.
         for event in material_bank_gpu.material_update_event_reader.read(&events) {
+            log::info!(
+                "Got material update event for material id {:?} for texture type {:?}",
+                event.material_id,
+                event.updated_texture_type
+            );
             let Some(material) = material_bank.materials.get(event.material_id) else {
                 // Material no longer exists in the material bank.
                 continue;
@@ -276,7 +281,9 @@ impl MaterialBankGpu {
             let Some(material_descriptor_id) =
                 material_bank_gpu.material_map.get(&event.material_id)
             else {
-                panic!("GPU side material descriptor should exist by this materials registration event.");
+                panic!(
+                    "GPU side material descriptor should exist by this materials registration event."
+                );
             };
 
             let material_descriptor = material_bank_gpu
@@ -323,6 +330,12 @@ impl MaterialBankGpu {
                     {
                         // TODO: Worry about deleting possible old textures or marking
                         // for garbage collection.
+                        log::info!(
+                            "Updating gpu material descriptor for material id {:?} with new texture index {:?} and sampler index {:?}",
+                            event.material_id,
+                            color_texture_id,
+                            sampler_id
+                        );
                         material_descriptor.color_texture_index = color_texture_id;
                         material_descriptor.color_sampler_index = sampler_id;
 

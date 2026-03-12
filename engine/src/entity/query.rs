@@ -70,7 +70,7 @@ impl<T: 'static> QueryItem for &'_ mut T {
         // Safety: We dynamically borrow with `Self::borrow()` first, so any mutability should be safe.
         return unsafe {
             archetype
-                .get_mut_unchecked::<T>(&TypeInfo::new::<T>(), index)
+                .get_mut_unchecked::<T>(&TypeId::of::<T>(), index)
                 .as_mut()
         };
     }

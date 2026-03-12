@@ -1,9 +1,9 @@
 use crate::{
     session::EditorEvent,
     ui::{
+        EditorCommand, EditorUIContext, asset_pane::AssetsPane,
         entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
-        materials_pane::MaterialsPane, pane::EditorUIPane, world_pane::WorldPane, EditorCommand,
-        EditorUIContext,
+        materials_pane::MaterialsPane, pane::EditorUIPane, world_pane::WorldPane,
     },
 };
 
@@ -69,6 +69,10 @@ impl TopBarPane {
                 }
                 if ui.button("World").clicked() {
                     ctx.commands.push(EditorCommand::open_ui(WorldPane::ID));
+                    ui.close_menu();
+                }
+                if ui.button("Assets").clicked() {
+                    ctx.commands.push(EditorCommand::open_ui(AssetsPane::ID));
                     ui.close_menu();
                 }
             });

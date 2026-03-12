@@ -15,7 +15,7 @@ pub enum MaterialTextureType {
     Color,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Material {
     pub name: String,
     pub color_texture: Option<GameAssetPath>,
@@ -51,8 +51,8 @@ pub struct MaterialBank {
     pub name_map: HashMap<String, MaterialId>,
     pub asset_path_map: HashMap<GameAssetPath, MaterialId>,
 
-    to_load_materials: Vec<(MaterialId, GameAssetPath)>,
-    loading_materials: HashMap<MaterialId, AssetHandle>,
+    to_load_materials: Vec<(Option<MaterialId>, GameAssetPath)>,
+    loading_materials: Vec<(Option<MaterialId>, AssetHandle)>,
 
     create_events: Vec<MaterialCreateEvent>,
     update_events: Vec<MaterialUpdateEvent>,
@@ -66,7 +66,7 @@ impl MaterialBank {
             asset_path_map: HashMap::new(),
 
             to_load_materials: Vec::new(),
-            loading_materials: HashMap::new(),
+            loading_materials: Vec::new(),
 
             create_events: Vec::new(),
             update_events: Vec::new(),
@@ -77,34 +77,57 @@ impl MaterialBank {
         return self.materials.next_free_handle();
     }
 
-    pub fn push_material(&mut self, material: Material) -> MaterialId {
-        let id = self.next_free_id();
-        return self.register_material(id.index(), material);
+    pub fn request_material(&mut self, asset_path: GameAssetPath) {
+        if self.asset_path_map.contains_key(&asset_path) {
+            return;
+        }
+
+        self.to_load_materials.push((None, asset_path));
     }
 
-    pub fn register_material(&mut self, id: u32, material: Material) -> MaterialId {
+    pub fn contains_material(&self, material_id: &MaterialId) -> bool {
+        return self.materials.get(*material_id).is_some();
+    }
+
+    pub fn get_material(&self, material_id: MaterialId) -> Option<&Material> {
+        return self.materials.get(material_id);
+    }
+
+    pub fn push_material(&mut self, material: Material) {
+        let id = self.next_free_id();
+        self.register_material(id.index(), material);
+    }
+
+    pub fn register_material(&mut self, id: u32, material: Material) {
         if let Some(_) = self.name_map.get(&material.name) {
-            panic!(
-                "Tried to register material with name {} but that already exits",
-                material.name
-            );
+            return;
+            //panic!(
+            //    "Tried to register material with name {} but that already exits",
+            //    material.name
+            //);
         }
 
         let material_name = material.name.clone();
         let material_id = FreeListHandle::new(id, 0);
+        if !self.materials.is_free(material_id) {
+            log::info!("TODO: Do we overwrite the material and reupdate or not idk here");
+            return;
+        }
         if let Some(asset_path) = &material.asset_path {
             let res = self.asset_path_map.insert(asset_path.clone(), material_id);
-            assert!(
-                res.is_none(),
-                "Tried to register material with asset path {:?} but that already exists",
-                asset_path
-            );
+            if res.is_some() {
+                return;
+            }
+            //assert!(
+            //    res.is_none(),
+            //    "Tried to register material with asset path {:?} but that already exists",
+            //    asset_path
+            //);
         }
         self.materials
             .insert_in_place(FreeListHandle::new(id, 0), material);
         self.name_map.insert(material_name, material_id);
         self.create_events.push(MaterialCreateEvent { material_id });
-        return material_id;
     }
 
     pub fn update_material_texture(
@@ -146,46 +169,50 @@ impl MaterialBank {
             ));
             material_bank
                 .loading_materials
-                .insert(material_id, asset_handle);
+                .push((material_id, asset_handle));
         }
 
         let mut finished_materials = Vec::new();
-        for (material_id, asset_handle) in &material_bank.loading_materials {
+        for (i, (material_id, asset_handle)) in material_bank.loading_materials.iter().enumerate() {
             match assets.get_asset_status(asset_handle) {
                 AssetStatus::InProgress => {}
                 AssetStatus::Saved => {
                     unreachable!("If material is loading it should not be saving.")
                 }
                 AssetStatus::Loaded => {
-                    let mut material = assets.take_asset::<Material>(asset_handle).unwrap();
+                    let mut material = assets.get_asset::<Material>(asset_handle).unwrap().clone();
                     material.asset_path =
                         Some(asset_handle.asset_path().asset_path.clone().unwrap());
-                    finished_materials.push((*material_id, Some(material)));
+                    finished_materials.push((i, (*material_id, Some(material))));
                 }
                 AssetStatus::NotFound => {
                     log::error!(
-                        "Material asset not found at path {:?} for material id {}",
+                        "Material asset not found at path {:?} for material id {:?}",
                         asset_handle.asset_path(),
-                        material_id.index()
+                        material_id.map(|m| m.index())
                     );
-                    finished_materials.push((*material_id, None));
+                    finished_materials.push((i, (*material_id, None)));
                 }
                 AssetStatus::Error(error) => {
                     log::error!(
-                        "Error loading material asset at path {:?} for material id {}: {}",
+                        "Error loading material asset at path {:?} for material id {:?}: {}",
                         asset_handle.asset_path(),
-                        material_id.index(),
+                        material_id.map(|m| m.index()),
                         error
                     );
-                    finished_materials.push((*material_id, None));
+                    finished_materials.push((i, (*material_id, None)));
                 }
             }
         }
 
-        for (material_id, material) in finished_materials {
-            material_bank.loading_materials.remove(&material_id);
+        for (i, (material_id, material)) in finished_materials.into_iter().rev() {
+            material_bank.loading_materials.swap_remove(i);
             if let Some(material) = material {
-                material_bank.register_material(material_id.index(), *material);
+                if let Some(material_id) = material_id {
+                    material_bank.register_material(material_id.index(), material);
+                } else {
+                    material_bank.push_material(material);
+                }
             }
         }
     }
@@ -270,9 +297,10 @@ impl<'de> serde::de::Visitor<'de> for MaterialBankDeserializer<'_> {
         A: serde::de::SeqAccess<'de>,
     {
         while let Some(material_serializable) = seq.next_element::<MaterialSerializable>()? {
-            self.material_bank
-                .to_load_materials
-                .push((material_serializable.id, material_serializable.asset_path));
+            self.material_bank.to_load_materials.push((
+                Some(material_serializable.id),
+                material_serializable.asset_path,
+            ));
         }
 
         Ok(())

@@ -45,17 +45,19 @@ void main(uint id: SV_DispatchThreadID) {
 
 float3 calculate_normal(int3 world_voxel_pos, int voxel_length) {
   float3 normal = float3(0.0, 0.0, 0.0);
+  const int RADIUS = 2;
   [unroll]
-  for (int x = -2; x <= 2; x++) {
+  for (int x = -RADIUS; x <= RADIUS; x++) {
     [unroll]
-    for (int y = -2; y <= 2; y++) {
+    for (int y = -RADIUS; y <= RADIUS; y++) {
       [unroll]
-      for (int z = -2; z <= 2; z++) {
+      for (int z = -RADIUS; z <= RADIUS; z++) {
         if (x == 0 && y == 0 && z == 0) {
           continue;
         }
         int3 offset = int3(x, y, z) * voxel_length;
         int3 sample_pos = world_voxel_pos + offset;
+        // TODO: for some reason the normals are cooked on some surfaces idk why.
         bool voxel_exists = voxel::Terrain.get().is_voxel_present(sample_pos);
         if (!voxel_exists) {
           normal += (float3) offset;
@@ -63,5 +65,5 @@ float3 calculate_normal(int3 world_voxel_pos, int voxel_length) {
       }
     }
   }
-  return normal;
+  return normalize(normal);
 }

@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     fs::File,
     future::Future,
     hash::Hash,
@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use log::{debug, info, warn};
 use nalgebra::{Vector, Vector3};
 use pollster::FutureExt;
@@ -656,7 +656,8 @@ impl ShaderCompiler {
                     let Some(expected_type) = expected_type else {
                         log::error!(
                             "Slang vector type with {:?} elements and scalar type {:?} is not supported.",
-                            ty_layout.element_count(), ty_layout.scalar_type()
+                            ty_layout.element_count(),
+                            ty_layout.scalar_type()
                         );
                         break 'm;
                     };
@@ -935,7 +936,9 @@ impl ShaderCompiler {
                     set_bindings.push(bindings);
                 }
             }
-            shader_slang::TypeKind::ConstantBuffer => panic!("New code must have accidentally introducted a global non-opque variant such as a uint, maybe meant to add \"static\"?"),
+            shader_slang::TypeKind::ConstantBuffer => panic!(
+                "New code must have accidentally introducted a global non-opque variant such as a uint, maybe meant to add \"static\"?"
+            ),
             type_kind => unreachable!(
                 "Somehow got {:?} with name {:?}",
                 type_kind,

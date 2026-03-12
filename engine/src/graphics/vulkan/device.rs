@@ -7,13 +7,13 @@ use std::{
     num::NonZeroU32,
     str::FromStr,
     sync::{
-        atomic::{AtomicU32, AtomicU64},
         Arc,
+        atomic::{AtomicU32, AtomicU64},
     },
     u32, u64,
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use ash::{
     khr::swapchain,
     vk::{self, QueueFlags, SemaphoreType},
@@ -58,6 +58,7 @@ pub struct VulkanContextInner {
     surface: ash::vk::SurfaceKHR,
     physical_device: VulkanPhysicalDevice,
     device: ash::Device,
+    debug_utils_device: Option<ash::ext::debug_utils::Device>,
 
     main_queue: ash::vk::Queue,
     main_queue_family_index: u32,
@@ -466,6 +467,7 @@ impl VulkanDevice {
 
         // Setup debug_utils.
         let debug_messenger = if enable_debug {
+            let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
             let messenger_create_info = ash::vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
                     ash::vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -479,7 +481,6 @@ impl VulkanDevice {
                 )
                 .pfn_user_callback(Some(Self::debug_utils_callback));
 
-            let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
             Some(unsafe {
                 debug_utils_loader.create_debug_utils_messenger(&messenger_create_info, None)
             }?)
@@ -622,6 +623,8 @@ impl VulkanDevice {
             let enabled_extensions_ptrs = vec![
                 ash::khr::swapchain::NAME.as_ptr(),
                 ash::khr::dynamic_rendering_local_read::NAME.as_ptr(),
+                ash::khr::draw_indirect_count::NAME.as_ptr(),
+                ash::khr::shader_draw_parameters::NAME.as_ptr(),
             ];
 
             let mut feature_descriptor_indexing =
@@ -646,7 +649,6 @@ impl VulkanDevice {
                 ash::vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
             feature_synchronization2.p_next =
                 std::ptr::from_mut(&mut feature_timeline_semaphore) as *mut std::ffi::c_void;
-
             let mut features2 = ash::vk::PhysicalDeviceFeatures2::default()
                 .push_next(&mut feature_synchronization2);
             unsafe {
@@ -655,9 +657,11 @@ impl VulkanDevice {
             };
 
             let queue_priorities = [1.0];
-            let mut queue_create_infos = vec![ash::vk::DeviceQueueCreateInfo::default()
-                .queue_priorities(&queue_priorities)
-                .queue_family_index(main_queue_family_index)];
+            let mut queue_create_infos = vec![
+                ash::vk::DeviceQueueCreateInfo::default()
+                    .queue_priorities(&queue_priorities)
+                    .queue_family_index(main_queue_family_index),
+            ];
             if let Some(transfer_queue_family_index) = transfer_queue_family_index {
                 queue_create_infos.push(
                     ash::vk::DeviceQueueCreateInfo::default()
@@ -675,6 +679,8 @@ impl VulkanDevice {
                 instance.create_device(physical_device.physical_device, &device_create_info, None)
             }?
         };
+        let debug_utils_device =
+            (enable_debug).then(|| ash::ext::debug_utils::Device::new(&instance, &device));
 
         let main_queue = unsafe { device.get_device_queue(main_queue_family_index, 0) };
         let transfer_queue =
@@ -705,6 +711,7 @@ impl VulkanDevice {
             )?;
             let swapchain_format =
                 Self::get_optimal_swapchain_format(&surface_loader, &surface, &physical_device)?;
+            log::info!("Chosen swapchain format: {:?}", swapchain_format);
 
             // A max image count of 0 means there is no limit, so choose some arbitrary upper limit.
             if surface_capabilities.max_image_count == 0 {
@@ -786,6 +793,7 @@ impl VulkanDevice {
             entry,
             instance,
             debug_messenger,
+            debug_utils_device,
             surface,
             physical_device,
             device,
@@ -956,7 +964,6 @@ impl Drop for VulkanContext {
 impl Drop for VulkanSwapchain {
     fn drop(&mut self) {
         unsafe { self.ctx_ref.device.device_wait_idle() };
-        println!("Dropping the swapchain with handle {:?}", self.swapchain);
 
         let swapchain_loader =
             ash::khr::swapchain::Device::new(&self.ctx_ref.instance, &self.ctx_ref.device);
@@ -1139,6 +1146,10 @@ impl GraphicsBackendDevice for VulkanDevice {
             .create_info
             .image_extent(new_extent)
             .old_swapchain(swapchain.swapchain);
+        log::info!(
+            "Resizing swapchain with image format {:?}",
+            new_swapchain_create_info.image_format
+        );
 
         let swapchain_loader = self.context.swapchain_loader();
         let new_swapchain =
@@ -1285,9 +1296,9 @@ impl VulkanAllocator {
             .memory_type_index(memory_type_index as u32);
         let device_memory = unsafe { self.ctx.device.allocate_memory(&allocation_info, None) }?;
         debug!(
-                    "Allocated {} bytes of with memory type index {} with properties {:?} for memory properties {:?}",
-                    size, memory_type_index as u32, memory_type.property_flags, memory_property_flags
-                );
+            "Allocated {} bytes of with memory type index {} with properties {:?} for memory properties {:?}",
+            size, memory_type_index as u32, memory_type.property_flags, memory_property_flags
+        );
 
         Ok((
             VulkanMemory {
@@ -1334,7 +1345,10 @@ impl VulkanAllocator {
             {
                 debug!(
                     "Using shared memory index {} with {}/{} bytes remaining for memory properties {:?}",
-                    memory_index, shared_memory.free_size_remaining, shared_memory.memory.size, memory_property_flags
+                    memory_index,
+                    shared_memory.free_size_remaining,
+                    shared_memory.memory.size,
+                    memory_property_flags
                 );
                 return Ok(memory_index as VulkanMemoryIndex);
             }
@@ -1924,6 +1938,7 @@ impl From<GfxImageFormat> for ash::vk::Format {
             GfxImageFormat::D24UnormS8Uint => ash::vk::Format::D24_UNORM_S8_UINT,
             GfxImageFormat::D32Float => ash::vk::Format::D32_SFLOAT,
             GfxImageFormat::Rgba32Float => ash::vk::Format::R32G32B32A32_SFLOAT,
+            GfxImageFormat::Bgra8Unorm => ash::vk::Format::B8G8R8A8_UNORM,
         }
     }
 }
@@ -1938,7 +1953,7 @@ impl From<ash::vk::Format> for GfxImageFormat {
             ash::vk::Format::D32_SFLOAT => GfxImageFormat::D32Float,
             ash::vk::Format::R32G32B32A32_SFLOAT => GfxImageFormat::Rgba32Float,
             // TODO: Decide if we want to allow this or instead return an Option.
-            ash::vk::Format::B8G8R8A8_UNORM => GfxImageFormat::Rgba8Unorm,
+            ash::vk::Format::B8G8R8A8_UNORM => GfxImageFormat::Bgra8Unorm,
             format => todo!(
                 "Support vulkan image format conversion for format {:?}.",
                 format
@@ -2401,6 +2416,15 @@ impl VulkanResourceManager {
         let multisample_state = ash::vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(ash::vk::SampleCountFlags::TYPE_1);
 
+        let mut depth_stencil_state = ash::vk::PipelineDepthStencilStateCreateInfo::default();
+        if create_info.depth_format.is_some() {
+            log::info!("fhas depth");
+            depth_stencil_state = depth_stencil_state
+                .depth_test_enable(true)
+                .depth_write_enable(true)
+                .depth_compare_op(ash::vk::CompareOp::LESS_OR_EQUAL);
+        }
+
         let viewport = ash::vk::Viewport::default()
             .x(0.0)
             .y(0.0)
@@ -2432,6 +2456,7 @@ impl VulkanResourceManager {
         let mut dynamic_rendering = ash::vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_attachment_formats);
         if let Some(format) = create_info.depth_format {
+            log::info!("has depth format");
             dynamic_rendering = dynamic_rendering.depth_attachment_format(format.into());
         }
 
@@ -2443,6 +2468,7 @@ impl VulkanResourceManager {
             .vertex_input_state(&vertex_input_state)
             .color_blend_state(&blend_state)
             .multisample_state(&multisample_state)
+            .depth_stencil_state(&depth_stencil_state)
             .rasterization_state(&raster_state)
             .vertex_input_state(&vertex_input_state)
             .viewport_state(&viewport_state)
@@ -3118,7 +3144,7 @@ impl VulkanResourceManager {
             create_info.name, create_info.size, mapped_ptr
         );
         anyhow::ensure!(create_info.size > 0);
-        let create_info = ash::vk::BufferCreateInfo::default()
+        let vk_create_info = ash::vk::BufferCreateInfo::default()
             .size(create_info.size)
             .usage(
                 ash::vk::BufferUsageFlags::STORAGE_BUFFER
@@ -3126,10 +3152,21 @@ impl VulkanResourceManager {
                     | ash::vk::BufferUsageFlags::TRANSFER_DST
                     | ash::vk::BufferUsageFlags::TRANSFER_SRC
                     | ash::vk::BufferUsageFlags::VERTEX_BUFFER
-                    | ash::vk::BufferUsageFlags::INDEX_BUFFER,
+                    | ash::vk::BufferUsageFlags::INDEX_BUFFER
+                    | ash::vk::BufferUsageFlags::INDIRECT_BUFFER,
             )
             .sharing_mode(ash::vk::SharingMode::EXCLUSIVE);
-        let buffer = unsafe { self.ctx.device.create_buffer(&create_info, None) }?;
+        let buffer = unsafe { self.ctx.device.create_buffer(&vk_create_info, None) }?;
+        if let Some(debug_utils) = &self.ctx.debug_utils_device {
+            let c_name = CString::new(create_info.name.clone()).unwrap();
+            unsafe {
+                debug_utils.set_debug_utils_object_name(
+                    &ash::vk::DebugUtilsObjectNameInfoEXT::default()
+                        .object_handle(buffer)
+                        .object_name(&c_name),
+                )
+            };
+        }
 
         let buffer_memory_requirements =
             unsafe { self.ctx.device.get_buffer_memory_requirements(buffer) };
@@ -3153,7 +3190,7 @@ impl VulkanResourceManager {
             resource_id,
             VulkanBuffer {
                 buffer,
-                size: create_info.size,
+                size: vk_create_info.size,
                 allocation,
             },
         );

@@ -190,6 +190,9 @@ impl<T> FreeList<T> {
     }
 
     pub fn is_free(&self, handle: FreeListHandle<T>) -> bool {
+        if handle.index as usize >= self.data.len() {
+            return true;
+        }
         return self.data[handle.index as usize].is_null();
     }
 

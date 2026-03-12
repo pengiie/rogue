@@ -1,10 +1,10 @@
 use log::debug;
 use nalgebra::{Isometry3, Matrix4};
-use rogue_macros::{game_component, Resource};
+use rogue_macros::{Resource, game_component};
 
 use super::renderer;
-use crate::entity::component::GameComponentSerializeContext;
 use crate::consts;
+use crate::entity::component::GameComponentSerializeContext;
 use crate::entity::{component::GameComponent, ecs_world::Entity};
 
 #[derive(Resource)]
@@ -66,11 +66,13 @@ impl Camera {
     }
 
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Matrix4<f32> {
-        let mut mat = Matrix4::identity();
-        mat.m11 = 1.0 / aspect_ratio;
-        mat.m43 = 1.0;
+        let mut mat = Matrix4::<f32>::identity();
+        mat.m11 = 1.0 / (aspect_ratio);
+        mat.m22 = 1.0;
+        mat.m33 = -self.far_plane / (self.far_plane - self.near_plane);
+        mat.m43 = -1.0;
+        mat.m34 = (-self.far_plane * self.near_plane) / (self.far_plane - self.near_plane);
         mat.m44 = 0.0;
-        //mat.m34 *= -1.0;
         mat
     }
 

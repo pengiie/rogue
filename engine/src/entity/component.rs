@@ -1,10 +1,10 @@
 use std::{any::TypeId, cell::Cell, collections::HashMap, ptr::NonNull};
 
-use rogue_macros::generate_tuples;
 use crate::common::dyn_vec::TypeInfo;
 use crate::entity::{archetype::ComponentArchetype, ecs_world::Entity, query::QueryItemRef};
 use crate::physics::collider_registry::ColliderRegistry;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
+use rogue_macros::generate_tuples;
 
 pub struct GameComponentType {
     pub type_info: TypeInfo,
@@ -82,7 +82,10 @@ pub trait GameComponent {
 
     fn construct_component(dst_ptr: *mut u8) {
         if Self::is_constructible() {
-            panic!("Game component {} marked as constructible but GameComponent::construct was not implemented.", std::any::type_name::<Self>());
+            panic!(
+                "Game component {} marked as constructible but GameComponent::construct was not implemented.",
+                std::any::type_name::<Self>()
+            );
         } else {
             panic!(
                 "Call GameComponent::construct on a non-constructible game component {}.",
@@ -227,6 +230,32 @@ impl ComponentTypeBorrow {
     }
 }
 
+pub struct RawComponentRef<'a> {
+    component: NonNull<()>,
+    borrow: &'a Cell<ComponentTypeBorrow>,
+}
+
+impl<'a> RawComponentRef<'a> {
+    pub fn get_component_ptr(&self) -> *mut () {
+        self.component.as_ptr()
+    }
+
+    pub fn create_ref(archetype: &'a ComponentArchetype, type_id: &TypeId, index: usize) -> Self {
+        // Safety: I don't think this method is actually unsafe
+        let data = unsafe { archetype.get_raw(type_id, index) }.as_ptr() as *mut ();
+        let component = NonNull::new(data).unwrap();
+        let borrow = archetype.borrow_type(type_id);
+        Self { component, borrow }
+    }
+}
+
+impl Drop for RawComponentRef<'_> {
+    fn drop(&mut self) {
+        let val = self.borrow.get();
+        self.borrow.set(val.unborrow());
+    }
+}
+
 pub struct ComponentRef<'a, T> {
     // From Rust std::Cell::Ref:
     // NB: we use a pointer instead of `&'b T` to avoid `noalias` violations, because a
@@ -242,7 +271,7 @@ pub struct ComponentRef<'a, T> {
 impl<'a, T: 'static> QueryItemRef<'a> for ComponentRef<'a, T> {
     fn create_ref(archetype: &'a ComponentArchetype, index: usize) -> Self {
         // Safety: I don't think this method is actually unsafe
-        let data = unsafe { archetype.get_raw(&TypeInfo::new::<T>(), index) }.as_ptr() as *mut T;
+        let data = unsafe { archetype.get_raw(&TypeId::of::<T>(), index) }.as_ptr() as *mut T;
         let component = NonNull::new(data).unwrap();
         let borrow = archetype.borrow_type(&std::any::TypeId::of::<T>());
         ComponentRef { component, borrow }
@@ -299,7 +328,7 @@ impl<T> std::ops::DerefMut for ComponentRefMut<'_, T> {
 impl<'a, T: 'static> QueryItemRef<'a> for ComponentRefMut<'a, T> {
     fn create_ref(archetype: &'a ComponentArchetype, index: usize) -> Self {
         // Safety: I don't think this method is actually unsafe
-        let data = unsafe { archetype.get_raw(&TypeInfo::new::<T>(), index) }.as_ptr() as *mut T;
+        let data = unsafe { archetype.get_raw(&TypeId::of::<T>(), index) }.as_ptr() as *mut T;
         let component = NonNull::new(data).unwrap();
         let borrow = archetype.borrow_type_mut(&std::any::TypeId::of::<T>());
         ComponentRefMut { component, borrow }

@@ -426,10 +426,11 @@ impl WorldRenderable {
             }
         }
 
+        const BAKES_PER_FRAME: usize = 4;
         let mut i = 0;
         while let Some(chunk_id) = world.chunk_bake_request_queue.pop_front() {
             i += 1;
-            if i > 12 {
+            if i > BAKES_PER_FRAME {
                 break;
             }
             let Some(bake_request) = world.chunk_bake_requests.get(&chunk_id) else {

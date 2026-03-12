@@ -317,6 +317,7 @@ public struct Region {
               let global_grid_pos = (int3) floor(curr_ray.origin);
               res.albedo = model_test.albedo;
               res.normal = model_test.normal;
+              res.depth_t = model_test.ray_t + root_hit_info.t_enter;
               return res;
             }
             did_test_node = true;

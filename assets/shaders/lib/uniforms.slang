@@ -15,6 +15,7 @@ namespace uniforms {
     public FrameInfo frame_info;
     public FrameWorldInfo world_info;
     public VoxelUniforms voxel;
+    public debug::DebugRenderer debug;
   }
 
   public struct VoxelUniforms {
@@ -23,6 +24,5 @@ namespace uniforms {
     public ByteAddressBuffer model_info_data;
     public voxel::VoxelDataBuffer model_voxel_data;
   };
-
 
 } // namespace uniforms

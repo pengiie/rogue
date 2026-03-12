@@ -2,7 +2,7 @@ use nalgebra::Vector3;
 
 use crate::common::color::Color;
 use crate::common::geometry::aabb::AABB;
-use crate::debug::DebugRenderer;
+use crate::debug::debug_renderer::DebugRenderer;
 use crate::entity::ecs_world::Entity;
 use crate::physics::collider_registry::ColliderRegistry;
 use crate::physics::{collider_registry::ColliderId, transform::Transform};

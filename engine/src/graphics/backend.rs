@@ -124,6 +124,14 @@ pub trait GraphicsBackendRenderPass {
     fn bind_index_buffer(&mut self, index_buffer: ResourceId<Buffer>, offset: u64);
     fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
     fn draw_indexed(&mut self, vertex_count: u32);
+    fn draw_indirect_count(
+        &mut self,
+        draw_buffer: ResourceId<Buffer>,
+        draw_buffer_offset: u64,
+        draw_count_buffer: ResourceId<Buffer>,
+        draw_count_buffer_offset: u64,
+        max_draw_count: u32,
+    );
 }
 
 pub struct GfxDeviceInfo {
@@ -491,7 +499,10 @@ impl<'a> ShaderWriter<'a> {
             .entry(set_index)
             .or_insert(ShaderSetData::new());
         if set.is_using_cache() {
-            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+            panic!(
+                "Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made",
+                set_name, full_uniform_name
+            );
         }
         set.bindings_mut().insert(binding_index, binding);
     }
@@ -583,37 +594,49 @@ impl<'a> ShaderWriter<'a> {
                 }
             }
             ShaderBindingType::SampledImage => {
-                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Image>(),
-                    "Expected type for uniform `{}` is a SampledImage, yet we recieved a ResourceId<{}>", 
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Image>(),
+                    "Expected type for uniform `{}` is a SampledImage, yet we recieved a ResourceId<{}>",
                     full_uniform_name,
-                    std::any::type_name::<T>());
+                    std::any::type_name::<T>()
+                );
                 Binding::SampledImage {
                     image: ResourceId::new(binding_resource.id()),
                 }
             }
             ShaderBindingType::StorageImage => {
-                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Image>(),
-                    "Expected type for uniform `{}` is a StorageImage, yet we recieved a ResourceId<{}>", 
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Image>(),
+                    "Expected type for uniform `{}` is a StorageImage, yet we recieved a ResourceId<{}>",
                     full_uniform_name,
-                    std::any::type_name::<T>());
+                    std::any::type_name::<T>()
+                );
                 Binding::StorageImage {
                     image: ResourceId::new(binding_resource.id()),
                 }
             }
             ShaderBindingType::UniformBuffer => {
-                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Buffer>(),
-                    "Expected type for uniform `{}` is a ConstantBuffer, yet we recieved a ResourceId<{}>", 
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Buffer>(),
+                    "Expected type for uniform `{}` is a ConstantBuffer, yet we recieved a ResourceId<{}>",
                     full_uniform_name,
-                    std::any::type_name::<T>());
+                    std::any::type_name::<T>()
+                );
                 Binding::UniformBuffer {
                     buffer: ResourceId::new(binding_resource.id()),
                 }
             }
             ShaderBindingType::StorageBuffer => {
-                assert_eq!(std::any::TypeId::of::<T>(), std::any::TypeId::of::<Buffer>(),
-                    "Expected type for uniform `{}` is a StorageBuffer, yet we recieved a ResourceId<{}>", 
+                assert_eq!(
+                    std::any::TypeId::of::<T>(),
+                    std::any::TypeId::of::<Buffer>(),
+                    "Expected type for uniform `{}` is a StorageBuffer, yet we recieved a ResourceId<{}>",
                     full_uniform_name,
-                    std::any::type_name::<T>());
+                    std::any::type_name::<T>()
+                );
                 Binding::StorageBuffer {
                     buffer: ResourceId::new(binding_resource.id()),
                 }
@@ -627,7 +650,10 @@ impl<'a> ShaderWriter<'a> {
             .entry(set_index)
             .or_insert(ShaderSetData::new());
         if set.is_using_cache() {
-            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+            panic!(
+                "Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made",
+                set_name, full_uniform_name
+            );
         }
         set.bindings_mut().insert(binding_index, binding);
     }
@@ -701,7 +727,13 @@ impl<'a> ShaderWriter<'a> {
                 param_path, full_uniform_name
             ));
 
-        assert_eq!(expected_type, std::any::TypeId::of::<T>(), "Tried to write uniform with data type {}, but expected a different type for uniform `{}`", std::any::type_name::<T>(), full_uniform_name);
+        assert_eq!(
+            expected_type,
+            std::any::TypeId::of::<T>(),
+            "Tried to write uniform with data type {}, but expected a different type for uniform `{}`",
+            std::any::type_name::<T>(),
+            full_uniform_name
+        );
         assert_eq!(size, std::mem::size_of::<T>() as u32);
 
         let mut set = self
@@ -709,7 +741,10 @@ impl<'a> ShaderWriter<'a> {
             .entry(set_info.set_index)
             .or_insert(ShaderSetData::new());
         if set.is_using_cache() {
-            panic!("Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made", set_name, full_uniform_name);
+            panic!(
+                "Uniform set `{}` was defined as using a cached set, but an attempt to write `{}` was made",
+                set_name, full_uniform_name
+            );
         }
 
         let UniformSetData {
@@ -744,8 +779,7 @@ impl<'a> ShaderWriter<'a> {
                 if !self.global_writer && set_info.name != "u_frame" {
                     panic!(
                         "Set `{}` was not defined in the ShaderWriter, comparing against bindings {:?}.",
-                        set_info.name,
-                        self.shader_set_bindings
+                        set_info.name, self.shader_set_bindings
                     );
                 }
 
@@ -766,7 +800,10 @@ impl<'a> ShaderWriter<'a> {
                                     binding_type,
                                 } => {
                                     if !bindings.contains_key(&binding_index) {
-                                        panic!("Uniform binding of type {:?} for `{}.{}` has not been set.", binding_type, set_info.name, binding_name);
+                                        panic!(
+                                            "Uniform binding of type {:?} for `{}.{}` has not been set.",
+                                            binding_type, set_info.name, binding_name
+                                        );
                                     }
                                 }
                                 ShaderBinding::Uniform {
@@ -1142,6 +1179,7 @@ pub enum GfxImageFormat {
     R16Float,
     Rgba32Float,
     Rgba8Unorm,
+    Bgra8Unorm,
     Rgba8Srgb,
     D16Unorm,
     D24UnormS8Uint,

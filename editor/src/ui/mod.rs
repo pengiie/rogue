@@ -1,8 +1,12 @@
 mod ui;
 pub use ui::*;
 
+pub mod asset_pane;
+pub mod asset_properties_pane;
 pub mod entity_hierarchy;
 pub mod entity_properties;
+pub mod global_state;
+pub mod material_picker;
 pub mod materials_pane;
 pub mod pane;
 pub mod top_bar;

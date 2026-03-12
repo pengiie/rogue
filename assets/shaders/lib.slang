@@ -3,6 +3,7 @@ module lib;
 __include "consts.slang";
 
 __include "lib/color.slang";
+__include "lib/debug.slang";
 __include "lib/material.slang";
 __include "lib/math.slang";
 __include "lib/random.slang";

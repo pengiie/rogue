@@ -1,17 +1,17 @@
 use nalgebra::Translation3;
 use rogue_engine::{
     entity::{
-        component::GameComponentCloneContext,
-        ecs_world::{Entity, EventEntityDespawn},
         EntityChildren, EntityParent, GameEntity,
+        component::GameComponentCloneContext,
+        ecs_world::{Entity, EntityCommandEvent},
     },
     physics::transform::Transform,
 };
 
 use crate::ui::{
+    EditorCommand, EditorUIContext,
     entity_properties::EntityPropertiesPane,
     pane::{EditorUIPane, EditorUIPaneMethods},
-    EditorCommand, EditorUIContext,
 };
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -121,7 +121,10 @@ impl EntityHierarchyUI {
             if ui.button("Delete").clicked() {
                 // Ensure we do it as an event since we are iterating over
                 // the e
-                ctx.events.push(EventEntityDespawn(entity_id));
+                ctx.events.push(EntityCommandEvent::Despawn {
+                    entity: entity_id,
+                    despawn_children: true,
+                });
                 ctx.session.selected_entity = None;
                 ui.close_menu();
             }

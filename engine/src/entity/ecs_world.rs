@@ -9,7 +9,7 @@ use serde::ser::{SerializeSeq, SerializeStruct};
 use uuid::Uuid;
 
 use super::{
-    scripting::ScriptableEntity, EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
+    EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity, scripting::ScriptableEntity,
 };
 use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
 use crate::asset::repr::project::ProjectSceneDeserializeContext;
@@ -22,6 +22,7 @@ use crate::entity::component::{
     Bundle, ComponentBorrowMap, ComponentTypeBorrow, GameComponent, GameComponentCloneContext,
     GameComponentDeserializeContext, GameComponentDeserializeFnPtr, GameComponentMethods,
     GameComponentMethodsVtablePtr, GameComponentSerializeContext, GameComponentType,
+    RawComponentRef,
 };
 use crate::entity::ecs_world;
 use crate::entity::query::{Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne};
@@ -36,7 +37,14 @@ use crate::voxel::voxel::VoxelModelImplMethods;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 
 pub type Entity = FreeListHandle<EntityInfo>;
-pub struct EventEntityDespawn(pub Entity);
+
+#[derive(Debug, Clone)]
+pub enum EntityCommandEvent {
+    Despawn {
+        entity: Entity,
+        despawn_children: bool,
+    },
+}
 
 #[derive(Debug)]
 pub struct EntityInfo {
@@ -55,7 +63,7 @@ pub struct ECSWorld {
     pub entities: FreeList<EntityInfo>,
     pub game_components: HashMap<TypeId, GameComponentType>,
     pub game_component_names: HashMap</*GameComponent::NAME*/ String, TypeId>,
-    pub despawn_event_reader: EventReader<EventEntityDespawn>,
+    pub entity_event_reader: EventReader<EntityCommandEvent>,
 }
 
 impl ECSWorld {
@@ -68,7 +76,7 @@ impl ECSWorld {
             entities: FreeList::new(),
             game_components: HashMap::new(),
             game_component_names: HashMap::new(),
-            despawn_event_reader: EventReader::new(),
+            entity_event_reader: EventReader::new(),
         };
 
         // Makes these components cloneable and serializable in the project.
@@ -144,15 +152,22 @@ impl ECSWorld {
         todo!();
     }
 
-    pub fn handle_despawn_events(mut ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {
+    pub fn handle_entity_commands(mut ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {
         let mut ecs_world = &mut ecs_world as &mut ECSWorld;
-        let despawned_entities = ecs_world
-            .despawn_event_reader
+        let entity_events = ecs_world
+            .entity_event_reader
             .read(&events)
-            .map(|e| e.0)
+            .map(|event| event.clone())
             .collect::<Vec<_>>();
-        for entity in despawned_entities {
-            ecs_world.despawn(entity);
+        for event in entity_events {
+            match event {
+                EntityCommandEvent::Despawn {
+                    entity,
+                    despawn_children,
+                } => {
+                    ecs_world.despawn(entity, despawn_children);
+                }
+            }
         }
     }
 
@@ -187,9 +202,11 @@ impl ECSWorld {
         let old = self
             .game_component_names
             .insert(C::NAME.to_owned(), type_id);
-        assert!(old.is_none(),
-                "{} game component has a duplicate GameComponent::NAME with another already registered component.", 
-                std::any::type_name::<C>());
+        assert!(
+            old.is_none(),
+            "{} game component has a duplicate GameComponent::NAME with another already registered component.",
+            std::any::type_name::<C>()
+        );
     }
 
     pub fn get_or_create_archetype_static<'a>(
@@ -401,7 +418,9 @@ impl ECSWorld {
                 .map(|type_info| unsafe {
                     (
                         type_info,
-                        src_archetype.get_raw(type_info, entity_info.index).as_ptr(),
+                        src_archetype
+                            .get_raw(&type_info.type_id, entity_info.index)
+                            .as_ptr(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -487,6 +506,20 @@ impl ECSWorld {
 
     pub fn query_one<Q: Query>(&self, entity: Entity) -> QueryOne<Q> {
         QueryOne::<Q>::new(self, entity)
+    }
+
+    pub fn get_unchecked<'a>(
+        &'a self,
+        entity: Entity,
+        component_type: TypeId,
+    ) -> RawComponentRef<'a> {
+        let archetype = self.find_archetype(entity);
+        if !archetype.has_type_id(component_type) {
+            panic!("Entity does not have the requested component type.");
+        }
+
+        let entity_info = self.entities.get(entity).unwrap();
+        return RawComponentRef::create_ref(archetype, &component_type, entity_info.index);
     }
 
     pub fn get<'a, C: QueryItem + 'static>(&'a self, entity: Entity) -> anyhow::Result<C::Ref<'a>> {
@@ -579,6 +612,11 @@ impl ECSWorld {
         entity_info.archetype_ptr = archetype_ptr;
         entity_info.index = archetype_index;
         return Some(removed_component);
+    }
+
+    pub fn get_entity_components(&self, entity: Entity) -> Vec<TypeInfo> {
+        let entity_info = self.entities.get(entity).unwrap();
+        return entity_info.components.clone();
     }
 
     // Gets the minimum OBB of the entity's voxel model.
@@ -688,7 +726,9 @@ impl ECSWorld {
             .map(|type_info| unsafe {
                 (
                     type_info,
-                    src_archetype.get_raw(type_info, entity_info.index).as_ptr(),
+                    src_archetype
+                        .get_raw(&type_info.type_id, entity_info.index)
+                        .as_ptr(),
                 )
             })
             .collect::<Vec<_>>();
@@ -833,7 +873,7 @@ impl ECSWorld {
 
     /// Despawns the given entity and removes the reference from its parent if it has one
     /// Does nothing if the entity does not exist.
-    pub fn despawn(&mut self, entity: Entity) {
+    pub fn despawn(&mut self, entity: Entity, despawn_children: bool) {
         let entity_parent = self
             .get::<&EntityParent>(entity)
             .map(|p| p.parent().clone());
@@ -844,6 +884,19 @@ impl ECSWorld {
             if parent_children.children.is_empty() {
                 drop(parent_children);
                 self.remove_one::<EntityChildren>(entity_parent);
+            }
+        }
+
+        let entity_children = self
+            .get::<&EntityChildren>(entity)
+            .map(|c| c.children.clone());
+        if let Ok(entity_children) = entity_children {
+            for child in entity_children {
+                if despawn_children {
+                    self.despawn(child, true);
+                } else {
+                    self.try_remove_one::<EntityParent>(entity);
+                }
             }
         }
 
@@ -928,7 +981,11 @@ impl ECSWorld {
                 continue;
             };
             // Safety: We only use this pointer as a reference.
-            let src_data = unsafe { archetype.get_raw(&type_info, entity_info.index).as_ptr() };
+            let src_data = unsafe {
+                archetype
+                    .get_raw(&type_info.type_id, entity_info.index)
+                    .as_ptr()
+            };
             let (asset_component_data, dst_layout) =
                 unsafe { Self::clone_component(src_data, type_info, *methods_vtable_ptr, ctx) };
             asset_components.insert(type_info.type_id, unsafe {
@@ -1202,7 +1259,7 @@ impl serde::Serialize for ECSWorldSceneEntityGameComponentDataSerializable<'_> {
         let ctx = self.sup.sup.sup.ctx;
         let src_data = unsafe {
             archetype
-                .get_raw(self.sup.type_info, self.sup.sup.archetype_index)
+                .get_raw(&self.sup.type_info.type_id, self.sup.sup.archetype_index)
                 .as_ptr()
         };
         let game_component = {

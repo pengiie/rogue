@@ -668,7 +668,9 @@ impl VulkanFrameGraphExecutor {
 
                 if frame_graph.inputs.contains_key(&input) {
                     panic!(
-                        "User defined image input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
+                        "User defined image input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.",
+                        input_info.name,
+                        frame_graph.resource_infos[pass.id.id() as usize].name
                     );
                 } else {
                     panic!(
@@ -689,7 +691,9 @@ impl VulkanFrameGraphExecutor {
                     continue;
                 } else if frame_graph.inputs.contains_key(&input) {
                     panic!(
-                        "User defined buffer input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.", input_info.name, frame_graph.resource_infos[pass.id.id() as usize].name
+                        "User defined buffer input `{}` hasn't been populated in the executor yet, and it is required for pass `{}`.",
+                        input_info.name,
+                        frame_graph.resource_infos[pass.id.id() as usize].name
                     );
                 } else {
                     panic!(
@@ -924,8 +928,10 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
             recorder.finish();
         }
 
-        let mut command_buffer_infos = vec![ash::vk::CommandBufferSubmitInfo::default()
-            .command_buffer(staging_buffer_copies_vk_command_buffer)];
+        let mut command_buffer_infos = vec![
+            ash::vk::CommandBufferSubmitInfo::default()
+                .command_buffer(staging_buffer_copies_vk_command_buffer),
+        ];
         for recorder in session.recorded_command_buffers.iter() {
             command_buffer_infos.push(
                 ash::vk::CommandBufferSubmitInfo::default()
@@ -1000,7 +1006,9 @@ impl GraphicsBackendFrameGraphExecutor for VulkanFrameGraphExecutor {
 
         if let Some(existing_buffer) = session.resource_map.get(&frame_graph_resource.as_untyped())
         {
-            panic!("Already wrote to the buffer once this frame, will support multiple writes to the same buffer some times in the future, with custom task ordering.");
+            panic!(
+                "Already wrote to the buffer once this frame, will support multiple writes to the same buffer some times in the future, with custom task ordering."
+            );
         }
 
         let frame_buffer_id = self

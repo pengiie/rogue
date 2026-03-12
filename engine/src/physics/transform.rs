@@ -1,4 +1,6 @@
-use nalgebra::{AbstractRotation, Matrix4, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{
+    AbstractRotation, Isometry3, Matrix4, Point3, Rotation3, Translation3, UnitQuaternion, Vector3,
+};
 use rogue_macros::game_component;
 
 use crate::common::geometry::aabb::AABB;
@@ -40,18 +42,8 @@ impl Transform {
     }
 
     pub fn to_view_matrix(&self) -> Matrix4<f32> {
-        let mut translation = Matrix4::<f32>::new_translation(&-self.position);
-        // Perspective expects fowards to be the -z axis.
-        let mut rot = self.rotation.to_homogeneous().transpose();
-        //let iso = Isometry3::look_at_rh(
-        //    &Point3::new(0.0, 0.0, 0.0),
-        //    &self
-        //        .rotation()
-        //        .transform_point(&Point3::new(0.0, 0.0, -1.0)),
-        //    &Vector3::y(),
-        //);
-
-        rot * translation
+        let iso = Isometry3::from_parts(Translation3::from(self.position), self.rotation);
+        iso.inverse().to_homogeneous()
     }
 
     pub fn get_ray(&self) -> Ray {

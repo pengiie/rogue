@@ -1,0 +1,173 @@
+use std::{collections::HashSet, path::PathBuf};
+
+use crate::ui::{EditorCommand, asset_properties_pane::AssetPropertiesPane, pane::EditorUIPane};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default = "AssetsPane::new")]
+pub struct AssetsPane {
+    root_folder: AssetFolder,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default = "AssetFolder::default")]
+struct AssetFolder {
+    folder_path: PathBuf,
+    open: bool,
+
+    #[serde(skip)]
+    needs_reload: bool,
+    #[serde(skip)]
+    files: Vec<AssetItem>,
+    folders: Vec<AssetFolder>,
+}
+
+impl AssetFolder {
+    pub fn default() -> Self {
+        Self {
+            folder_path: PathBuf::new(),
+            needs_reload: true,
+            files: Vec::new(),
+            folders: Vec::new(),
+            open: false,
+        }
+    }
+}
+
+impl AssetFolder {
+    pub fn new(folder_path: PathBuf, open: bool) -> Self {
+        Self {
+            folder_path,
+            needs_reload: true,
+            files: Vec::new(),
+            folders: Vec::new(),
+            open,
+        }
+    }
+
+    pub fn try_reload(&mut self) {
+        if !self.open {
+            return;
+        }
+
+        if self.needs_reload {
+            self.needs_reload = false;
+            self.files.clear();
+            assert!(self.folder_path.is_dir());
+
+            let present_folders = self
+                .folders
+                .iter()
+                .map(|f| f.folder_path.clone())
+                .collect::<HashSet<_>>();
+            let mut new_folders = HashSet::new();
+            for entry in self.folder_path.read_dir().unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_file() {
+                    self.files.push(AssetItem { file_path: path });
+                } else if path.is_dir() {
+                    if !present_folders.contains(&path) {
+                        self.folders.push(AssetFolder::new(path.clone(), false));
+                    }
+                    new_folders.insert(path);
+                }
+            }
+
+            self.folders
+                .retain(|f| new_folders.contains(&f.folder_path));
+        }
+
+        for folder in &mut self.folders {
+            folder.try_reload();
+        }
+    }
+
+    pub fn show_contents(&mut self, ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
+        ui.vertical(|ui| {
+            for folder in &mut self.folders {
+                let response = ui.horizontal(|ui| {
+                    let (id, rect) = ui.allocate_space(egui::vec2(6.0, 6.0));
+                    let rect_response = ui.interact(rect, id, egui::Sense::click());
+                    crate::ui::util::paint_chevron_icon(ui, !folder.open, &rect_response);
+                    let folder_str = format!(
+                        "/{}",
+                        folder.folder_path.file_name().unwrap().to_string_lossy()
+                    );
+                    let label_response = ui.label(folder_str);
+                    if label_response.clicked() || rect_response.clicked() {
+                        folder.open = !folder.open;
+                    }
+                });
+
+                if folder.open {
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        folder.show_contents(ui, ctx);
+                    });
+                }
+            }
+
+            for file in &self.files {
+                let label_id = egui::Id::new(file.file_path.to_string_lossy().to_string());
+                let is_hovering = ui.data(|w| w.get_temp(label_id).unwrap_or(false));
+
+                let file_str = file.file_path.file_name().unwrap().to_string_lossy();
+                let mut rich_text = egui::RichText::new(file_str.clone());
+                if is_hovering {
+                    rich_text = rich_text.background_color(egui::Color32::from_white_alpha(2));
+                }
+
+                let mut label = ui.add(egui::Label::new(rich_text));
+                ui.data_mut(|w| w.insert_temp(label_id, label.hovered()));
+
+                if label.clicked() {
+                    ctx.commands
+                        .push(EditorCommand::open_ui(AssetPropertiesPane::ID));
+                    ctx.ui_state.selected_asset = Some(file.file_path.clone());
+                }
+            }
+        });
+    }
+}
+
+struct AssetItem {
+    file_path: PathBuf,
+}
+
+impl AssetsPane {
+    pub fn new() -> Self {
+        Self {
+            root_folder: AssetFolder::new(PathBuf::new(), false),
+        }
+    }
+
+    pub fn update_root_folder(&mut self, folder_path: PathBuf) {
+        if self.root_folder.folder_path != folder_path {
+            self.root_folder = AssetFolder::new(folder_path, true);
+        }
+        self.root_folder.open = true;
+        self.root_folder.try_reload();
+    }
+
+    pub fn show_header(ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Assets").size(20.0));
+        });
+    }
+}
+
+impl EditorUIPane for AssetsPane {
+    const ID: &'static str = "assets";
+    const NAME: &'static str = "Assets";
+
+    fn show(&mut self, ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
+        let Some(project_assets_dir) = ctx.assets.project_assets_dir() else {
+            ui.label("No project loaded.");
+            return;
+        };
+        self.update_root_folder(project_assets_dir);
+
+        Self::show_header(ui, ctx);
+        self.root_folder.show_contents(ui, ctx);
+    }
+}

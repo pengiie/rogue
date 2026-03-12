@@ -1,12 +1,18 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+};
 
 use nalgebra::Vector3;
 use rand::{Rng, SeedableRng};
 use rogue_engine::{
+    asset::asset::GameAssetPath,
     common::morton,
     consts,
     event::{EventReader, Events},
-    input::{keyboard::Key, Input},
+    input::{Input, keyboard::Key},
+    material::{MaterialBank, MaterialUpdateEvent},
     noise::{
         fbm::{Fbm, FbmOptions},
         perlin::PerlinNoise,
@@ -30,9 +36,19 @@ use rogue_engine::{
 use rogue_macros::Resource;
 use wide::CmpGt;
 
+struct GeneratorMaterials;
+
+impl GeneratorMaterials {
+    const GRASS: &'static str = "./materials/grass/grass_mat.rmat";
+    const DIRT: &'static str = "./materials/dirt/dirt_mat.rmat";
+
+    const MATERIALS: [&'static str; 2] = [Self::GRASS, Self::DIRT];
+}
+
 #[derive(Resource)]
 pub struct WorldGenerator {
-    chunk_generator: Arc<ChunkGenerator>,
+    chunk_generator: Option<Arc<ChunkGenerator>>,
+    requested_materials: bool,
 
     generated_chunks: HashSet<ChunkId>,
     chunk_stream_event_reader: EventReader<ChunkStreamEvent>,
@@ -45,6 +61,8 @@ pub struct WorldGenerator {
     generated_chunk_recv: std::sync::mpsc::Receiver<GeneratedChunkData>,
     generated_chunk_send: std::sync::mpsc::Sender<GeneratedChunkData>,
 
+    update_material_event_reader: EventReader<MaterialUpdateEvent>,
+
     pub paused: bool,
 }
 
@@ -55,7 +73,8 @@ impl WorldGenerator {
         let (generated_chunk_send, generated_chunk_recv) =
             std::sync::mpsc::channel::<GeneratedChunkData>();
         Self {
-            chunk_generator: Arc::new(ChunkGenerator::new(0)),
+            requested_materials: false,
+            chunk_generator: None,
 
             generated_chunks: HashSet::new(),
             chunk_stream_event_reader: EventReader::new(),
@@ -64,6 +83,8 @@ impl WorldGenerator {
             max_generating_chunks: tasks.total_thread_count().get() as u32,
             generated_chunk_recv,
             generated_chunk_send,
+
+            update_material_event_reader: EventReader::new(),
 
             paused: false,
         }
@@ -78,6 +99,7 @@ impl WorldGenerator {
         mut region_map: ResMut<RegionMap>,
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut tasks: ResMut<Tasks>,
+        mut material_bank: ResMut<MaterialBank>,
         input: Res<Input>,
         events: Res<Events>,
     ) {
@@ -87,14 +109,46 @@ impl WorldGenerator {
             generator.paused = !generator.paused;
         }
 
+        for event in generator.update_material_event_reader.read(&events) {
+            generator.chunk_generator = None;
+        }
+
+        if generator.chunk_generator.is_none() {
+            if !generator.requested_materials {
+                generator.requested_materials = true;
+                for material in GeneratorMaterials::MATERIALS {
+                    material_bank
+                        .request_material(GameAssetPath::from_relative_path(Path::new(material)));
+                }
+            }
+
+            let mut all_loaded = true;
+            for material in GeneratorMaterials::MATERIALS {
+                if material_bank
+                    .asset_path_map
+                    .get(&GameAssetPath::from_relative_path(Path::new(material)))
+                    .is_none()
+                {
+                    all_loaded = false;
+                    break;
+                }
+            }
+
+            if all_loaded {
+                generator.chunk_generator = Some(Arc::new(ChunkGenerator::new(0, &material_bank)));
+            }
+        }
+
+        let can_generate_chunks = generator.currently_generating_chunks
+            < generator.max_generating_chunks
+            && !generator.paused
+            && generator.chunk_generator.is_some();
+        if !can_generate_chunks {
+            return;
+        }
+
         for event in generator.chunk_stream_event_reader.read(&events) {
             let chunk_id = event.chunk_id;
-
-            let threads_free =
-                generator.currently_generating_chunks < generator.max_generating_chunks;
-            if generator.paused || !threads_free {
-                break;
-            }
 
             if generator.generated_chunks.contains(&chunk_id) {
                 continue;
@@ -102,7 +156,7 @@ impl WorldGenerator {
             generator.generated_chunks.insert(chunk_id);
 
             {
-                let chunk_generator = generator.chunk_generator.clone();
+                let chunk_generator = generator.chunk_generator.clone().unwrap();
                 let generated_chunk_send = generator.generated_chunk_send.clone();
                 tasks.spawn_background_process(move || {
                     let sft =
@@ -127,7 +181,7 @@ impl WorldGenerator {
                 generator.currently_generating_chunks.saturating_sub(1);
 
             // Non-empty chunk so update region and parent node accordingly.
-            let sft_id = (!sft.is_empty()).then(|| voxel_registry.register_voxel_model(sft));
+            let sft_id = (!sft.is_empty()).then(|| voxel_registry.register_voxel_model(sft, None));
             region_map.set_chunk(chunk_id, sft_id);
         }
     }
@@ -157,23 +211,38 @@ pub struct ChunkGenerator {
     sample_offset: Vector3<f32>,
     height_noise: Fbm<PerlinNoise>,
     density_noise: Fbm<PerlinNoise>,
+    material_map: HashMap<String, u32>,
 }
 
 impl ChunkGenerator {
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: u64, material_bank: &MaterialBank) -> Self {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         let offset = Vector3::new(
             (rng.next_u32() % 25600) as f32 * 0.01,
             (rng.next_u32() % 25600) as f32 * 0.01,
             (rng.next_u32() % 25600) as f32 * 0.01,
         );
+
+        let mut material_map = HashMap::new();
+        for material in GeneratorMaterials::MATERIALS {
+            material_map.insert(
+                material.to_owned(),
+                material_bank
+                    .asset_path_map
+                    .get(&GameAssetPath::from_relative_path(Path::new(material)))
+                    .clone()
+                    .unwrap()
+                    .index(),
+            );
+        }
+
         Self {
             sample_offset: offset,
             height_noise: Fbm::new(
                 PerlinNoise::new(seed),
                 FbmOptions {
                     lacunarity: 1.7,
-                    octaves: 16,
+                    octaves: 8,
                     gain: 0.6,
                 },
             ),
@@ -185,6 +254,7 @@ impl ChunkGenerator {
                     gain: 0.5,
                 },
             ),
+            material_map,
         }
     }
 
@@ -192,23 +262,40 @@ impl ChunkGenerator {
         todo!()
     }
 
-    pub fn sample_density(&self, world_voxel_pos: Vector3<f32>) -> f32 {
-        let voxel_frequency = 0.01;
-        let sample_pos = world_voxel_pos * voxel_frequency + self.sample_offset;
-        let height = self.height_noise.noise_2d(sample_pos.x, sample_pos.z) * 50.0;
+    pub fn sample_shaping(
+        &self,
+        world_voxel_pos: Vector3<f32>,
+    ) -> (/*density*/ f32, /*height*/ f32) {
+        let height_frequency = 0.003;
+        let height_sample_pos = world_voxel_pos * height_frequency + self.sample_offset;
+        let height = self
+            .height_noise
+            .noise_2d(height_sample_pos.x, height_sample_pos.z)
+            * 80.0;
 
-        let mut density = self
-            .density_noise
-            .noise_3d(sample_pos.x, sample_pos.y, sample_pos.z);
+        let density_frequency = 0.01;
+        let density_sample_pos = world_voxel_pos * density_frequency + self.sample_offset;
+        let mut density = self.density_noise.noise_3d(
+            density_sample_pos.x,
+            density_sample_pos.y,
+            density_sample_pos.z,
+        );
 
         // 10m of possible 3d noise, rest must be from y shaping.
         const SURFACE_FALLOFF: f32 = 10.0;
         density += -(world_voxel_pos.y - height) / SURFACE_FALLOFF;
 
-        density
+        (density, height)
     }
 
-    pub fn sample_chunk_density(&self, world_chunk_pos: ChunkPos, lod: ChunkLOD) -> f32 {
+    pub fn sample_material(&self, world_voxel_pos: Vector3<f32>, density: f32, height: f32) -> u32 {
+        if density < 0.1 {
+            return *self.material_map.get(GeneratorMaterials::GRASS).unwrap();
+        }
+        return *self.material_map.get(GeneratorMaterials::DIRT).unwrap();
+    }
+
+    pub fn sample_chunk_shaping(&self, world_chunk_pos: ChunkPos, lod: ChunkLOD) -> (f32, f32) {
         let voxel_meter_size = lod.voxel_meter_size();
         let chunk_voxel_pos = world_chunk_pos.map(|x| {
             x as f32
@@ -217,7 +304,7 @@ impl ChunkGenerator {
         });
         let half_chunk_meter_size =
             consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as f32 * voxel_meter_size * 0.5;
-        return self.sample_density(
+        return self.sample_shaping(
             chunk_voxel_pos
                 + Vector3::new(
                     half_chunk_meter_size,
@@ -256,13 +343,21 @@ impl ChunkGenerator {
                     ) + (wide::f32x8::new([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
                         * voxel_meter_size);
                     let mut density = wide::f32x8::splat(0.0);
+                    let mut material = wide::u32x8::splat(0);
                     for i in 0..8 {
-                        let d = self.sample_density(Vector3::new(
+                        let (d, h) = self.sample_shaping(Vector3::new(
                             voxel_x.as_array()[i],
                             voxel_y,
                             voxel_z,
                         ));
                         density.as_mut_array()[i] = d;
+                        if d > 0.0 {
+                            material.as_mut_array()[i] = self.sample_material(
+                                Vector3::new(voxel_x.as_array()[i], voxel_y, voxel_z),
+                                d,
+                                h,
+                            );
+                        }
                     }
 
                     let presence_bitmask = density.simd_gt(wide::f32x8::splat(0.0)).to_bitmask();
@@ -273,7 +368,7 @@ impl ChunkGenerator {
                         .unwrap()
                         .set_bits(index, 8, presence_bitmask);
                     flat.attachment_data.get_mut(Attachment::BMAT_ID).unwrap()[index..index + 8]
-                        .fill(0);
+                        .copy_from_slice(material.as_array());
                 }
             }
         }

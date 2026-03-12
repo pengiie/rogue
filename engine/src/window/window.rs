@@ -164,6 +164,10 @@ impl Window {
         self.winit_window.inner_size()
     }
 
+    pub fn size(&self) -> Vector2<u32> {
+        Vector2::new(self.width(), self.height())
+    }
+
     pub fn is_maximized(&self) -> bool {
         self.winit_window.is_maximized()
     }

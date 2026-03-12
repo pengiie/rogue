@@ -24,10 +24,8 @@ impl Default for WorldStreamingOptions {
     fn default() -> Self {
         Self {
             origin_region: RegionPos::new(0, 0, 0),
-            region_load_distance: 8,
-            // TODO: Sits at around 10 gigs, how? idk gotta optimize more
-            //max_loaded_chunks: 4096,
-            max_loaded_chunks: 2056,
+            region_load_distance: 2,
+            max_loaded_chunks: 512,
         }
     }
 }
@@ -59,7 +57,7 @@ struct ChunkStreamRequest {
 
 impl ChunkStreamRequest {
     fn cost(&self) -> f32 {
-        const full_res_radius: f32 = consts::voxel::TERRAIN_CHUNK_METER_LENGTH * 8.0;
+        const full_res_radius: f32 = consts::voxel::TERRAIN_CHUNK_METER_LENGTH * 16.0;
         let full_res_t = self.distance_to_camera / full_res_radius;
 
         if self.chunk_id.chunk_lod.is_lowest_res() {
@@ -68,11 +66,10 @@ impl ChunkStreamRequest {
         }
 
         // Cost from 0 to 1 for full resolution chunks.
-        if self.chunk_id.chunk_lod.is_full_res() && full_res_t < 1.0 {
-            return full_res_t;
-        }
+        if self.chunk_id.chunk_lod.is_full_res() && full_res_t < 1.0 {}
+        return full_res_t;
 
-        return full_res_t + (self.chunk_id.chunk_lod.as_tree_height() as f32 * 256.0) - 0.5;
+        //return full_res_t + (self.chunk_id.chunk_lod.as_tree_height() as f32 * 256.0) - 0.5;
     }
 }
 
@@ -149,7 +146,6 @@ impl WorldChunkStreamer {
                 ChunkEventType::Loaded | ChunkEventType::Updated => {
                     if region_map.get_chunk_model(&event.chunk_id).is_some() {
                         streamer.loaded_chunks.insert(event.chunk_id);
-                        log::info!("Loaded chunk {:?} at LOD {:?}, loaded chunk count: {}, queued chunk count: {}", event.chunk_id.chunk_pos, event.chunk_id.chunk_lod, streamer.loaded_chunks.len(), streamer.queued_chunks.len());
                     }
                     streamer.queued_chunks.remove(&event.chunk_id);
                 }
@@ -159,8 +155,11 @@ impl WorldChunkStreamer {
             }
         }
 
-        let can_stream = (streamer.loaded_chunks.len() + streamer.queued_chunks.len()) < streamer.options.max_loaded_chunks as usize;
-        if let Some(request) = streamer.chunk_queue.pop() && can_stream {
+        let can_stream = (streamer.loaded_chunks.len() + streamer.queued_chunks.len())
+            < streamer.options.max_loaded_chunks as usize;
+        if let Some(request) = streamer.chunk_queue.pop()
+            && can_stream
+        {
             events.push(ChunkStreamEvent {
                 chunk_id: request.chunk_id,
             });
@@ -186,38 +185,38 @@ impl WorldChunkStreamer {
                 /*Chunk pos*/ region_pos.into_chunk_pos(),
             )];
             while let Some((chunk_lod, chunk_pos)) = region_nodes.pop() {
-                let chunk_meter_pos =
-                    chunk_pos.cast::<f32>() * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
+                let hl = chunk_lod.leaf_chunk_length() as f32 * 0.5;
+                let chunk_meter_pos = (chunk_pos.cast::<f32>() + Vector3::new(hl, hl, hl))
+                    * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
                 let distance_to_camera = chunk_meter_pos.metric_distance(&camera_pos);
 
-                const LOD0_RENDER_DISTANCE: f32 = consts::voxel::TERRAIN_CHUNK_METER_LENGTH * 8.0;
-                let visible_size = (chunk_lod.region_chunk_length() as f32
+                const LOD0_RENDER_DISTANCE: f32 = consts::voxel::TERRAIN_CHUNK_METER_LENGTH * 16.0;
+                let visible_size = (chunk_lod.leaf_chunk_length() as f32
                     * consts::voxel::TERRAIN_CHUNK_METER_LENGTH)
-                    / distance_to_camera.max(1.0);
+                    / distance_to_camera;
                 // Minimum portion of the screen the chunk should take up to be loaded.
                 const MIN_CHUNK_SCREEN_SIZE: f32 =
                     consts::voxel::TERRAIN_CHUNK_METER_LENGTH / LOD0_RENDER_DISTANCE;
                 if visible_size < MIN_CHUNK_SCREEN_SIZE && !chunk_lod.is_lowest_res() {
                     if chunk_lod.is_full_res() {
-                        log::info!(
-                            "Chunk {:?} is visible but too small to justify full res, loading at lower LOD. {}, {}",
-                            chunk_pos,
-                            visible_size,
-                            distance_to_camera
-                        );
+                        //log::info!(
+                        //    "Chunk {:?} is visible but too small to justify full res, loading at lower LOD. {}, {}",
+                        //    chunk_pos,
+                        //    visible_size,
+                        //    distance_to_camera
+                        //);
                     }
                     continue;
                 }
 
-                streamer.chunk_queue.push(ChunkStreamRequest {
-                    chunk_id: ChunkId {
-                        chunk_pos,
-                        chunk_lod,
-                    },
-                    distance_to_camera,
-                });
-
                 if chunk_lod.is_full_res() {
+                    streamer.chunk_queue.push(ChunkStreamRequest {
+                        chunk_id: ChunkId {
+                            chunk_pos,
+                            chunk_lod,
+                        },
+                        distance_to_camera,
+                    });
                     continue;
                 }
 

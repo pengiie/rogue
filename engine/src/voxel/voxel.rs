@@ -3,7 +3,7 @@ use std::{
     ops::{Deref, DerefMut, Range},
 };
 
-use downcast::{downcast, Any};
+use downcast::{Any, downcast};
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 

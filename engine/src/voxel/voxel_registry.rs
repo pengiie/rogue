@@ -23,8 +23,8 @@ use crate::common::{
     freelist::{FreeList, FreeListHandle},
 };
 use crate::entity::{
-    ecs_world::{ECSWorld, Entity},
     RenderableVoxelEntity,
+    ecs_world::{ECSWorld, Entity},
 };
 use crate::event::{EventReader, Events};
 use crate::resource::{Res, ResMut};
@@ -68,6 +68,13 @@ impl VoxelModelId {
     }
 }
 
+pub enum VoxelRegistryEvent {
+    RegisteredAssetModel {
+        model_id: VoxelModelId,
+        asset_path: GameAssetPath,
+    },
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct VoxelModelInfo {
     pub model_type_id: std::any::TypeId,
@@ -105,6 +112,8 @@ pub struct VoxelModelRegistry {
     loading_renderable_entities: HashMap<GameAssetPath, Vec<Entity>>,
     ///// Non-terrain voxel models that need their normals updated.
     //pub to_update_model_normals: Vec<VoxelModelId>,
+    //
+    events: Vec<VoxelRegistryEvent>,
 }
 
 impl VoxelModelRegistry {
@@ -119,6 +128,7 @@ impl VoxelModelRegistry {
             model_load_event_reader: EventReader::new(),
             loading_static_model_handles: HashMap::new(),
             loading_renderable_entities: HashMap::new(),
+            events: Vec::new(),
         };
 
         s.register_voxel_model_type::<VoxelModelFlat>();
@@ -153,9 +163,11 @@ impl VoxelModelRegistry {
         let old = self
             .voxel_model_type_names
             .insert(T::NAME.to_owned(), type_id);
-        assert!(old.is_none(),
-                "{} voxel model type has a duplicate VoxelModelImpl::NAME with another already registered voxel model type with a different TypeId.", 
-                std::any::type_name::<T>());
+        assert!(
+            old.is_none(),
+            "{} voxel model type has a duplicate VoxelModelImpl::NAME with another already registered voxel model type with a different TypeId.",
+            std::any::type_name::<T>()
+        );
     }
 
     //pub fn set_voxel_model_asset_path(
@@ -173,6 +185,15 @@ impl VoxelModelRegistry {
     //    VoxelModelId::new(self.voxel_model_info.next_free_handle())
     //}
 
+    pub fn flush_out_events(
+        mut voxel_registry: ResMut<VoxelModelRegistry>,
+        mut events: ResMut<Events>,
+    ) {
+        for event in voxel_registry.events.drain(..) {
+            events.push(event);
+        }
+    }
+
     pub fn handle_model_load_events(
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         events: Res<Events>,
@@ -189,7 +210,9 @@ impl VoxelModelRegistry {
                 continue;
             };
             let Some(model_asset_path) = renderable.model_asset_path() else {
-                log::error!("Should not be sending EventVoxelRenderableEntityLoad for a renderable entity without an asset path.");
+                log::error!(
+                    "Should not be sending EventVoxelRenderableEntityLoad for a renderable entity without an asset path."
+                );
                 continue;
             };
             // If we don't worry about force reloading then use a cached model.
@@ -289,7 +312,11 @@ impl VoxelModelRegistry {
         }
     }
 
-    pub fn register_voxel_model<T: VoxelModelImpl>(&mut self, voxel_model: T) -> VoxelModelId {
+    pub fn register_voxel_model<T: VoxelModelImpl>(
+        &mut self,
+        voxel_model: T,
+        asset_path: Option<GameAssetPath>,
+    ) -> VoxelModelId {
         let type_id = std::any::TypeId::of::<T>();
         let data = self
             .voxel_model_data
@@ -300,8 +327,16 @@ impl VoxelModelRegistry {
         let voxel_id = self.voxel_model_info.push(VoxelModelInfo {
             model_type_id: type_id,
             index,
-            asset_path: None,
+            asset_path: asset_path.clone(),
         });
+        if let Some(asset_path) = asset_path {
+            self.static_asset_models
+                .insert(asset_path.clone(), VoxelModelId::new(voxel_id));
+            self.events.push(VoxelRegistryEvent::RegisteredAssetModel {
+                model_id: VoxelModelId::new(voxel_id),
+                asset_path,
+            });
+        }
         VoxelModelId::new(voxel_id)
     }
 

@@ -17,21 +17,31 @@ impl WorldPane {
     }
 
     pub fn show_generator_section(ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
-        ui.collapsing("Generation", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Enabled");
-                let mut enabled = !ctx.world_generator.paused;
-                ui.checkbox(&mut enabled, "");
-                ctx.world_generator.paused = !enabled;
+        egui::CollapsingHeader::new("Generation")
+            .default_open(true)
+            .show_unindented(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Enabled");
+                    let mut enabled = !ctx.world_generator.paused;
+                    ui.checkbox(&mut enabled, "");
+                    ctx.world_generator.paused = !enabled;
+                });
             });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Time of day");
-            ui.add(
-                egui::Slider::new(&mut ctx.sky.time_of_day_secs, 0.0..=Sky::SECS_PER_DAY)
-                    .show_value(true),
-            );
-        });
+        egui::CollapsingHeader::new("Sky")
+            .default_open(true)
+            .show_unindented(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Time of day");
+                    ui.add(
+                        egui::Slider::new(&mut ctx.sky.time_of_day_secs, 0.0..=Sky::SECS_PER_DAY)
+                            .show_value(true),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Do day/night cycle");
+                    ui.checkbox(&mut ctx.sky.do_day_night_cycle, "");
+                });
+            });
     }
 }
 

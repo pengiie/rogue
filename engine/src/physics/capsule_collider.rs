@@ -1,14 +1,11 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::transform::Transform;
-use crate::common::geometry::aabb::AABB;
-use crate::physics::collider::{ColliderDebugColoring, ContactManifold};
 use crate::common::color::Color;
-use crate::debug::{DebugCapsule, DebugFlags, DebugLine, DebugRenderer};
-use crate::physics::{
-    box_collider::BoxCollider,
-    collider::Collider,
-};
+use crate::common::geometry::aabb::AABB;
+use crate::debug::debug_renderer::DebugRenderer;
+use crate::physics::collider::{ColliderDebugColoring, ContactManifold};
+use crate::physics::{box_collider::BoxCollider, collider::Collider};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct CapsuleCollider {
@@ -37,15 +34,15 @@ impl CapsuleCollider {
     }
 
     pub fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
-        debug_renderer.draw_capsule(DebugCapsule {
-            center: self.center + world_transform.position,
-            orientation: self.orientation * world_transform.rotation,
-            radius: self.radius,
-            height: self.half_height,
-            color: Color::new_srgb(0.7, 0.1, 0.3),
-            alpha: 0.3,
-            flags: DebugFlags::SHADING,
-        });
+        //debug_renderer.draw_capsule(DebugCapsule {
+        //    center: self.center + world_transform.position,
+        //    orientation: self.orientation * world_transform.rotation,
+        //    radius: self.radius,
+        //    height: self.half_height,
+        //    color: Color::new_srgb(0.7, 0.1, 0.3),
+        //    alpha: 0.3,
+        //    flags: DebugFlags::SHADING,
+        //});
     }
 }
 
@@ -89,19 +86,19 @@ impl Collider for CapsuleCollider {
         debug_renderer: &mut DebugRenderer,
         coloring: ColliderDebugColoring,
     ) {
-        let (mut bottom, mut top) = self.bottom_top_points();
-        let matrix = world_transform.to_transformation_matrix();
-        bottom = matrix.transform_vector(&bottom);
-        top = matrix.transform_vector(&top);
+        //let (mut bottom, mut top) = self.bottom_top_points();
+        //let matrix = world_transform.to_transformation_matrix();
+        //bottom = matrix.transform_vector(&bottom);
+        //top = matrix.transform_vector(&top);
 
-        debug_renderer.draw_line(DebugLine {
-            start: bottom,
-            end: top,
-            thickness: self.radius,
-            color: coloring.color(),
-            alpha: 0.8,
-            flags: DebugFlags::NONE,
-        });
+        //debug_renderer.draw_line(DebugLine {
+        //    start: bottom,
+        //    end: top,
+        //    thickness: self.radius,
+        //    color: coloring.color(),
+        //    alpha: 0.8,
+        //    flags: DebugFlags::NONE,
+        //});
     }
 
     fn serialize_collider(

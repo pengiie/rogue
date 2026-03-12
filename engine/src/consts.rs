@@ -39,8 +39,8 @@ pub mod gfx {
     /// the the entire pipeline cache.
     pub const PIPELINE_INVALIDATION_TIMER_MS: u32 = 250;
 
-    pub const CAMERA_NEAR_PLANE: f32 = 0.01;
-    pub const CAMERA_FAR_PLANE: f32 = 10_000.0;
+    pub const CAMERA_NEAR_PLANE: f32 = 0.1;
+    pub const CAMERA_FAR_PLANE: f32 = 1_000.0;
 }
 
 pub mod io {

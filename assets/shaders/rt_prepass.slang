@@ -50,12 +50,24 @@ void main(uint3 id: SV_DispatchThreadID) {
   //}
 
   if (any(normal != float3(0))) {
-    let sun_dir = Sky.get().sun_dir;
+    var sun_dir = Sky.get().sun_dir;
+    bool is_night = sun_dir.y < 0.0;
+    var sun_color = Sky.sun_color();
+    if (is_night) {
+      sun_dir = -sun_dir;
+      sun_color = Sky.moon_color() * 0.3;
+    }
     let l = clamp(pow(dot(normal, sun_dir) + 0.3, 2.0), 0.035, 1.0);
-    out_color = out_color * l;
+    out_color = out_color * l * sun_color;
   }
 
-  let normalized_depth = depth / u_frame.world_info.camera.far_plane;
-  u_shader.backbuffer_depth.Store(coord.xy, normalized_depth);
+  let near = u_frame.world_info.camera.near_plane;
+  let far = u_frame.world_info.camera.far_plane;
+  let view_depth = depth;
+  let z_clip = view_depth * (far / (far - near)) + 1.0;
+  let w_clip = view_depth * ((far * near) / (far - near));
+  let clip_depth = z_clip / w_clip;
+  u_shader.backbuffer_depth.Store(coord.xy, saturate(clip_depth));
   u_shader.backbuffer.Store(coord.xy, float4(out_color, 1.0));
+  //u_shader.backbuffer.Store(coord.xy, float4(clip_depth,clip_depth,clip_depth, 1.0));
 }

@@ -1,5 +1,6 @@
 use nalgebra::Vector2;
 use rogue_engine::common::color::Color;
+use rogue_engine::debug::debug_renderer::DebugRenderer;
 use rogue_engine::egui::egui_gpu::EguiGpu;
 use rogue_engine::graphics::backend::{GfxBlitInfo, GfxFilterMode};
 use rogue_engine::graphics::device::DeviceResource;
@@ -13,6 +14,7 @@ use crate::ui::EditorUI;
 pub struct EditorRenderGraphConstants {
     pub backbuffer_name: &'static str,
     pub backbuffer_size_input: &'static str,
+    pub backbuffer_depth_r16_name: &'static str,
     pub backbuffer_depth_name: &'static str,
     pub backbuffer_blit_offset_input: &'static str,
 }
@@ -23,6 +25,7 @@ impl EditorRenderGraph {
     const GRAPH: EditorRenderGraphConstants = EditorRenderGraphConstants {
         backbuffer_name: "editor_backbuffer",
         backbuffer_size_input: "editor_backbuffer_size",
+        backbuffer_depth_r16_name: "editor_backbuffer_r16_depth",
         backbuffer_depth_name: "editor_backbuffer_depth",
         backbuffer_blit_offset_input: "editor_backbuffer_blit_offset",
     };
@@ -49,6 +52,7 @@ impl EditorRenderGraph {
         mut renderer: ResMut<Renderer>,
         mut egui_gpu: ResMut<EguiGpu>,
         mut world_gpu: ResMut<WorldRenderable>,
+        mut debug_renderer: ResMut<DebugRenderer>,
     ) {
         let mut fg = FrameGraphBuilder::new();
 
@@ -57,16 +61,48 @@ impl EditorRenderGraph {
         let backbuffer = fg.create_frame_image_with_ctx(Self::GRAPH.backbuffer_name, move |ctx| {
             FrameGraphImageInfo::new_rgba32float(ctx.get_vec2(backbuffer_size_input))
         });
+        let backbuffer_depth_r16 = fg
+            .create_frame_image_with_ctx(Self::GRAPH.backbuffer_depth_r16_name, move |ctx| {
+                FrameGraphImageInfo::new_r16float(ctx.get_vec2(backbuffer_size_input))
+            });
         let backbuffer_depth = fg
             .create_frame_image_with_ctx(Self::GRAPH.backbuffer_depth_name, move |ctx| {
-                FrameGraphImageInfo::new_r16float(ctx.get_vec2(backbuffer_size_input))
+                FrameGraphImageInfo::new_depth(ctx.get_vec2(backbuffer_size_input))
             });
 
         // World model material baking pass
         let bake_pass = world_gpu.set_graph_bake_pass(&mut fg);
 
         // World render pass, draws the terrain and entities.
-        world_gpu.set_graph_render_pass(&mut fg, backbuffer, backbuffer_depth);
+        world_gpu.set_graph_render_pass(&mut fg, backbuffer, backbuffer_depth_r16);
+
+        fg.create_pass(
+            "depth_copy_pass",
+            &[&backbuffer_depth_r16],
+            &[&backbuffer_depth],
+            move |recorder, ctx| {
+                let depth_src = ctx.get_image(&backbuffer_depth_r16);
+                let depth_dst = ctx.get_image(&backbuffer_depth);
+                let depth_src_info = recorder.get_image_info(&depth_src);
+                let depth_dst_info = recorder.get_image_info(&depth_dst);
+                assert_eq!(
+                    depth_src_info.resolution_xy(),
+                    depth_dst_info.resolution_xy()
+                );
+                recorder.blit(GfxBlitInfo {
+                    src: depth_src,
+                    src_offset: Vector2::new(0, 0),
+                    src_length: depth_src_info.resolution_xy(),
+                    dst: depth_dst,
+                    dst_offset: Vector2::new(0, 0),
+                    dst_length: depth_dst_info.resolution_xy(),
+                    filter: GfxFilterMode::Nearest,
+                });
+            },
+        );
+
+        // Debug render pass for shapes.
+        debug_renderer.set_graph_debug_pass(&mut fg, backbuffer, backbuffer_depth, &[]);
 
         let swapchain_image = fg.create_input_image(Renderer::GRAPH.image_swapchain);
         let swapchain_image_size =

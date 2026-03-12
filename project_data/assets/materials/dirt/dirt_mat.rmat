@@ -1,0 +1,6 @@
+{
+  "name": "Dirt",
+  "color_texture": {
+    "asset_path": "materials::dirt::dirt_albedo::png"
+  }
+}

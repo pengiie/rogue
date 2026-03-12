@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use egui::Sense;
 use rogue_engine::material::{Material, MaterialId, MaterialTextureType};
 
-use crate::ui::pane::{EditorUIPane, EditorUIPaneMethods};
+use crate::ui::{
+    EditorCommand,
+    pane::{EditorUIPane, EditorUIPaneMethods},
+};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct MaterialsPane {

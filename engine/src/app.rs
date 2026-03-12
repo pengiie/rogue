@@ -1,13 +1,12 @@
 use std::{
     collections::HashMap,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel},
 };
 
 use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
-use crate::task::tasks::Tasks;
 use crate::window::{time::Time, window::Window};
 use crate::{
     asset::{
@@ -18,7 +17,7 @@ use crate::{
     material::material_gpu::MaterialBankGpu,
 };
 use crate::{audio::Audio, world::world_renderable::WorldRenderable};
-use crate::{debug::DebugRenderer, entity::scripting::Scripts};
+use crate::{debug::debug_renderer::DebugRenderer, task::tasks::Tasks};
 use crate::{
     event::{EventReader, Events},
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
@@ -45,8 +44,10 @@ enum AppEvent {
 pub struct AppCreateInfo {
     pub project: ProjectAsset,
     pub on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
-    pub on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent)>>,
-    pub on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent)>>,
+    pub on_window_event_fn:
+        Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent) -> bool>>,
+    pub on_device_event_fn:
+        Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent) -> bool>>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -58,6 +59,8 @@ pub enum AppStage {
 
     /// Happens before any physics or rendering this frame. Where most logic should go.
     Update,
+
+    PreUniformsRenderWrite,
 
     /// Where you should write any render graph image or pass reference, as well as uniforms for
     /// shaders.
@@ -76,8 +79,8 @@ pub struct App {
     systems: HashMap<AppStage, Vec<SystemErased>>,
 
     on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
-    on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent)>>,
-    on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent)>>,
+    on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent) -> bool>>,
+    on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent) -> bool>>,
 
     event_sender: Sender<AppEvent>,
     event_receiver: Receiver<AppEvent>,
@@ -110,7 +113,6 @@ impl App {
 
         app.insert_resource(Tasks::new());
         app.insert_resource(Events::new());
-        app.insert_resource(Scripts::new());
         app.insert_resource(Settings::from(&UserSettingsAsset::default()));
         app.insert_resource(Input::new());
         app.insert_resource(Time::new());
@@ -226,7 +228,10 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         if let Some(on_window_event_fn) = &self.on_window_event_fn {
-            (*on_window_event_fn)(&mut self.resource_bank, &event);
+            let consumed = (*on_window_event_fn)(&mut self.resource_bank, &event);
+            if consumed {
+                return;
+            }
         }
 
         if self.resource_bank().has_resource::<Input>() {
@@ -313,7 +318,10 @@ impl winit::application::ApplicationHandler for App {
         event: winit::event::DeviceEvent,
     ) {
         if let Some(on_device_event_fn) = &self.on_device_event_fn {
-            (*on_device_event_fn)(&mut self.resource_bank, &event);
+            let consumed = (*on_device_event_fn)(&mut self.resource_bank, &event);
+            if consumed {
+                return;
+            }
         }
         //if self.resource_bank().has_resource::<Input>() && self.resource_bank().has_resource::<UI>()
         //{

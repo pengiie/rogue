@@ -11,6 +11,7 @@ use crate::{
 #[derive(Resource)]
 pub struct Sky {
     pub time_of_day_secs: f32,
+    pub do_day_night_cycle: bool,
 }
 
 impl Sky {
@@ -21,12 +22,15 @@ impl Sky {
 
     pub fn new() -> Self {
         Self {
-            time_of_day_secs: 0.0,
+            time_of_day_secs: 60.0 * 60.0 * 12.0,
+            do_day_night_cycle: false,
         }
     }
 
     pub fn update_time(mut sky: ResMut<Sky>, time: Res<Time>) {
-        sky.time_of_day_secs += time.delta_time().as_secs_f32() * Self::TIME_SCALE;
+        if sky.do_day_night_cycle {
+            sky.time_of_day_secs += time.delta_time().as_secs_f32() * Self::TIME_SCALE;
+        }
         sky.time_of_day_secs %= Self::SECS_PER_DAY;
     }
 

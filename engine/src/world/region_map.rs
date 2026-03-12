@@ -8,9 +8,9 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::resource::ResMut;
 use crate::voxel::voxel::VoxelEditData;
 use crate::world::{region::RegionTree, region_asset::WorldRegionAsset};
+use crate::{asset::asset::GameAssetPath, resource::ResMut};
 use crate::{
     asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
     world::region::WorldRegion,
@@ -115,10 +115,12 @@ impl ChunkLOD {
     }
 
     pub fn from_tree_height(tree_height: u32) -> Self {
-        assert!(tree_height <= consts::voxel::TERRAIN_REGION_TREE_HEIGHT,
+        assert!(
+            tree_height <= consts::voxel::TERRAIN_REGION_TREE_HEIGHT,
             "Cannot request an LOD which is higher (lower resolution) than the maximum region tree height, max is {} and requested {}",
             Self::MAX_LOD,
-            tree_height);
+            tree_height
+        );
         Self(Self::MAX_LOD - tree_height)
     }
 
@@ -419,6 +421,8 @@ pub struct RegionMap {
 
     /// The directory that contains all the region files for this RegionMap.
     pub regions_data_path: Option<PathBuf>,
+
+    pub used_materials: HashSet<GameAssetPath>,
 }
 
 impl RegionMap {
@@ -433,6 +437,7 @@ impl RegionMap {
             to_set_chunk_sfts: HashMap::new(),
 
             regions_data_path: region_data_path,
+            used_materials: HashSet::new(),
         }
     }
 
@@ -673,6 +678,10 @@ impl RegionMap {
         let region_map = &mut region_map as &mut RegionMap;
         let assets = &mut assets as &mut Assets;
 
+        let Some(assets_dir) = assets.project_assets_dir() else {
+            return;
+        };
+
         // Regions that were queued to load and have a valid region representation now, whether
         // from disk or manually set.
         let mut finished_loading = HashSet::new();
@@ -685,7 +694,7 @@ impl RegionMap {
 
             let Some(asset_handle) = asset_handle else {
                 let region_path = AssetPath::new_game_assets_dir(
-                    assets.project_assets_dir().clone().unwrap(),
+                    assets_dir.clone(),
                     format!("region_{}_{}_{}", region_pos.x, region_pos.y, region_pos.z),
                 );
                 *asset_handle = Some(assets.load_asset::<WorldRegionAsset>(region_path));
@@ -698,7 +707,9 @@ impl RegionMap {
                 AssetStatus::Saved => unreachable!(),
                 AssetStatus::Loaded => {
                     make_empty_region = false;
-                    todo!("Write loading region data from asset into region map and add to loaded regions list");
+                    todo!(
+                        "Write loading region data from asset into region map and add to loaded regions list"
+                    );
                 }
                 AssetStatus::NotFound => {
                     make_empty_region = true;

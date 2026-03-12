@@ -1,8 +1,10 @@
+use egui::Widget;
 use serde::ser::SerializeStruct;
 
 use crate::ui::{
+    EditorUIContext, asset_pane::AssetsPane, asset_properties_pane::AssetPropertiesPane,
     entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
-    materials_pane::MaterialsPane, world_pane::WorldPane, EditorUIContext,
+    materials_pane::MaterialsPane, world_pane::WorldPane,
 };
 
 pub struct EditorUIPaneData {
@@ -17,6 +19,21 @@ impl EditorUIPaneData {
 
     pub fn show(&mut self, ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
         self.pane.show(ui, ctx);
+        //ui.response().context_menu(|ui| {
+        //    if ui.button("Split").clicked() {
+        //        let mut old_pane = Box::new(EditorUISplitPane {
+        //            sub_panes: vec![],
+        //            split_direction: SplitDirection::Vertical,
+        //        }) as Box<dyn EditorUIPaneMethods>;
+        //        std::mem::swap(&mut self.pane, &mut old_pane);
+        //        self.pane.spawn_pane(EditorUIPaneData {
+        //            id: self.id.clone(),
+        //            pane: old_pane,
+        //        });
+        //        self.id = EditorUISplitPane::ID.to_owned();
+        //        ui.close_menu();
+        //    }
+        //});
     }
 
     pub fn open_pane(&mut self, pane_id: &str) -> bool {
@@ -74,6 +91,8 @@ impl<'de> serde::de::DeserializeSeed<'de> for EditorUIPaneDataDeserializeSeed {
             MaterialsPane::ID => deserialize_pane::<MaterialsPane, D>(de),
             EntityPropertiesPane::ID => deserialize_pane::<EntityPropertiesPane, D>(de),
             WorldPane::ID => deserialize_pane::<WorldPane, D>(de),
+            AssetsPane::ID => deserialize_pane::<AssetsPane, D>(de),
+            AssetPropertiesPane::ID => deserialize_pane::<AssetPropertiesPane, D>(de),
             _ => panic!("Unknown pane id: {}", self.id),
         }
     }
@@ -216,6 +235,7 @@ pub struct EditorUISplitPane {
 
 impl EditorUIPane for EditorUISplitPane {
     const ID: &'static str = "split_pane";
+    const NAME: &'static str = "Split";
 
     fn show(&mut self, ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
         let layout = match self.split_direction {
@@ -224,12 +244,25 @@ impl EditorUIPane for EditorUISplitPane {
         };
         ui.with_layout(layout, |ui| {
             for (i, pane) in self.sub_panes.iter_mut().enumerate() {
-                if i > 0 {
-                    ui.separator();
-                }
                 pane.show(ui, ctx);
+                egui::Separator::default().horizontal().ui(ui);
             }
         });
+    }
+
+    fn spawn_pane(&mut self, pane: EditorUIPaneData) -> Option<EditorUIPaneData> {
+        self.sub_panes.push(pane);
+        None
+    }
+
+    fn open_pane(&mut self, pane_id: &str) -> bool {
+        for pane in &mut self.sub_panes {
+            if pane.open_pane(pane_id) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -257,6 +290,7 @@ impl EditorUITabPane {
 
 impl EditorUIPane for EditorUITabPane {
     const ID: &'static str = "tab_pane";
+    const NAME: &'static str = "Tabs";
 
     fn show(&mut self, ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
         if self.tabs.is_empty() {
@@ -286,6 +320,17 @@ impl EditorUIPane for EditorUITabPane {
         self.selected_tab = self.tabs.len();
         self.tabs.push(pane);
         None
+    }
+
+    fn open_pane(&mut self, pane_id: &str) -> bool {
+        for (i, pane) in self.tabs.iter_mut().enumerate() {
+            if pane.open_pane(pane_id) {
+                self.selected_tab = i;
+                return true;
+            }
+        }
+
+        false
     }
 }
 

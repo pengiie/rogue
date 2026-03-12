@@ -13,17 +13,12 @@ use super::{
     transform::Transform,
 };
 use crate::common::{
-    color::Color,
-    geometry::{aabb::AABB, ray::Ray, shape::Shape},
-};
-use crate::common::{
     dyn_vec::{DynVecCloneable, TypeInfo},
     freelist::FreeList,
 };
-use crate::debug::{DebugCapsule, DebugFlags, DebugLine, DebugRenderer};
 use crate::entity::{
-    ecs_world::{ECSWorld, Entity},
     EntityChildren, EntityParent,
+    ecs_world::{ECSWorld, Entity},
 };
 use crate::physics::collider_registry::ColliderRegistry;
 use crate::physics::{
@@ -34,6 +29,13 @@ use crate::physics::{
 };
 use crate::resource::{Res, ResMut};
 use crate::window::time::Instant;
+use crate::{
+    common::{
+        color::Color,
+        geometry::{aabb::AABB, ray::Ray, shape::Shape},
+    },
+    debug::debug_renderer::DebugRenderer,
+};
 
 pub enum PhysicsTimestep {
     Max(Duration),
@@ -114,7 +116,6 @@ pub struct PhysicsWorld {
 
     broad_phase: BroadPhase,
     narrow_phase: NarrowPhase,
-    draw_impulse_lines: Vec<DebugLine>,
 }
 
 impl PhysicsWorld {
@@ -130,7 +131,6 @@ impl PhysicsWorld {
 
             broad_phase: BroadPhase::new(),
             narrow_phase: NarrowPhase::new(),
-            draw_impulse_lines: Vec::new(),
         }
     }
 
@@ -189,34 +189,34 @@ impl PhysicsWorld {
         // Render all contact points from narrow phase.
         for narrow_contact_pair in &physics_world.narrow_phase.contact_pairs {
             for point in &narrow_contact_pair.manifold.points {
-                debug_renderer.draw_capsule(DebugCapsule {
-                    center: point.position,
-                    orientation: UnitQuaternion::identity(),
-                    radius: 0.2,
-                    height: 0.0,
-                    color: Color::new_srgb_hex("#DC3333"),
-                    alpha: 0.75,
-                    flags: DebugFlags::XRAY,
-                });
+                //debug_renderer.draw_capsule(DebugCapsule {
+                //    center: point.position,
+                //    orientation: UnitQuaternion::identity(),
+                //    radius: 0.2,
+                //    height: 0.0,
+                //    color: Color::new_srgb_hex("#DC3333"),
+                //    alpha: 0.75,
+                //    flags: DebugFlags::XRAY,
+                //});
 
-                // Visualize each contact points penetration depth.
-                let start = point.position;
-                let end = start + narrow_contact_pair.manifold.normal * point.distance;
-                debug_renderer.draw_line(DebugLine {
-                    start,
-                    end,
-                    thickness: 0.1,
-                    color: Color::new_srgb_hex("#2368DF"),
-                    alpha: 0.75,
-                    flags: DebugFlags::XRAY,
-                });
+                //// Visualize each contact points penetration depth.
+                //let start = point.position;
+                //let end = start + narrow_contact_pair.manifold.normal * point.distance;
+                //debug_renderer.draw_line(DebugLine {
+                //    start,
+                //    end,
+                //    thickness: 0.1,
+                //    color: Color::new_srgb_hex("#2368DF"),
+                //    alpha: 0.75,
+                //    flags: DebugFlags::XRAY,
+                //});
             }
         }
 
         // Render impulse lines.
-        for line in &physics_world.draw_impulse_lines {
-            debug_renderer.draw_line(line.clone());
-        }
+        //for line in &physics_world.draw_impulse_lines {
+        //    debug_renderer.draw_line(line.clone());
+        //}
     }
 
     pub fn validate_colliders_exist(&self, ecs_world: &mut ECSWorld) {
@@ -321,10 +321,10 @@ impl PhysicsWorld {
                         ]);
                     let [Some((transform_a, rb_a)), Some((transform_b, rb_b))] = query.get() else {
                         log::debug!(
-                                 "Broad phase skipping collision between {:?} and {:?} due to missing transform or rigid body",
-                                 entity_a,
-                                 entity_b
-                             );
+                            "Broad phase skipping collision between {:?} and {:?} due to missing transform or rigid body",
+                            entity_a,
+                            entity_b
+                        );
                         continue;
                     };
 
@@ -363,7 +363,6 @@ impl PhysicsWorld {
 
         // Narrow-phase contact point generation.
         physics_world.narrow_phase.reset();
-        physics_world.draw_impulse_lines.clear();
         for [(entity_a, collider_a), (entity_b, collider_b)] in
             &physics_world.broad_phase.collisions
         {
@@ -482,22 +481,22 @@ impl PhysicsWorld {
                         rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_normal);
                     let angular_velocity_delta_b =
                         rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal);
-                    physics_world.draw_impulse_lines.push(DebugLine {
-                        start: contact_point.position,
-                        end: contact_point.position + angular_velocity_delta_a * 10.0,
-                        thickness: 0.1,
-                        color: Color::new_srgb_hex("#A357DC"),
-                        alpha: 0.75,
-                        flags: DebugFlags::XRAY,
-                    });
-                    physics_world.draw_impulse_lines.push(DebugLine {
-                        start: contact_point.position,
-                        end: contact_point.position + angular_velocity_delta_b * 10.0,
-                        thickness: 0.1,
-                        color: Color::new_srgb_hex("#A357DC"),
-                        alpha: 0.75,
-                        flags: DebugFlags::XRAY,
-                    });
+                    //physics_world.draw_impulse_lines.push(DebugLine {
+                    //    start: contact_point.position,
+                    //    end: contact_point.position + angular_velocity_delta_a * 10.0,
+                    //    thickness: 0.1,
+                    //    color: Color::new_srgb_hex("#A357DC"),
+                    //    alpha: 0.75,
+                    //    flags: DebugFlags::XRAY,
+                    //});
+                    //physics_world.draw_impulse_lines.push(DebugLine {
+                    //    start: contact_point.position,
+                    //    end: contact_point.position + angular_velocity_delta_b * 10.0,
+                    //    thickness: 0.1,
+                    //    color: Color::new_srgb_hex("#A357DC"),
+                    //    alpha: 0.75,
+                    //    flags: DebugFlags::XRAY,
+                    //});
 
                     rb_a.velocity -= impulse_along_normal * rb_a.inv_mass();
                     rb_a.set_angular_velocity(
@@ -639,33 +638,33 @@ impl PhysicsWorld {
                                 * -center_to_point_a.cross(&impulse_along_normal)
                                 * timestep.as_secs_f32(),
                         );
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: world_transform_a.position,
-                            end: contact_point.position,
-                            thickness: 0.05,
-                            color: Color::new_srgb_hex("#CCCCFF"),
-                            alpha: 0.5,
-                            flags: DebugFlags::XRAY,
-                        });
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: contact_point.position,
-                            end: contact_point.position - impulse_along_normal * 1000.0,
-                            thickness: 0.15,
-                            color: Color::new_srgb_hex("#EC1133"),
-                            alpha: 0.75,
-                            flags: DebugFlags::XRAY,
-                        });
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: contact_point.position,
-                            end: contact_point.position
-                                + (rb_a.inv_inertia()
-                                    * -center_to_point_a.cross(&impulse_along_normal))
-                                    * 1000.0,
-                            thickness: 0.1,
-                            color: Color::new_srgb_hex("#C0FF00"),
-                            alpha: 0.75,
-                            flags: DebugFlags::XRAY,
-                        });
+                        //physics_world.draw_impulse_lines.push(DebugLine {
+                        //    start: world_transform_a.position,
+                        //    end: contact_point.position,
+                        //    thickness: 0.05,
+                        //    color: Color::new_srgb_hex("#CCCCFF"),
+                        //    alpha: 0.5,
+                        //    flags: DebugFlags::XRAY,
+                        //});
+                        //physics_world.draw_impulse_lines.push(DebugLine {
+                        //    start: contact_point.position,
+                        //    end: contact_point.position - impulse_along_normal * 1000.0,
+                        //    thickness: 0.15,
+                        //    color: Color::new_srgb_hex("#EC1133"),
+                        //    alpha: 0.75,
+                        //    flags: DebugFlags::XRAY,
+                        //});
+                        //physics_world.draw_impulse_lines.push(DebugLine {
+                        //    start: contact_point.position,
+                        //    end: contact_point.position
+                        //        + (rb_a.inv_inertia()
+                        //            * -center_to_point_a.cross(&impulse_along_normal))
+                        //            * 1000.0,
+                        //    thickness: 0.1,
+                        //    color: Color::new_srgb_hex("#C0FF00"),
+                        //    alpha: 0.75,
+                        //    flags: DebugFlags::XRAY,
+                        //});
                     }
 
                     if !rb_b.is_static() {
@@ -677,33 +676,33 @@ impl PhysicsWorld {
                                 * timestep.as_secs_f32(),
                         );
                         // Draw center to contact point line
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: world_transform_b.position,
-                            end: contact_point.position,
-                            thickness: 0.05,
-                            color: Color::new_srgb_hex("#CCCCFF"),
-                            alpha: 0.5,
-                            flags: DebugFlags::XRAY,
-                        });
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: contact_point.position,
-                            end: contact_point.position + impulse_along_normal * 1000.0,
-                            thickness: 0.15,
-                            color: Color::new_srgb_hex("#EC1133"),
-                            alpha: 0.75,
-                            flags: DebugFlags::XRAY,
-                        });
-                        physics_world.draw_impulse_lines.push(DebugLine {
-                            start: contact_point.position,
-                            end: contact_point.position
-                                + (rb_b.inv_inertia()
-                                    * center_to_point_b.cross(&impulse_along_normal))
-                                    * 1000.0,
-                            thickness: 0.1,
-                            color: Color::new_srgb_hex("#C0FF00"),
-                            alpha: 0.75,
-                            flags: DebugFlags::XRAY,
-                        });
+                        // physics_world.draw_impulse_lines.push(DebugLine {
+                        //     start: world_transform_b.position,
+                        //     end: contact_point.position,
+                        //     thickness: 0.05,
+                        //     color: Color::new_srgb_hex("#CCCCFF"),
+                        //     alpha: 0.5,
+                        //     flags: DebugFlags::XRAY,
+                        // });
+                        // physics_world.draw_impulse_lines.push(DebugLine {
+                        //     start: contact_point.position,
+                        //     end: contact_point.position + impulse_along_normal * 1000.0,
+                        //     thickness: 0.15,
+                        //     color: Color::new_srgb_hex("#EC1133"),
+                        //     alpha: 0.75,
+                        //     flags: DebugFlags::XRAY,
+                        // });
+                        // physics_world.draw_impulse_lines.push(DebugLine {
+                        //     start: contact_point.position,
+                        //     end: contact_point.position
+                        //         + (rb_b.inv_inertia()
+                        //             * center_to_point_b.cross(&impulse_along_normal))
+                        //             * 1000.0,
+                        //     thickness: 0.1,
+                        //     color: Color::new_srgb_hex("#C0FF00"),
+                        //     alpha: 0.75,
+                        //     flags: DebugFlags::XRAY,
+                        // });
                     }
                 }
             }

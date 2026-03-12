@@ -17,12 +17,18 @@ use super::{
     backend::{GfxSwapchainInfo, GraphicsBackendDevice},
     vulkan::device::{VulkanCreateInfo, VulkanDevice},
 };
-use crate::event::Events;
-use crate::resource::{Res, ResMut};
 use crate::settings::{GraphicsSettings, Settings};
 use crate::window::{
     time::Instant,
     window::{Window, WindowHandle},
+};
+use crate::{
+    event::Events,
+    graphics::backend::{Buffer, ResourceId},
+};
+use crate::{
+    graphics::backend::GfxBufferCreateInfo,
+    resource::{Res, ResMut},
 };
 
 pub type GfxDevice = Box<dyn GraphicsBackendDevice>;
@@ -52,6 +58,28 @@ impl DeviceResource {
         Self {
             last_frame_time: None,
             backend_device: None,
+        }
+    }
+
+    // Returns true if allocated.
+    pub fn create_or_reallocate_buffer(
+        &mut self,
+        buffer: &mut Option<ResourceId<Buffer>>,
+        create_info: GfxBufferCreateInfo,
+    ) -> bool {
+        match buffer {
+            Some(prev_buffer) => {
+                let buffer_info = self.get_buffer_info(prev_buffer);
+                if buffer_info.size < create_info.size {
+                    *prev_buffer = self.create_buffer(create_info);
+                    return true;
+                }
+                return false;
+            }
+            None => {
+                *buffer = Some(self.create_buffer(create_info));
+                return true;
+            }
         }
     }
 

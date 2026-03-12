@@ -2,7 +2,7 @@ use super::transform::Transform;
 use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::obb::OBB;
 use crate::common::{color::Color, geometry::shape::Shape};
-use crate::debug::{DebugFlags, DebugOBB, DebugRenderer};
+use crate::debug::debug_renderer::DebugRenderer;
 use crate::egui::util::{position_ui, rotation_ui, scale_ui};
 use crate::physics::collider::{Collider, ColliderDebugColoring, ContactManifold};
 use erased_serde::Serialize;
@@ -193,23 +193,23 @@ impl Collider for BoxCollider {
         debug_renderer: &mut DebugRenderer,
         coloring: ColliderDebugColoring,
     ) {
-        debug_renderer.draw_obb(DebugOBB {
-            obb: &world_transform.transform_obb(&self.obb),
-            thickness: 0.025,
-            color: coloring.color(),
-            alpha: 0.75,
-            flags: DebugFlags::XRAY,
-        });
-        debug_renderer.draw_obb(DebugOBB {
-            obb: &world_transform
-                .transform_obb(&self.obb)
-                .bounding_aabb()
-                .as_obb(),
-            thickness: 0.025,
-            color: Color::new_srgb_hex("#55AAB3"),
-            alpha: 0.75,
-            flags: DebugFlags::XRAY,
-        });
+        //debug_renderer.draw_obb(DebugOBB {
+        //    obb: &world_transform.transform_obb(&self.obb),
+        //    thickness: 0.025,
+        //    color: coloring.color(),
+        //    alpha: 0.75,
+        //    flags: DebugFlags::XRAY,
+        //});
+        //debug_renderer.draw_obb(DebugOBB {
+        //    obb: &world_transform
+        //        .transform_obb(&self.obb)
+        //        .bounding_aabb()
+        //        .as_obb(),
+        //    thickness: 0.025,
+        //    color: Color::new_srgb_hex("#55AAB3"),
+        //    alpha: 0.75,
+        //    flags: DebugFlags::XRAY,
+        //});
     }
 
     fn serialize_collider(

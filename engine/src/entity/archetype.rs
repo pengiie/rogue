@@ -1,15 +1,9 @@
-use std::{
-    any::TypeId,
-    cell::Cell
-    ,
-    ptr::NonNull,
-};
+use std::{any::TypeId, cell::Cell, ptr::NonNull};
 
 use crate::common::dyn_vec::{DynVec, TypeInfo};
 use crate::entity::{
     component::{Bundle, ComponentTypeBorrow},
-    ecs_world::Entity
-    ,
+    ecs_world::Entity,
 };
 
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.
@@ -83,8 +77,8 @@ impl ComponentArchetype {
         self.types.iter().find(|x| x.type_id == type_id).is_some()
     }
 
-    fn get_type_data(&self, type_info: &TypeInfo) -> &DynVec {
-        let i = self.get_type_index(&type_info.type_id);
+    fn get_type_data(&self, type_id: &TypeId) -> &DynVec {
+        let i = self.get_type_index(&type_id);
         return &self.data[i];
     }
 
@@ -108,7 +102,7 @@ impl ComponentArchetype {
             self.get_entity(index).is_some(),
             "Can't get component of non-existent entity"
         );
-        self.get_type_data(type_info).get(index)
+        self.get_type_data(&type_info.type_id).get(index)
     }
 
     pub fn try_get<T: 'static>(&self, type_info: &TypeInfo, index: usize) -> Option<&T> {
@@ -120,7 +114,7 @@ impl ComponentArchetype {
             .map(|data| data.get(index))
     }
 
-    pub unsafe fn get_raw(&self, type_info: &TypeInfo, index: usize) -> &[u8] {
+    pub unsafe fn get_raw(&self, type_info: &TypeId, index: usize) -> &[u8] {
         assert!(
             self.get_entity(index).is_some(),
             "Can't get component of non-existent entity"
@@ -131,14 +125,14 @@ impl ComponentArchetype {
     /// For unsafety please see `DynVec::get_mut_unchecked(usize)`.
     pub unsafe fn get_mut_unchecked<T: 'static>(
         &self,
-        type_info: &TypeInfo,
+        type_id: &TypeId,
         index: usize,
     ) -> NonNull<T> {
         assert!(
             self.get_entity(index).is_some(),
             "Can't get component of non-existent entity"
         );
-        return self.get_type_data(type_info).get_mut_unchecked(index);
+        return self.get_type_data(type_id).get_mut_unchecked(index);
     }
 
     /// Expects the index to be valid, returning None if the type doesn't exist in this archetype.

@@ -9,17 +9,20 @@ use rogue_engine::{
         repr::project::ProjectAsset,
     },
     consts::{self, editor},
-    egui::{egui_gpu::EguiGpu, Egui},
+    debug::debug_renderer::DebugRenderer,
+    egui::{Egui, egui_gpu::EguiGpu},
     entity::ecs_world::ECSWorld,
     graphics::camera::MainCamera,
     impl_asset_load_save_serde,
+    input::Input,
     resource::ResourceBank,
     task::tasks::Tasks,
     window::window::Window,
 };
+use winit::event::{DeviceEvent, ElementState};
 
 use crate::{
-    editor_settings::UserEditorSettingsAsset, game_session::GameSession,
+    editor_settings::UserEditorSettingsAsset, game_session::GameSession, gizmo::EditorGizmo,
     render_graph::EditorRenderGraph, session::EditorSession, ui::EditorUI,
     world::generator::WorldGenerator,
 };
@@ -27,6 +30,7 @@ use crate::{
 pub mod camera_controller;
 pub mod editor_settings;
 pub mod game_session;
+pub mod gizmo;
 mod render_graph;
 pub mod session;
 pub mod ui;
@@ -50,8 +54,6 @@ fn main() {
         .filter(Some("wgpu_core"), log::LevelFilter::Warn)
         .filter(Some("sctk"), log::LevelFilter::Info)
         .init();
-
-    log::info!("curr_dir is {:?}", std::env::current_dir());
 
     let editor_settings = UserEditorSettingsAsset::load_editor_settings();
     let project = editor_settings.load_project();
@@ -84,6 +86,8 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     );
     rb.insert(session);
 
+    rb.insert(DebugRenderer::new());
+
     let egui = Egui::new(&rb.get_resource::<Window>());
     rb.insert(egui);
     rb.insert(EguiGpu::new());
@@ -91,38 +95,85 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     let world_generator = WorldGenerator::new(&rb.get_resource::<Tasks>());
     rb.insert(world_generator);
 
+    rb.insert(EditorGizmo::new());
+
     rb.run_system(EditorRenderGraph::init_render_graph);
 }
 
-fn on_window_event(rb: &mut ResourceBank, event: &winit::event::WindowEvent) {
+fn on_window_event(rb: &mut ResourceBank, event: &winit::event::WindowEvent) -> bool {
     if rb.has_resource::<Egui>() {
         let window = rb.get_resource::<Window>();
         // We can't force the cursor position on wayland only confine it so ignore any cursor inputs when it is locked.
         if !window.is_cursor_locked() {
-            rb.get_resource_mut::<Egui>()
+            return rb
+                .get_resource_mut::<Egui>()
                 .handle_window_event(&window, &event);
         }
     }
+    return false;
 }
 
-fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) {}
+fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> bool {
+    if !rb.has_resource::<EditorUI>() || !rb.has_resource::<Input>() || !rb.has_resource::<Window>()
+    {
+        return false;
+    }
+    let window = rb.get_resource::<Window>();
+    if window.is_cursor_locked() {
+        // Locked cursor always belongs to the game window.
+        return false;
+    }
+
+    let editor_ui = rb.get_resource_mut::<EditorUI>();
+    let padding = editor_ui.content_padding();
+    let input = rb.get_resource::<Input>();
+    let window_size = rb.get_resource::<Window>().size();
+    let mouse_pos = input.mouse_position().map(|x| x.floor() as u32);
+    let mouse_in_game_window = mouse_pos.x >= padding.z
+        && mouse_pos.x <= window_size.x - padding.w
+        && mouse_pos.y >= padding.x
+        && mouse_pos.y <= window_size.y - padding.y;
+
+    match event {
+        DeviceEvent::MouseWheel { .. } | DeviceEvent::Key(_) => {
+            return !mouse_in_game_window;
+        }
+        DeviceEvent::Button { state, .. } => match state {
+            ElementState::Pressed => {}
+            ElementState::Released => {
+                return !mouse_in_game_window;
+            }
+        },
+        _ => {}
+    }
+
+    return false;
+}
 
 fn setup_editor_systems(app: &mut App) {
-    app.insert_system(AppStage::Update, EditorSession::update_editor_camera);
+    app.insert_system(
+        AppStage::Update,
+        EditorSession::update_editor_camera_controller,
+    );
     app.insert_system(AppStage::Update, WorldGenerator::update);
-    app.insert_system(AppStage::Update, EditorSession::update_settings_save);
+    // Handles events such as project/settings saving and loading.
+    app.insert_system(AppStage::Update, EditorSession::update_editor_events);
+    app.insert_system(AppStage::Update, EditorGizmo::update);
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);
 
     app.insert_system(
-        AppStage::RenderWrite,
+        AppStage::PreUniformsRenderWrite,
         EditorRenderGraph::write_general_inputs,
     );
     // Write the images and vertex/index buffers to render the ui.
     app.insert_system(AppStage::RenderWrite, EguiGpu::write_render_data);
     // Write the render graph pass input for rasterizing the ui.
     app.insert_system(AppStage::RenderWrite, EguiGpu::write_ui_pass);
+
+    // Write the render graph pass input for rasterizing the debug shapes.
+    app.insert_system(AppStage::RenderWrite, DebugRenderer::write_graph_pass);
 }
 
 fn init_ecs_world() -> ECSWorld {

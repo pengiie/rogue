@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use rogue_engine::{
     asset::{
-        asset::{AssetPath, Assets},
+        asset::{AssetLoadError, AssetPath, Assets},
         repr::project::ProjectAsset,
     },
     impl_asset_load_save_serde, impl_asset_save_serde,
 };
 
-use crate::{init_ecs_world, ui::EditorUI};
+use crate::{editor_settings, init_ecs_world, ui::EditorUI};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct UserEditorSettingsAsset {
@@ -32,16 +32,40 @@ impl_asset_save_serde!(UserEditorSettingsAssetProxy<'_>);
 impl UserEditorSettingsAsset {
     const ASSET_PATH: &str = "editor::editor_settings::json";
 
+    pub fn new() -> Self {
+        Self {
+            last_project_dir: None,
+            editor_ui: EditorUI::new(),
+        }
+    }
+
     pub fn load_editor_settings() -> Self {
         let editor_settings_path = AssetPath::new_user_dir(Self::ASSET_PATH);
         log::info!(
             "Looking for editor user settings at {:?}",
             editor_settings_path
         );
-        Assets::load_asset_sync::<UserEditorSettingsAsset>(editor_settings_path).unwrap_or(Self {
-            last_project_dir: None,
-            editor_ui: EditorUI::new(),
-        })
+        match Assets::load_asset_sync::<UserEditorSettingsAsset>(editor_settings_path.clone()) {
+            Ok(editor_settings) => editor_settings,
+            Err(err) => {
+                match err {
+                    AssetLoadError::NotFound { path } => {
+                        log::info!(
+                            "Couldn't find existing editor settings at {:?}",
+                            editor_settings_path
+                        );
+                    }
+                    AssetLoadError::Other(error) => {
+                        log::error!(
+                            "Error when trying to load editor settings at {:?}. Error: {:?}",
+                            editor_settings_path,
+                            error
+                        );
+                    }
+                }
+                Self::new()
+            }
+        }
     }
 
     pub fn load_project(&self) -> ProjectAsset {

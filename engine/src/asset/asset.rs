@@ -12,7 +12,7 @@ use std::{
     str::FromStr,
     sync::{
         atomic::AtomicU64,
-        mpsc::{channel, Receiver},
+        mpsc::{Receiver, channel},
     },
     time::Duration,
 };
@@ -160,18 +160,23 @@ impl Assets {
                 ProcessingAsset::Load { id, asset_recv } => {
                     match asset_recv.try_recv() {
                         Ok(res) => match res {
-                            Ok(ProcessedAsset { data, path, hash }) => {
+                            Ok(ProcessedAsset {
+                                data,
+                                path: asset_path,
+                                hash,
+                            }) => {
                                 assets.assets.insert(
                                     *id,
                                     AssetData {
                                         data,
-                                        path,
+                                        path: asset_path.clone(),
                                         is_touched: false,
                                         last_hash: Some(hash),
                                         dependencies: 0,
                                     },
                                 );
                                 assets.asset_statuses.insert(*id, AssetStatus::Loaded);
+                                assets.path_id_map.insert(asset_path, *id);
                             }
                             Err(err) => match err {
                                 AssetLoadError::NotFound { path } => {
@@ -184,16 +189,17 @@ impl Assets {
                                 }
                             },
                         },
-                        Err(err) => {
-                            match err {
-                                std::sync::mpsc::TryRecvError::Empty => {
-                                    continue 'asset_loop;
-                                }
-                                std::sync::mpsc::TryRecvError::Disconnected => {
-                                    log::error!("Error with asset thread disconnection while loading asset {}", id)
-                                }
+                        Err(err) => match err {
+                            std::sync::mpsc::TryRecvError::Empty => {
+                                continue 'asset_loop;
                             }
-                        }
+                            std::sync::mpsc::TryRecvError::Disconnected => {
+                                log::error!(
+                                    "Error with asset thread disconnection while loading asset {}",
+                                    id
+                                )
+                            }
+                        },
                     }
                     finished_ids.push(*id);
                 }
@@ -212,16 +218,17 @@ impl Assets {
                                 assets.asset_statuses.insert(*id, AssetStatus::Error(err));
                             }
                         },
-                        Err(err) => {
-                            match err {
-                                std::sync::mpsc::TryRecvError::Empty => {
-                                    continue 'asset_loop;
-                                }
-                                std::sync::mpsc::TryRecvError::Disconnected => {
-                                    log::error!("Error with asset thread disconnection while saving asset {}", id)
-                                }
+                        Err(err) => match err {
+                            std::sync::mpsc::TryRecvError::Empty => {
+                                continue 'asset_loop;
                             }
-                        }
+                            std::sync::mpsc::TryRecvError::Disconnected => {
+                                log::error!(
+                                    "Error with asset thread disconnection while saving asset {}",
+                                    id
+                                )
+                            }
+                        },
                     }
                     finished_ids.push(*id);
                 }
@@ -343,6 +350,12 @@ impl Assets {
         handle
     }
 
+    pub fn wait_until_all_loaded(&mut self) {
+        while !self.currently_loading_assets.is_empty() {
+            self.update_impl();
+        }
+    }
+
     pub fn save_asset<T>(&mut self, path: AssetPath, asset: T) -> AssetHandle
     where
         T: AssetSaver + Send + 'static,
@@ -411,6 +424,31 @@ impl Assets {
         self.asset_statuses
             .get(&handle.id)
             .expect(&format!("Got an invalid asset handle: {:?}", handle))
+    }
+
+    pub fn contains_asset(&self, asset_path: &AssetPath) -> bool {
+        self.path_id_map.contains_key(asset_path)
+    }
+
+    pub fn get_asset_by_path<T: 'static>(&self, asset_path: &AssetPath) -> Option<&T> {
+        let handle = self.get_asset_handle::<T>(asset_path)?;
+        self.get_asset(&handle)
+    }
+
+    pub fn get_asset_mut_by_path<T: 'static>(&mut self, asset_path: &AssetPath) -> Option<&mut T> {
+        let handle = self.get_asset_handle::<T>(asset_path)?;
+        self.get_asset_mut(&handle)
+    }
+
+    pub fn get_asset_mut<T: 'static>(&mut self, handle: &AssetHandle) -> Option<&mut T> {
+        assert_eq!(std::any::TypeId::of::<T>(), handle.asset_type);
+
+        self.assets.get_mut(&handle.id).map(|asset| {
+            asset.data.downcast_mut::<T>().expect(&format!(
+                "Stored asset with id {} was expected to be type {:?} but was not.",
+                handle.id, handle.asset_type
+            ))
+        })
     }
 
     pub fn get_asset<T: 'static>(&self, handle: &AssetHandle) -> Option<&T> {
@@ -684,7 +722,7 @@ macro_rules! impl_asset_load_save_serde {
                 Self: Sized + std::any::Any,
             {
                 match data.path().extension() {
-                    "json" => match data.read_contents() {
+                    "json" | "rmat" => match data.read_contents() {
                         Ok(contents) => serde_json::from_str::<$name>(&contents).map_err(|err| {
                             $crate::asset::asset::AssetLoadError::Other(anyhow::anyhow!(
                                 "Failed to deserialize file into {}, error: {}",
@@ -814,6 +852,9 @@ impl GameAssetPath {
         let last_i = path.components().count() - 1;
         for (i, p) in path.iter().enumerate() {
             let p = p.to_string_lossy().to_string();
+            if p == "." {
+                continue;
+            }
             if p.contains(".") {
                 let parts = p.split(".").collect::<Vec<_>>();
                 s.push_str(parts[0]);
@@ -826,7 +867,13 @@ impl GameAssetPath {
                 s.push_str("::");
             }
         }
-        Self::new(&s).expect("oops the algo doesnt work")
+        Self::new(&s).unwrap_or_else(|| {
+            panic!(
+                "Invalid relative path for asset: {}, created {}",
+                path.to_string_lossy(),
+                s,
+            )
+        })
     }
 
     pub fn as_relative_path_str(&self) -> String {
@@ -927,7 +974,7 @@ impl AssetPath {
     // TODO: Test this fn.
     pub fn from_project_dir_path(project_dir: &Path, path: &Path) -> Self {
         let sub_path = path
-            .strip_prefix(project_dir.join("../../../assets"))
+            .strip_prefix(project_dir.join("assets"))
             .expect(&format!(
                 "\"{}\" must be a prefix of path \"{}\".",
                 project_dir.to_string_lossy(),

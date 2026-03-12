@@ -1,10 +1,10 @@
 use crate::asset::asset::Assets;
-use crate::debug::DebugRenderer;
+use crate::debug::debug_renderer::DebugRenderer;
 use crate::entity::{ecs_world::ECSWorld, scripting::Scripts};
 use crate::event::Events;
 use crate::graphics::{device::DeviceResource, renderer::Renderer};
 use crate::input::Input;
-use crate::material::{material_gpu::MaterialBankGpu, MaterialBank};
+use crate::material::{MaterialBank, material_gpu::MaterialBankGpu};
 use crate::physics::physics_world::PhysicsWorld;
 use crate::system::System;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
@@ -24,26 +24,14 @@ pub fn game_loop(app: &App) {
     // DeviceResource::update
 
     // ------- FRAME SETUP ---------
+    // Wait for any previous processing frames based off our timeline semaphores or capped
+    // framerate.
     app.run_system(DeviceResource::begin_frame);
+    // Update our time info such as delta time.
     app.run_system(Time::update);
     app.run_system(Input::collect_gamepad_events);
 
-    let cpu_time = Instant::now();
-
-    // ------ SESSION ----------
-
-    // Since we are about to run scripts, ensure state is updated.
-    app.run_system(Scripts::update_world_state);
-
-    // Starts and stops the game, running Scripts::on_setup.
-    // Manages project asset loading.
-    //app.run_system(EditorSession::update);
-
     // ------- ASSETS --------
-
-    // Load any requested scripts
-    app.run_system(Scripts::update_loaded_scripts);
-
     // Run any queued up asset tasks and update finished tasks.
     app.run_system(Assets::update);
 
@@ -55,8 +43,7 @@ pub fn game_loop(app: &App) {
     }
 
     // -------- PHYSICS ----------
-    // Only do dynamics if we are in game running.
-    //app.get_resource_mut::<PhysicsWorld>().do_dynamics = session_state == SessionState::Game;
+    // Do fixed-timestep physics updates for stability.
     let physics_updates = app
         .get_resource_mut::<PhysicsWorld>()
         .physics_update_count();
@@ -70,31 +57,35 @@ pub fn game_loop(app: &App) {
             }
         }
 
+        // Integrate velocities, mark collisions, and do collision resolution.
         app.run_system(PhysicsWorld::do_physics_update);
         app.run_system(PhysicsWorld::end_time_step);
     }
 
     // Handle ECSWorld events.
-    app.run_system(ECSWorld::handle_despawn_events);
+    app.run_system(ECSWorld::handle_entity_commands);
 
     // ------- VOXEL REGISTRY -------
-    // Load any entity renderables that need to be loaded.
+    // Load any entity renderables that have been requested to be loaded.
     app.run_system(VoxelModelRegistry::handle_model_load_events);
+    app.run_system(VoxelModelRegistry::flush_out_events);
 
     // ------- SPATIAL WORLD -------
 
+    // Updates the day/night cycle of the world.
     app.run_system(Sky::update_time);
-
-    // Handle region and chunk loading updates.
-    //app.run_system(World::update);
-
     // Rendered terrain relative to player/camera anchor updating.
     app.run_system(WorldChunkStreamer::update);
+    // Load any regions from disk into memory which have chunk data requested.
     app.run_system(RegionMap::update_region_loading);
+    // Update from chunk editing commands and submits chunk events.
     app.run_system(RegionMap::update_chunks);
+    // Marks regions which should be written based off of region events.
     app.run_system(WorldRenderable::update_region_gpu_repr);
 
-    // ------- GPU RENDERING ---------
+    // ==============================================
+    // ============== GPU RENDERING =================
+    // ==============================================
 
     app.run_system(PhysicsWorld::render_debug_colliders);
 
@@ -104,9 +95,14 @@ pub fn game_loop(app: &App) {
     app.run_system(MaterialBank::update_events);
     app.run_system(MaterialBankGpu::write_render_data);
 
+    // Requests the gpu voxel model representation for any used chunk models in the world.
     app.run_system(WorldRenderable::update_gpu_chunk_models);
+    // Allocates gpu voxel model data and invalidates any requested voxel model material data.
     app.run_system(VoxelModelRegistryGpu::write_render_data);
+    // Write the gpu data used for terrain and entity rendering.
     app.run_system(WorldRenderable::write_render_data);
+    // Write the debug renderer buffers.
+    app.run_system(DebugRenderer::write_render_data);
 
     // Only continue with frame graph pass writing if we successfully acquired the swapchain since
     // some images may rely on swapchain info.
@@ -114,15 +110,19 @@ pub fn game_loop(app: &App) {
     if app.get_resource::<Renderer>().did_acquire_swapchain() {
         app.run_system(Renderer::begin_frame);
 
+        if let Some(systems) = app.systems(AppStage::PreUniformsRenderWrite) {
+            for system in systems {
+                system.run(app.resource_bank());
+            }
+        }
+        app.run_system(Renderer::write_frame_uniforms);
+
+        app.run_system(WorldRenderable::write_graph_passes);
         if let Some(systems) = app.systems(AppStage::RenderWrite) {
             for system in systems {
                 system.run(app.resource_bank());
             }
         }
-
-        app.run_system(DebugRenderer::write_debug_shapes_pass);
-        app.run_system(Renderer::write_frame_uniforms);
-        app.run_system(WorldRenderable::write_graph_passes);
 
         app.run_system(Renderer::end_frame);
     }
@@ -132,10 +132,4 @@ pub fn game_loop(app: &App) {
     // Discard any inputs and events cached for this frame.
     app.run_system(Input::clear_inputs);
     app.run_system(Events::frame_cleanup);
-    //app.run_system(VoxelWorld::clear_state);
-
-    //debug!(
-    //    "CPU Frame took {}ms",
-    //    cpu_time.elapsed().as_micros() as f32 / 1000.0
-    //)
 }

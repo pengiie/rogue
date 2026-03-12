@@ -343,8 +343,7 @@ impl GraphicsBackendRecorder for VulkanRecorder {
             // Render area should be known by now.
             let image_info = self.ctx.get_image(&depth_attachment.image);
             assert_eq!(
-                render_area.extent,
-                image_info.info.extent,
+                render_area.extent, image_info.info.extent,
                 "Depth attachment should have the same extent as color attachments in a raster pipeline."
             );
 
@@ -576,6 +575,29 @@ impl GraphicsBackendRenderPass for VulkanRenderPass<'_> {
                 0,
             )
         };
+    }
+
+    fn draw_indirect_count(
+        &mut self,
+        draw_buffer: ResourceId<Buffer>,
+        draw_buffer_offset: u64,
+        draw_count_buffer: ResourceId<Buffer>,
+        draw_count_buffer_offset: u64,
+        max_draw_count: u32,
+    ) {
+        let draw_buffer = self.recorder.ctx.get_buffer(draw_buffer);
+        let draw_count_buffer = self.recorder.ctx.get_buffer(draw_count_buffer);
+        unsafe {
+            self.recorder.ctx.device().cmd_draw_indirect_count(
+                self.recorder.command_buffer,
+                draw_buffer.buffer,
+                draw_buffer_offset,
+                draw_count_buffer.buffer,
+                draw_count_buffer_offset,
+                max_draw_count,
+                std::mem::size_of::<ash::vk::DrawIndirectCommand>() as u32,
+            );
+        }
     }
 }
 
