@@ -49,22 +49,22 @@ impl EditorVoxelEditing {
         if !editing.enabled {
             return;
         }
+
+        // Only edit the selected entity and only if we are actually pointing at it.
         let Some(selected_entity) = editor_session.selected_entity else {
             return;
         };
-
         let Some(raycast_hit) = &editor_session.entity_raycast else {
             return;
         };
-        // Only edit the selected entity.
         if raycast_hit.entity != selected_entity {
             return;
         }
 
+        // Selected entity should have a renderable and voxel model if we are editing.
         let Ok(renderable) = ecs_world.get::<&RenderableVoxelEntity>(selected_entity) else {
             return;
         };
-
         let Some(model_id) = renderable.voxel_model_id() else {
             return;
         };

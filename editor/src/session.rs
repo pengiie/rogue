@@ -22,7 +22,7 @@ use winit::event::MouseButton;
 use crate::{
     camera_controller::{EditorCameraController, EditorCameraControllerType},
     editor_settings::{UserEditorSettingsAsset, UserEditorSettingsAssetProxy},
-    game_session::GameSession,
+    game_session::EditorGameSession,
     ui::EditorUI,
 };
 
@@ -33,18 +33,11 @@ pub enum EditorEvent {
     SaveVoxelModel(GameAssetPath),
 }
 
-pub enum SessionGameState {
-    Stopped,
-    Paused,
-    Playing,
-}
-
 #[derive(Resource)]
 pub struct EditorSession {
     pub entity_raycast: Option<WorldEntityRaycastHit>,
     pub selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
-    session_game_state: SessionGameState,
 
     editor_camera: Entity,
     editor_camera_controller: EditorCameraController,
@@ -62,7 +55,7 @@ impl EditorSession {
             entity_raycast: None,
             selected_entity: None,
             hovered_entity: None,
-            session_game_state: SessionGameState::Stopped,
+
             editor_camera,
             editor_camera_controller: EditorCameraController::new(),
             double_right_click_buffer: InputBuffer::new(2),
@@ -70,7 +63,7 @@ impl EditorSession {
         }
     }
 
-    fn init_editor_camera(ecs_world: &mut ECSWorld) -> Entity {
+    pub fn init_editor_camera(ecs_world: &mut ECSWorld) -> Entity {
         ecs_world.spawn((Transform::new(), Camera::new(90.0f32.to_radians())))
     }
 
@@ -168,7 +161,7 @@ impl EditorSession {
         material_bank: Res<MaterialBank>,
         main_camera: Res<MainCamera>,
         region_map: Res<RegionMap>,
-        game_session: Res<GameSession>,
+        game_session: Res<EditorGameSession>,
     ) {
         let mut unique_events = HashSet::new();
         for event in session.editor_event_reader.read(&events) {

@@ -7,7 +7,6 @@ pub mod common;
 pub mod consts;
 pub mod debug;
 pub mod egui;
-pub mod engine;
 pub mod entity;
 pub mod event;
 pub mod game;

@@ -387,8 +387,7 @@ impl ECSWorld {
     /// Clones any entity in the world with a GameEntity component. Only clones components which
     /// implement the `GameComponent` trait. This also preserves the same entity ids to keep
     /// references coherent.
-    pub fn clone_game_entities(&self, mut ctx: GameComponentCloneContext) -> ECSWorld {
-        let ctx = &mut ctx;
+    pub fn clone_game_entities(&self, mut ctx: &mut GameComponentCloneContext) -> ECSWorld {
         let mut new_world = ECSWorld::new();
 
         for (entity, entity_info) in self.entities.iter_with_handle() {

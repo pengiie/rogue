@@ -15,16 +15,6 @@ impl TopBarPane {
             ui.menu_button("File", |ui| {
                 if ui.button("New").clicked() {
                     todo!();
-                    //if ui_state.new_project_dialog.is_none() {
-                    //    let (tx, rx) = std::sync::mpsc::channel();
-                    //    ui_state.new_project_dialog = Some(EditorNewProjectDialog {
-                    //        open: true,
-                    //        file_name: String::new(),
-                    //        tx_file_name: tx,
-                    //        rx_file_name: rx,
-                    //        last_file_name: (String::new(), false, String::new()),
-                    //    });
-                    //}
                     ui.close_menu();
                 }
                 if ui
@@ -36,17 +26,6 @@ impl TopBarPane {
                 {
                     ctx.events.push(EditorEvent::SaveProject);
                     ctx.events.push(EditorEvent::SaveEditorSettings);
-
-                    // TODO
-                    //session.save_project(
-                    //    assets,
-                    //    session,
-                    //    editor,
-                    //    ecs_world,
-                    //    voxel_world,
-                    //    physics_world,
-                    //    material_bank,
-                    //);
                     ui.close_menu();
                 }
                 if ui.button("Open").clicked() {}

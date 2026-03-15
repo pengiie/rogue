@@ -22,7 +22,7 @@ use rogue_engine::{
 use winit::event::{DeviceEvent, ElementState};
 
 use crate::{
-    editor_settings::UserEditorSettingsAsset, game_session::GameSession, gizmo::EditorGizmo,
+    editor_settings::UserEditorSettingsAsset, game_session::EditorGameSession, gizmo::EditorGizmo,
     render_graph::EditorRenderGraph, session::EditorSession, ui::EditorUI,
     voxel_editing::EditorVoxelEditing, world::generator::WorldGenerator,
 };
@@ -59,10 +59,7 @@ fn main() {
     let editor_settings = UserEditorSettingsAsset::load_editor_settings();
     let project = editor_settings.load_project();
 
-    let game_session = GameSession {
-        game_camera: project.settings.game_camera,
-    };
-
+    let game_session = EditorGameSession::new(&project.settings);
     let mut app = App::new(AppCreateInfo {
         project,
         on_post_graphics_init_fn: Some(Box::new(on_post_graphics_init)),
@@ -153,6 +150,7 @@ fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> 
 }
 
 fn setup_editor_systems(app: &mut App) {
+    // Update editor session related systems.
     app.insert_system(
         AppStage::Update,
         EditorSession::update_selected_entity_and_raycast,
@@ -162,17 +160,28 @@ fn setup_editor_systems(app: &mut App) {
         EditorSession::update_editor_camera_controller,
     );
 
+    // Update editor voxel editing.
     app.insert_system(
         AppStage::Update,
         EditorVoxelEditing::update_voxel_editing_entity,
     );
 
+    // Update the voxel-based world generator.
     app.insert_system(AppStage::Update, WorldGenerator::update);
+
     // Handles events such as project/settings saving and loading.
     app.insert_system(AppStage::Update, EditorSession::update_editor_events);
 
+    // Update editor gizmo actions.
     app.insert_system(AppStage::Update, EditorGizmo::update);
     app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
+
+    // Insert game script systems which run conditionally on editor game state.
+    app.insert_system(AppStage::Update, EditorGameSession::try_run_game_on_update);
+    app.insert_system(
+        AppStage::Update,
+        EditorGameSession::try_run_game_on_fixed_update,
+    );
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);

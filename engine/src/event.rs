@@ -56,11 +56,23 @@ pub struct EventReader<T> {
 }
 
 impl<T: 'static> EventReader<T> {
-    /// Will read double events in the case that the producer runs before this reader in the game
-    /// loop. Keep that in mind :p.
+    /// Reads all events since the beginning of the app.
     pub fn new() -> Self {
         Self {
             last_event_id: 0,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Reads all events since this event reader was created.
+    pub fn new_current(events: &Events) -> Self {
+        let last_event_id = events
+            .banks
+            .get(&std::any::TypeId::of::<T>())
+            .map(|bank| bank.event_id_tracker - 1)
+            .unwrap_or(0);
+        Self {
+            last_event_id,
             marker: std::marker::PhantomData,
         }
     }
