@@ -511,11 +511,12 @@ impl RegionMap {
             .push((chunk_id, sft_id));
     }
 
+    /// Returns the previous chunks model if it existed.
     fn set_chunk_unchecked(
         regions: &mut HashMap<RegionPos, WorldRegion>,
         chunk_id: &ChunkId,
         sft_id: Option<VoxelModelId>,
-    ) {
+    ) -> Option<VoxelModelId> {
         let ChunkId {
             chunk_pos,
             chunk_lod,
@@ -562,11 +563,11 @@ impl RegionMap {
                         if region.tree.nodes[node_idx].has_model_ptr() {
                             // TODO: Deallocate old model thing.
                         }
-                        return;
+                        return None;
                     }
                 } else {
                     // Noop since node chunk is already empty.
-                    return;
+                    return None;
                 }
             }
         }
@@ -582,6 +583,9 @@ impl RegionMap {
         region.model_handles.push(sft_id);
         node_data.model_ptr = new_model_ptr;
         region.active_leaves.insert(node_idx as u32);
+        return node_data
+            .model_ptr()
+            .map(|old_model_ptr| region.model_handles[old_model_ptr as usize]);
     }
 
     pub fn apply_edit(&mut self, edit: VoxelTerrainEdit) {
@@ -660,7 +664,11 @@ impl RegionMap {
                 //});
                 region_map.chunk_events.push(ChunkEvent {
                     chunk_id,
-                    event_type: ChunkEventType::Updated,
+                    event_type: if sft_id.is_some() {
+                        ChunkEventType::Updated
+                    } else {
+                        ChunkEventType::Unloaded
+                    },
                 });
                 region_map.region_events.push(RegionEvent {
                     region_pos: *region_pos,

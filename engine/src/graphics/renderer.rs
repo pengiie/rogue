@@ -27,7 +27,7 @@ use crate::{
     debug::debug_renderer::DebugRenderer,
     graphics::backend::ResourceId,
     settings::{GraphicsSettings, Settings},
-    world::sky::Sky,
+    world::{renderable::entities_gpu::WorldEntitiesGpu, sky::Sky},
 };
 use crate::{
     entity::{self, ecs_world::ECSWorld},
@@ -38,7 +38,9 @@ use crate::{
     graphics::frame_graph::IntoFrameGraphResource,
     window::{time::Time, window::Window},
 };
-use crate::{material::material_gpu::MaterialBankGpu, world::world_renderable::WorldRenderable};
+use crate::{
+    material::material_gpu::MaterialBankGpu, world::renderable::region_map_gpu::RegionMapGpu,
+};
 use crate::{
     resource::{Res, ResMut},
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
@@ -136,7 +138,8 @@ impl Renderer {
         ecs_world: Res<ECSWorld>,
         main_camera: Res<MainCamera>,
         material_bank_gpu: Res<MaterialBankGpu>,
-        world_gpu: ResMut<WorldRenderable>,
+        region_map_gpu: Res<RegionMapGpu>,
+        entities_gpu: ResMut<WorldEntitiesGpu>,
         voxel_registry_gpu: Res<VoxelModelRegistryGpu>,
         debug_renderer: Res<DebugRenderer>,
         sky: Res<Sky>,
@@ -229,14 +232,7 @@ impl Renderer {
                 );
 
                 // // Voxel entity bindings
-                writer.write_binding(
-                    "u_frame.voxel.entity_data.accel_buf",
-                    *world_gpu.entities_accel_buf(),
-                );
-                writer.write_uniform(
-                    "u_frame.voxel.entity_data.entity_count",
-                    world_gpu.entities_accel_buf_count(),
-                );
+                entities_gpu.write_global_uniforms(writer);
 
                 // Voxel model bindings
                 writer.write_binding(
@@ -261,23 +257,23 @@ impl Renderer {
                 // // Voxel terrain data
                 writer.write_binding(
                     "u_frame.voxel.terrain.region_data",
-                    *world_gpu.region_data_buffer(),
+                    *region_map_gpu.region_data_buffer(),
                 );
                 writer.write_binding(
                     "u_frame.voxel.terrain.region_ptrs_window",
-                    *world_gpu.region_window_buffer(),
+                    *region_map_gpu.region_window_buffer(),
                 );
                 writer.write_uniform(
                     "u_frame.voxel.terrain.side_length",
-                    world_gpu.region_window_side_length(),
+                    region_map_gpu.region_window_side_length(),
                 );
                 writer.write_uniform(
                     "u_frame.voxel.terrain.region_anchor",
-                    Vector3::<i32>::from(world_gpu.region_window_anchor()),
+                    Vector3::<i32>::from(region_map_gpu.region_window_anchor()),
                 );
                 writer.write_uniform(
                     "u_frame.voxel.terrain.region_offset",
-                    world_gpu.region_window_offset(),
+                    region_map_gpu.region_window_offset(),
                 );
 
                 debug_renderer.write_global_uniforms(writer);

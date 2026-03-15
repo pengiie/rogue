@@ -12,15 +12,15 @@ use crate::asset::{
     repr::TextAsset,
 };
 use crate::entity::{
+    EntityChildren, EntityParent, GameEntity,
     component::{GameComponentDeserializeContext, GameComponentSerializeContext},
     ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor},
-    EntityChildren, EntityParent, GameEntity,
 };
 use crate::graphics::camera::MainCamera;
 use crate::material::{Material, MaterialBank};
 use crate::physics::physics_world::PhysicsWorld;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
-use serde::{ser::SerializeStruct, Deserializer};
+use serde::{Deserializer, ser::SerializeStruct};
 
 #[derive(Clone)]
 pub struct ProjectSettings {

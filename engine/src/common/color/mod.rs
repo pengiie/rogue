@@ -1,8 +1,9 @@
 use nalgebra::{ComplexField, Matrix3, Vector3};
 
-#[derive(PartialEq)]
+#[derive(PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
     pub xyz: Vector3<f32>,
+    #[serde(skip)]
     _marker: std::marker::PhantomData<S>,
 }
 

@@ -12,8 +12,8 @@ use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
     flat::VoxelModelFlat,
     voxel::{
-        VoxelMaterialSet, VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods,
-        VoxelModelImpl, VoxelModelImplMethods, VoxelModelTrace,
+        VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl,
+        VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };

@@ -62,6 +62,10 @@ public struct BMaterial {
     return (comp & 0x80000000) > 0;
   }
 
+  public static bool needs_normal_update(uint comp) {
+    return (comp & 0x40000000) > 0;
+  }
+
   public static BMaterial decode(uint comp) {
     // 16 bits for normal.
     let octahedral_coords = uint2((comp >> 15) & 0xFF, (comp >> 23) & 0xFF);

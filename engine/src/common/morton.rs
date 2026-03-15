@@ -61,6 +61,14 @@ pub const fn next_power_of_4(x: u32) -> u32 {
     return x << 1;
 }
 
+pub const fn prev_power_of_4(x: u32) -> u32 {
+    let x = x.next_power_of_two() >> 1;
+    if (is_power_of_four(x)) {
+        return x;
+    }
+    return x >> 1;
+}
+
 mod tests {
     use crate::common::morton::morton_traversal_octree;
 

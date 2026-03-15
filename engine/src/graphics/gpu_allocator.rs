@@ -57,13 +57,6 @@ impl GpuBufferAllocator {
     }
 
     pub fn reallocate(&mut self, old_allocation: &Allocation, bytes: u64) -> Option<Allocation> {
-        assert!(
-            bytes.next_power_of_two() <= self.allocations.size,
-            "Tried to allocate {} bytes but allocator can only hold {}",
-            bytes.next_power_of_two(),
-            self.allocations.size
-        );
-        let allocation_size = bytes.next_power_of_two();
         // TODO: See if we can just expand the current allocation.
         self.free(old_allocation);
         self.allocate(bytes)

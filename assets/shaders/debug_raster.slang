@@ -13,12 +13,14 @@ struct VertexStageOutput {
 }
 
 [shader("vertex")]
-VertexStageOutput main_vs(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID) {
+VertexStageOutput main_vs(uint vertex_id : SV_VertexID, uint instance_id : SV_VulkanInstanceID) {
   let debug = debug::DebugRenderer::get();
   let instance_info = debug.instance_info_buffer.Load(instance_id);
   let mesh_info = debug.mesh_info_buffer.Load(instance_info.mesh_info_index);
+
   let index_offset = mesh_info.index_offset + vertex_id;
   let index = debug.indices_buffer.Load<uint>(index_offset << 2);
+
   let vertex_offset = mesh_info.vertex_offset + index * 6;
   let vx = debug.vertices_buffer.Load<float>(vertex_offset << 2);
   let vy = debug.vertices_buffer.Load<float>((vertex_offset + 1) << 2);
@@ -38,7 +40,7 @@ VertexStageOutput main_vs(uint vertex_id : SV_VertexID, uint instance_id : SV_In
   var vs_out = VertexStageOutput();
   vs_out.vertex = VertexOut();
   vs_out.vertex.color = float4(color::srgb_to_lsrgb(instance_info.color), 1.0);
-  vs_out.vertex.normal = vertex_normal;
+  vs_out.vertex.normal = vertex_normal;;
   vs_out.position = vs_pos;
   return vs_out;
 }

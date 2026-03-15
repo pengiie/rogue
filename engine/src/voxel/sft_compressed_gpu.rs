@@ -82,12 +82,13 @@ impl VoxelModelSFTCompressedGpu {
         allocator: &mut VoxelDataAllocator,
         required_size: u64,
     ) -> bool {
-        match allocations.get(attachment_id) {
+        match allocations.get_mut(attachment_id) {
             Some(old_allocation) => {
                 if old_allocation.length_bytes() < required_size {
-                    let new_allocation = allocator
+                    *old_allocation = allocator
                         .reallocate(device, old_allocation, required_size)
                         .expect("Failed to reallocate attachment data.");
+
                     return true;
                 }
                 return false;
@@ -247,11 +248,14 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
 
         let mut should_write_raw_data = self.invalidated_material;
         self.invalidated_material = false;
+
+        let did_model_update = model.update_tracker != self.update_tracker;
         // If data allocation is some and we haven't initialized yet, expected the attachment data
         // to also be ready.
-        if !self.initialized_data && self.nodes_allocation.is_some() {
+        if (!self.initialized_data || did_model_update) && self.nodes_allocation.is_some() {
             should_write_raw_data = true;
             self.initialized_data = true;
+            self.update_tracker = model.update_tracker;
 
             {
                 let mut node_data_packed = Vec::with_capacity(
@@ -313,7 +317,7 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
         }
     }
 
-    fn invalidate_material(&mut self) {
+    fn mark_for_invalidation(&mut self) {
         self.invalidated_material = true;
     }
 

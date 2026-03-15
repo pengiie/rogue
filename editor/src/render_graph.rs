@@ -7,7 +7,8 @@ use rogue_engine::graphics::device::DeviceResource;
 use rogue_engine::graphics::frame_graph::FrameGraphImageInfo;
 use rogue_engine::graphics::{frame_graph::FrameGraphBuilder, renderer::Renderer};
 use rogue_engine::resource::{Res, ResMut};
-use rogue_engine::world::world_renderable::WorldRenderable;
+use rogue_engine::voxel::baker_gpu::VoxelBakerGpu;
+use rogue_engine::world::renderable::rt_pass::WorldRTPass;
 
 use crate::ui::EditorUI;
 
@@ -51,7 +52,8 @@ impl EditorRenderGraph {
     pub fn init_render_graph(
         mut renderer: ResMut<Renderer>,
         mut egui_gpu: ResMut<EguiGpu>,
-        mut world_gpu: ResMut<WorldRenderable>,
+        mut world_rt_pass_gpu: ResMut<WorldRTPass>,
+        mut voxel_baker_gpu: ResMut<VoxelBakerGpu>,
         mut debug_renderer: ResMut<DebugRenderer>,
     ) {
         let mut fg = FrameGraphBuilder::new();
@@ -71,10 +73,10 @@ impl EditorRenderGraph {
             });
 
         // World model material baking pass
-        let bake_pass = world_gpu.set_graph_bake_pass(&mut fg);
+        let bake_pass = voxel_baker_gpu.set_graph_bake_pass(&mut fg);
 
         // World render pass, draws the terrain and entities.
-        world_gpu.set_graph_render_pass(&mut fg, backbuffer, backbuffer_depth_r16);
+        world_rt_pass_gpu.set_graph_rt_pass(&mut fg, backbuffer, backbuffer_depth_r16);
 
         fg.create_pass(
             "depth_copy_pass",

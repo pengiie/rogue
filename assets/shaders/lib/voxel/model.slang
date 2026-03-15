@@ -38,7 +38,7 @@ public RayModelTest trace_model(Ray ray, AABB aabb, uint voxel_model_ptr) {
   return RayModelTest.miss();
 }
 
-public bool model_is_voxel_present(uint3 local_voxel_pos, uint voxel_model_ptr) {
+public bool model_is_voxel_present(int3 local_voxel_pos, uint voxel_model_ptr) {
   let info_data = u_frame.voxel.model_info_data;
   let model_schema = info_data.Load<uint>(voxel_model_ptr << 2);
   switch (model_schema) {

@@ -24,7 +24,7 @@ use winit::event::{DeviceEvent, ElementState};
 use crate::{
     editor_settings::UserEditorSettingsAsset, game_session::GameSession, gizmo::EditorGizmo,
     render_graph::EditorRenderGraph, session::EditorSession, ui::EditorUI,
-    world::generator::WorldGenerator,
+    voxel_editing::EditorVoxelEditing, world::generator::WorldGenerator,
 };
 
 pub mod camera_controller;
@@ -34,6 +34,7 @@ pub mod gizmo;
 mod render_graph;
 pub mod session;
 pub mod ui;
+pub mod voxel_editing;
 pub mod world;
 
 fn main() {
@@ -95,6 +96,7 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     let world_generator = WorldGenerator::new(&rb.get_resource::<Tasks>());
     rb.insert(world_generator);
 
+    rb.insert(EditorVoxelEditing::new());
     rb.insert(EditorGizmo::new());
 
     rb.run_system(EditorRenderGraph::init_render_graph);
@@ -153,12 +155,24 @@ fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> 
 fn setup_editor_systems(app: &mut App) {
     app.insert_system(
         AppStage::Update,
+        EditorSession::update_selected_entity_and_raycast,
+    );
+    app.insert_system(
+        AppStage::Update,
         EditorSession::update_editor_camera_controller,
     );
+
+    app.insert_system(
+        AppStage::Update,
+        EditorVoxelEditing::update_voxel_editing_entity,
+    );
+
     app.insert_system(AppStage::Update, WorldGenerator::update);
     // Handles events such as project/settings saving and loading.
     app.insert_system(AppStage::Update, EditorSession::update_editor_events);
+
     app.insert_system(AppStage::Update, EditorGizmo::update);
+    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);

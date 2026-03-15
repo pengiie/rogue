@@ -42,12 +42,12 @@ void main(uint3 id: SV_DispatchThreadID) {
 
   // If the hit entity is closer than the hit terrain, use the
   // entities hit.
-  //let ray_entity = voxel::EntityData.trace(ray);
-  //if (ray_entity.did_hit && ray_entity.depth_t < depth) {
-  //  depth = ray_entity.depth_t;
-  //  out_color = ray_entity.color;
-  //  normal = normalize(ray_entity.normal);
-  //}
+  let ray_entity = voxel::EntityData.trace(ray);
+  if (ray_entity.did_hit && ray_entity.depth_t < depth) {
+    depth = ray_entity.depth_t;
+    out_color = ray_entity.albedo;
+    normal = normalize(ray_entity.normal);
+  }
 
   if (any(normal != float3(0))) {
     var sun_dir = Sky.get().sun_dir;

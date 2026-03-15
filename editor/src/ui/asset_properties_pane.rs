@@ -102,6 +102,7 @@ impl AssetPropertiesPane {
                             );
                         }
                     }),
+                    preset_file_path: None,
                     extensions: vec!["png".to_owned()],
                 });
                 ui.close_menu();

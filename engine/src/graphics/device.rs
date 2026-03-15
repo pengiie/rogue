@@ -9,9 +9,6 @@ use std::{
 use log::{debug, info};
 use nalgebra::ComplexField;
 use rogue_macros::Resource;
-use wgpu::{
-    Backends, DeviceDescriptor, Features, InstanceDescriptor, Limits, SurfaceConfiguration,
-};
 
 use super::{
     backend::{GfxSwapchainInfo, GraphicsBackendDevice},

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Translation3, UnitQuaternion, Vector3};
 use rogue_macros::Resource;
 
 use crate::{
@@ -8,7 +8,10 @@ use crate::{
         asset::{AssetPath, Assets},
         gltf::GltfAsset,
     },
-    common::color::{Color, ColorSpaceSrgb},
+    common::{
+        color::{Color, ColorSpaceSrgb},
+        geometry::obb::OBB,
+    },
     graphics::{
         backend::{
             Buffer, GfxBlendFactor, GfxBlendOp, GfxBufferCreateInfo, GfxCullMode, GfxFrontFace,
@@ -40,6 +43,8 @@ pub struct DebugMesh {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DebugShapeType {
     Arrow,
+    Sphere,
+    Cube,
 }
 
 pub struct DebugShape {
@@ -115,6 +120,8 @@ impl DebugRenderer {
             shape_mesh_index_offset: HashMap::new(),
         };
         s.register_mesh(DebugShapeType::Arrow, "models::arrow::glb");
+        s.register_mesh(DebugShapeType::Sphere, "models::sphere::glb");
+        s.register_mesh(DebugShapeType::Cube, "models::cube::glb");
         s
     }
 
@@ -171,6 +178,39 @@ impl DebugRenderer {
             .insert(shape_type, DebugMesh { vertices, indices });
     }
 
+    pub fn draw_line(
+        &mut self,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        radius: f32,
+        color: Color<ColorSpaceSrgb>,
+    ) {
+        let diff = end - start;
+        let rot = if diff != Vector3::y() {
+            UnitQuaternion::face_towards(&diff, &Vector3::y())
+        } else {
+            UnitQuaternion::from_scaled_axis(Vector3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0))
+        };
+        let midpoint = (start + end) * 0.5;
+        let isometry = nalgebra::Isometry3::from_parts(Translation3::from(midpoint), rot);
+        let scale = Vector3::new(radius, radius, diff.norm() * 0.5 + radius);
+        self.draw_cube(isometry, scale, color);
+    }
+
+    pub fn draw_cube(
+        &mut self,
+        isometry: nalgebra::Isometry3<f32>,
+        scale: Vector3<f32>,
+        color: Color<ColorSpaceSrgb>,
+    ) {
+        let transform =
+            isometry.to_homogeneous() * nalgebra::Matrix4::new_nonuniform_scaling(&scale);
+        self.shapes
+            .entry(DebugShapeType::Cube)
+            .or_default()
+            .push(DebugShape { transform, color });
+    }
+
     pub fn draw_arrow(
         &mut self,
         start: Vector3<f32>,
@@ -178,15 +218,99 @@ impl DebugRenderer {
         scale: f32,
         color: Color<ColorSpaceSrgb>,
     ) {
-        let isometry = nalgebra::Isometry3::<f32>::face_towards(
-            &Point3::from(start),
-            &Point3::from(end),
-            &Vector3::y(),
-        );
-        let scale = nalgebra::Scale3::new(scale, scale, scale);
-        let transform = isometry.to_homogeneous();
+        let diff = end - start;
+        let isometry = if diff != Vector3::y() {
+            nalgebra::Isometry3::<f32>::face_towards(
+                &Point3::from(start),
+                &Point3::from(end),
+                &Vector3::y(),
+            )
+        } else {
+            nalgebra::Isometry3::<f32>::new(
+                start,
+                Vector3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0),
+            )
+        };
+        let scale = nalgebra::Scale3::new(scale, scale, diff.norm());
+        let transform = isometry.to_homogeneous() * scale.to_homogeneous();
         self.shapes
             .entry(DebugShapeType::Arrow)
+            .or_default()
+            .push(DebugShape { transform, color });
+    }
+
+    pub fn draw_obb(&mut self, obb: &OBB, line_radius: f32, color: Color<ColorSpaceSrgb>) {
+        let (min, _) = obb.rotated_min_max();
+        let side_length = obb.aabb.side_length();
+        // Bottom
+        self.draw_line(min, min + obb.right() * side_length.x, line_radius, color);
+        self.draw_line(min, min + obb.forward() * side_length.z, line_radius, color);
+        self.draw_line(
+            min + obb.right() * side_length.x,
+            min + obb.right() * side_length.x + obb.forward() * side_length.z,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + obb.forward() * side_length.z,
+            min + obb.right() * side_length.x + obb.forward() * side_length.z,
+            line_radius,
+            color,
+        );
+
+        // Top
+        let top_offset = obb.up() * side_length.y;
+        self.draw_line(
+            min + top_offset,
+            min + obb.right() * side_length.x + top_offset,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + top_offset,
+            min + obb.forward() * side_length.z + top_offset,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + obb.right() * side_length.x + top_offset,
+            min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + obb.forward() * side_length.z + top_offset,
+            min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
+            line_radius,
+            color,
+        );
+
+        // Lines between top and bottom.
+        self.draw_line(min, min + top_offset, line_radius, color);
+        self.draw_line(
+            min + obb.right() * side_length.x,
+            min + obb.right() * side_length.x + top_offset,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + obb.forward() * side_length.z,
+            min + obb.forward() * side_length.z + top_offset,
+            line_radius,
+            color,
+        );
+        self.draw_line(
+            min + obb.right() * side_length.x + obb.forward() * side_length.z,
+            min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
+            line_radius,
+            color,
+        );
+    }
+
+    pub fn draw_sphere(&mut self, center: Vector3<f32>, radius: f32, color: Color<ColorSpaceSrgb>) {
+        let transform = nalgebra::Matrix4::new_scaling(radius).append_translation(&center);
+        self.shapes
+            .entry(DebugShapeType::Sphere)
             .or_default()
             .push(DebugShape { transform, color });
     }
@@ -201,7 +325,7 @@ impl DebugRenderer {
             &mut self.vertices_buffer,
             GfxBufferCreateInfo {
                 name: "debug_renderer_vertices_buffer".to_owned(),
-                size: (total_vertex_count * std::mem::size_of::<Vector3<f32>>()) as u64,
+                size: (total_vertex_count * 6 * std::mem::size_of::<f32>()) as u64,
             },
         );
 
@@ -236,32 +360,35 @@ impl DebugRenderer {
         );
 
         let mut mesh_info_data = Vec::with_capacity(mesh_info_size);
+        // Offset in f32s
         let mut vertex_offset = 0;
+        // Offset in u32s
         let mut index_offset = 0;
         for (mesh_type, mesh) in self.meshes.iter() {
-            self.shape_mesh_offests.insert(*mesh_type, vertex_offset);
-
             device_resource.write_buffer_slice(
                 &self.vertices_buffer.unwrap(),
-                vertex_offset as u64,
+                vertex_offset as u64 * std::mem::size_of::<f32>() as u64,
                 bytemuck::cast_slice(&mesh.vertices),
             );
             device_resource.write_buffer_slice(
                 &self.indices_buffer.unwrap(),
-                vertex_offset as u64,
+                index_offset as u64 * std::mem::size_of::<u32>() as u64,
                 bytemuck::cast_slice(&mesh.indices),
             );
-            self.shape_mesh_offests
-                .insert(*mesh_type, mesh_info_data.len() as u32);
+            self.shape_mesh_offests.insert(
+                *mesh_type,
+                (mesh_info_data.len() / std::mem::size_of::<DebugMeshInfo>()) as u32,
+            );
             mesh_info_data.extend_from_slice(bytemuck::bytes_of(&DebugMeshInfo {
-                vertex_count: mesh.vertices.len() as u32,
                 vertices_offset: vertex_offset,
-                index_count: mesh.indices.len() as u32,
                 indices_offset: index_offset,
+
+                vertex_count: mesh.vertices.len() as u32,
+                index_count: mesh.indices.len() as u32,
             }));
 
-            vertex_offset += (mesh.vertices.len() * 6 * std::mem::size_of::<f32>()) as u32;
-            index_offset += (mesh.indices.len() * std::mem::size_of::<u32>()) as u32;
+            vertex_offset += (mesh.vertices.len() * 6) as u32;
+            index_offset += (mesh.indices.len()) as u32;
         }
 
         device_resource.write_buffer_slice(

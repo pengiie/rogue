@@ -7,7 +7,6 @@ use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
-use crate::window::{time::Time, window::Window};
 use crate::{
     asset::{
         asset::Assets,
@@ -15,8 +14,12 @@ use crate::{
     },
     graphics::renderer::Renderer,
     material::material_gpu::MaterialBankGpu,
+    world::{
+        renderable::{region_map_gpu::RegionMapGpu, rt_pass::WorldRTPass},
+        world_entities::WorldEntities,
+    },
 };
-use crate::{audio::Audio, world::world_renderable::WorldRenderable};
+use crate::{audio::Audio, world::renderable::entities_gpu::WorldEntitiesGpu};
 use crate::{debug::debug_renderer::DebugRenderer, task::tasks::Tasks};
 use crate::{
     event::{EventReader, Events},
@@ -35,6 +38,10 @@ use crate::{
 use crate::{
     system::{System, SystemErased},
     world::sky::Sky,
+};
+use crate::{
+    voxel::baker_gpu::VoxelBakerGpu,
+    window::{time::Time, window::Window},
 };
 
 enum AppEvent {
@@ -136,14 +143,18 @@ impl App {
         let mut device_resource = self.get_resource_mut::<DeviceResource>();
         let renderer = Renderer::new(&mut device_resource);
         let voxel_registry_gpu = VoxelModelRegistryGpu::new(&mut device_resource);
-        let world_renderable = WorldRenderable::new(&mut device_resource);
+        let region_map_gpu = RegionMapGpu::new(&mut device_resource);
         drop(device_resource);
+        self.insert_resource(WorldRTPass::new());
         self.insert_resource(renderer);
+        self.insert_resource(WorldEntities::new());
+        self.insert_resource(WorldEntitiesGpu::new());
+        self.insert_resource(VoxelBakerGpu::new());
         self.insert_resource(MaterialBankGpu::new());
         self.insert_resource(WorldChunkStreamer::new(WorldStreamingOptions::default()));
 
         self.insert_resource(DebugRenderer::new());
-        self.insert_resource(world_renderable);
+        self.insert_resource(region_map_gpu);
         self.insert_resource(voxel_registry_gpu);
 
         if let Some(init_fn) = &self.on_post_graphics_init_fn {

@@ -164,7 +164,12 @@ public struct SFT {
     return RayModelTest.miss();
   }
 
-  public bool is_voxel_present(uint3 local_voxel_pos) {
+  public bool is_voxel_present(int3 local_voxel_pos) {
+    if (!this.in_bounds(local_voxel_pos)) {
+      return false;
+    }
+
+    let local_voxel_pos = (uint3) local_voxel_pos;
     var curr_node_idx = 0;
     var morton_half = 0;
     var child_bit = 0;

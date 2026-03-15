@@ -80,6 +80,10 @@ impl RenderableVoxelEntity {
         self.voxel_model_id = id;
     }
 
+    pub fn set_model_asset_path(&mut self, model_asset_path: Option<GameAssetPath>) {
+        self.model_asset_path = model_asset_path;
+    }
+
     pub fn set_model_id(&mut self, id: VoxelModelId) {
         assert!(!id.is_null());
         self.voxel_model_id = id;
@@ -87,6 +91,12 @@ impl RenderableVoxelEntity {
 
     pub fn is_dynamic(&self) -> bool {
         self.is_dynamic
+    }
+
+    /// Explicit function since when setting this, it should be checked that the renderables model instance
+    /// is unique.
+    pub fn set_dynamic(&mut self, is_dynamic: bool) {
+        self.is_dynamic = is_dynamic;
     }
 
     pub fn new_null() -> Self {
@@ -99,6 +109,10 @@ impl RenderableVoxelEntity {
 
     pub fn is_null(&self) -> bool {
         self.voxel_model_id.is_null()
+    }
+
+    pub fn needs_loading(&self) -> bool {
+        self.model_asset_path.is_some() && self.voxel_model_id.is_null()
     }
 
     pub fn voxel_model_id(&self) -> Option<VoxelModelId> {

@@ -142,7 +142,22 @@ impl VoxelDataAllocator {
         old_allocation: &VoxelDataAllocation,
         bytes: u64,
     ) -> Option<VoxelDataAllocation> {
-        todo!()
+        if let Some(new_allocation) = self
+            .allocators
+            .get_mut(old_allocation.buffer_index() as usize)
+            .unwrap()
+            .reallocate(&old_allocation.as_buffer_allocation(), bytes)
+        {
+            return Some(VoxelDataAllocation::new(
+                old_allocation.buffer_index(),
+                new_allocation.traversal,
+                new_allocation.start_index_stride_dword() as u32,
+                new_allocation.length_bytes(),
+            ));
+        }
+
+        self.free(old_allocation);
+        self.allocate(device, bytes)
     }
 
     pub fn write_allocation_data(

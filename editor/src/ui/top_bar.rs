@@ -1,7 +1,7 @@
 use crate::{
     session::EditorEvent,
     ui::{
-        EditorCommand, EditorUIContext, asset_pane::AssetsPane,
+        EditorCommand, EditorUIContext, asset_pane::AssetsPane, editing_pane::EditingPane,
         entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
         materials_pane::MaterialsPane, pane::EditorUIPane, world_pane::WorldPane,
     },
@@ -73,6 +73,10 @@ impl TopBarPane {
                 }
                 if ui.button("Assets").clicked() {
                     ctx.commands.push(EditorCommand::open_ui(AssetsPane::ID));
+                    ui.close_menu();
+                }
+                if ui.button("Voxel Editing").clicked() {
+                    ctx.commands.push(EditorCommand::open_ui(EditingPane::ID));
                     ui.close_menu();
                 }
             });

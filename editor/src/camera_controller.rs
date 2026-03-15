@@ -31,6 +31,15 @@ impl EditorCameraController {
         }
     }
 
+    pub fn focus_on_position(&mut self, world_position: Vector3<f32>) {
+        match self.controller_type {
+            EditorCameraControllerType::PanOrbit => {
+                self.rotation_anchor = world_position;
+            }
+            EditorCameraControllerType::Fps => {}
+        }
+    }
+
     pub fn update(
         &mut self,
         transform: &mut Transform,

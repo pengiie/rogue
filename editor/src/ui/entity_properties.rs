@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 use rogue_engine::{
-    asset::asset::GameAssetPath,
+    asset::asset::{Assets, GameAssetPath},
     common::dyn_vec::TypeInfo,
     entity::{
         EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
@@ -20,6 +20,7 @@ use rogue_engine::{
         transform::Transform,
     },
     voxel::{
+        attachment::Attachment,
         sft_compressed::VoxelModelSFTCompressed,
         voxel::{VoxelEditData, VoxelModelEdit, VoxelModelImplMethods},
         voxel_registry::VoxelModelRegistry,
@@ -32,10 +33,12 @@ use std::{
 };
 
 use crate::{
-    session::EditorSession,
+    session::{EditorEvent, EditorSession},
     ui::{
         EditorCommand, EditorCommands, EditorDialog, EditorUIContext, FilePickerType,
+        create_voxel_model_dialog::{CreateVoxelModelDialogCreateInfo, create_voxel_model_dialog},
         pane::{EditorUIPane, EditorUIPaneMethods},
+        resize_model_dialog::{ResizeVoxelModelDialogCreateInfo, resize_voxel_model_dialog_cmd},
     },
 };
 
@@ -45,6 +48,7 @@ pub struct ShowComponentContext<'a> {
     component_state: &'a mut HashMap<TypeId, Box<dyn std::any::Any>>,
     session: &'a mut EditorSession,
     commands: &'a mut EditorCommands,
+    assets: &'a mut Assets,
 }
 
 type ShowComponentFn<T> = fn(&mut T, &mut egui::Ui, &mut ShowComponentContext);
@@ -145,270 +149,105 @@ impl EntityPropertiesShowFns {
             ui.menu_button(text, |ui| {
                 // Open new model dialog within the editor.
                 if ui.button("Create new").clicked() {
-                    const DIALOG_ID: &str = "create_voxel_model_dialog";
-                    ctx.commands.push(EditorCommand::OpenDialog(EditorDialog {
-                        id: DIALOG_ID.to_owned(),
-                        title: "Create Voxel Model".to_owned(),
-                        show_fn: Box::new(move |ui, ctx| {
-                            ui.vertical(|ui| {
-                                #[derive(
-                                    Copy, Clone, Debug, PartialEq, Eq, strum_macros::VariantArray,
-                                )]
-                                enum CreateModelPreset {
-                                    Empty,
-                                    Solid,
-                                }
-                                #[derive(Clone)]
-                                struct NewModelDialogState {
-                                    side_length: u32,
-                                    preset: CreateModelPreset,
-                                    material: MaterialId,
-                                }
-                                let id = egui::Id::new(format!("new_voxel_model_dialog"));
-                                let mut state = ui.data_mut(|w| {
-                                    w.get_temp_mut_or_insert_with(id, || {
-                                        let default_material = ctx
-                                            .material_bank
-                                            .contains_material(&MaterialId::new(0, 0))
-                                            .then_some(MaterialId::new(0, 0))
-                                            .unwrap_or(MaterialId::null());
-                                        NewModelDialogState {
-                                            side_length: 16,
-                                            preset: CreateModelPreset::Solid,
-                                            material: default_material,
-                                        }
-                                    })
-                                    .clone()
-                                });
-
-                                ui.horizontal(|ui| {
-                                    const MAX_DIMENSION: u32 = 4u32.pow(10);
-                                    ui.label("Side Length:");
-                                    ui.label("X");
-                                    ui.add(
-                                        egui::DragValue::new(&mut state.side_length)
-                                            .range(4..=MAX_DIMENSION),
-                                    );
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Preset:");
-                                    egui::ComboBox::from_id_salt("Create model preset")
-                                        .selected_text(format!("{:?}", state.preset))
-                                        .show_ui(ui, |ui| {
-                                            use strum::VariantArray as _;
-                                            for val in CreateModelPreset::VARIANTS {
-                                                ui.selectable_value(
-                                                    &mut state.preset,
-                                                    val.clone(),
-                                                    format!("{:?}", val),
-                                                );
-                                            }
-                                        });
-                                });
-
-                                ui.add_enabled_ui(state.preset != CreateModelPreset::Empty, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Fill Material:");
-                                        use crate::ui::material_picker::material_picker;
-                                        material_picker(ui, ctx.material_bank, &mut state.material);
-                                    });
-                                });
-
-                                if ui.button("Create").clicked() {
-                                    ctx.commands.push(EditorCommand::FilePicker {
-                                        picker_type: FilePickerType::CreateFile,
-                                        callback: Box::new(move |ctx, file_path| {
-                                            let asset_path =
-                                                GameAssetPath::from_relative_path(&file_path);
-
-                                            let mut model = VoxelModelSFTCompressed::new_empty(
-                                                state.side_length,
-                                            );
-                                            match state.preset {
-                                                CreateModelPreset::Empty => {
-                                                    // Do nothing, already empty.
-                                                }
-                                                CreateModelPreset::Solid => {
-                                                    let edit = VoxelModelEdit {
-                                                        min: Vector3::new(0, 0, 0),
-                                                        max: Vector3::new(
-                                                            state.side_length,
-                                                            state.side_length,
-                                                            state.side_length,
-                                                        ),
-                                                        data: VoxelEditData::Fill {
-                                                            material: state.material,
-                                                        },
-                                                    };
-                                                    model.set_voxel_range_impl(&edit);
-                                                }
-                                            }
-                                            let model_id = ctx.voxel_registry.register_voxel_model(
-                                                model,
-                                                Some(asset_path.clone()),
-                                            );
-
-                                            if let Ok(mut renderable) =
-                                                ctx.ecs_world.get::<&mut RenderableVoxelEntity>(
-                                                    selected_entity,
-                                                )
-                                            {
-                                                renderable.set_model(Some(asset_path), model_id);
-                                            }
-                                            ctx.commands.push(EditorCommand::CloseDialog(
-                                                DIALOG_ID.to_owned(),
-                                            ));
-                                        }),
-                                        extensions: vec!["rvox".to_owned()],
-                                    });
-                                }
-
-                                ui.data_mut(|w| {
-                                    w.insert_temp(id, state);
-                                });
-                            });
-
-                            //ui_state.new_model_dialog =
-                            //    Some(EditorNewVoxelModelDialog::new(*selected_entity));
-                            ui.close_menu();
-                            false
-                        }),
-                    }));
+                    ctx.commands.push(create_voxel_model_dialog(
+                        CreateVoxelModelDialogCreateInfo {
+                            target_entity: Some(selected_entity),
+                        },
+                    ));
                 }
 
                 // Choose existing model saved on the file system within the project asset
                 // directory.
                 if ui.button("Choose existing").clicked() {
-                    //let send = ui_state.open_model_dialog.tx_file_name.clone();
-                    //ui_state.open_model_dialog.associated_entity = *selected_entity;
-                    //let asset_dir = session
-                    //    .project_assets_dir()
-                    //    .expect("Project directory should exist if this is clicked.")
-                    //    .clone();
-                    //std::thread::spawn(|| {
-                    //    pollster::block_on(async move {
-                    //        let file = rfd::AsyncFileDialog::new()
-                    //            .set_directory(asset_dir)
-                    //            .add_filter("RVox", &["rvox"])
-                    //            .pick_file()
-                    //            .await;
-                    //        let Some(file) = file else {
-                    //            return;
-                    //        };
-                    //        send.send(file.path().to_string_lossy().to_string());
-                    //    });
-                    //});
                     ui.close_menu();
                 }
 
-                //// Save the model to its currently saved to file.
-                //let model_info = renderable.voxel_model_id().map_or(None, |id| {
-                //    Some(voxel_world.registry.get_model_info(id).unwrap().clone())
-                //});
-                //let model_info_exists = model_info.is_some();
+                if ui
+                    .add_enabled(
+                        renderable.model_asset_path().is_some() && renderable.is_dynamic(),
+                        egui::Button::new("Save as"),
+                    )
+                    .clicked() &&
+                    // This should always exist but might as well do the check.
+                    let Some(project_dir) = ctx.assets.project_dir()
+                {
+                    let model_asset_path = renderable.model_asset_path().unwrap().clone();
+                    let path = model_asset_path.as_file_asset_path(project_dir);
+                    let saving_entity = selected_entity.clone();
+                    let existing_path = ctx.commands.push(EditorCommand::FilePicker {
+                        picker_type: FilePickerType::CreateFile,
+                        callback: Box::new(move |ctx, asset_path| {
+                            let game_asset_path = GameAssetPath::from_relative_path(&asset_path);
+                            let Ok(mut renderable) = ctx
+                                .ecs_world
+                                .get::<&mut RenderableVoxelEntity>(saving_entity)
+                            else {
+                                return;
+                            };
+                            assert!(renderable.is_dynamic(), "Only makes sense to save dynamic models since they are the only ones which can be edited.");
+                            let Some(voxel_model_id) = renderable.voxel_model_id() else {
+                                return;
+                            };
+                            if Some(&game_asset_path) != renderable.model_asset_path() {
+                                let new_model_id = ctx.voxel_registry.clone_model(voxel_model_id);
+                                renderable.set_model_id(new_model_id);
+                                // New model has our new asset path.
+                                ctx.voxel_registry.set_model_asset_path(
+                                    renderable.voxel_model_id().unwrap(),
+                                    Some(game_asset_path.clone()),
+                                );
+                                renderable.set_model_asset_path(Some(game_asset_path.clone()));
+                            } else {
+                                // We need to update static model asset and reload any dynamic
+                                // models. kinda weird.
+                            }
 
-                //let has_asset_path = model_info
-                //    .as_ref()
-                //    .filter(|info| info.asset_path.is_some())
-                //    .is_some();
-                //if ui
-                //    .add_enabled(has_asset_path, egui::Button::new("Save"))
-                //    .clicked()
-                //{
-                //    let model_id = renderable_voxel_model.voxel_model_id().unwrap();
-                //    let asset_path = model_info.unwrap().asset_path.clone().unwrap();
-                //    voxel_world.save_model(assets, model_id, asset_path);
-                //    ui.close_menu();
-                //}
+                            ctx.events
+                                .push(EditorEvent::SaveVoxelModel(model_asset_path));
+                        }),
+                        extensions: vec!["rvox".to_owned()],
+                        preset_file_path: Some(path.path().to_path_buf()),
+                    });
+                    ui.close_menu();
+                }
 
-                //// Save the model to a specific file.
-                //if ui
-                //    .add_enabled(model_info_exists, egui::Button::new("Save as"))
-                //    .clicked()
-                //{
-                //    let send = ui_state.save_model_dialog.tx_file_name.clone();
-                //    ui_state.save_model_dialog.model_id =
-                //        renderable_voxel_model.voxel_model_id().unwrap();
-                //    std::thread::spawn(|| {
-                //        pollster::block_on(async move {
-                //            let file = rfd::AsyncFileDialog::new()
-                //                .add_filter("RVox", &["rvox"])
-                //                .save_file()
-                //                .await;
-                //            let Some(file) = file else {
-                //                return;
-                //            };
-                //            send.send(file.path().to_string_lossy().to_string());
-                //        });
-                //    });
-                //    ui.close_menu();
-                //}
-
-                //// Essentially calculates the bounds of the content, and allows
-                //// the user to move the bounds of the model as long as the content
-                //// still fits. During this process the user can also resize the model following
-                //// the models resizing rules.
-                //if ui
-                //    .add_enabled(model_info_exists, egui::Button::new("Resize/Rebound"))
-                //    .on_hover_text(
-                //        "Move around and resize the model bounds. Model must be dynamic.",
-                //    )
-                //    .clicked()
-                //{
-                //    // TODO: Edit the model bounds.
-                //}
-
-                //let has_asset_path = renderable_voxel_model.model_asset_path().is_some();
-                //if ui
-                //    .add_enabled(has_asset_path, egui::Button::new("Reload"))
-                //    .on_hover_text(
-                //        "Reloads the model for this entity from the defined asset path.",
-                //    )
-                //    .clicked()
-                //{
-                //    events.push(EventVoxelRenderableEntityLoad {
-                //        entity: *selected_entity,
-                //        reload: true,
-                //    });
-                //    ui.close_menu();
-                //}
+                let can_resize = renderable.is_dynamic() && renderable.voxel_model_id().is_some();
+                if ui.add_enabled(can_resize, egui::Button::new("Resize")).clicked() {
+                    ctx.commands.push(resize_voxel_model_dialog_cmd(ResizeVoxelModelDialogCreateInfo { 
+                        target_model: renderable.voxel_model_id().unwrap(),
+                        associated_entity: selected_entity,
+                    }));
+                    ui.close_menu();
+                }
             });
         });
 
-        // Model type UI with conversion.
-        if let Some(model_id) = renderable.voxel_model_id() {
-            //let info = ctx.voxel_registry.get_model_info(model_id).unwrap().clone();
-            //let text = match &info.model_type {
-            //    Some(ty) => ty.as_ref(),
-            //    None => "Unknown",
-            //};
-            //ui.horizontal(|ui| {
-            //    ui.label("Model type:");
-            //    if let Some(model_type) = info.model_type {
-            //        convert_model_ui(
-            //            ui,
-            //            voxel_world,
-            //            &mut renderable_voxel_model,
-            //            &info,
-            //            text,
-            //            model_id,
-            //            model_type,
-            //        );
-            //    } else {
-            //        ui.label(text);
-            //    }
-            //});
+        ui.horizontal(|ui| {
+            ui.label("Dynamic:");
 
-            //let model_dyn = voxel_world.registry.get_dyn_model(model_id);
-            //let length = model_dyn
-            //    .length()
-            //    .map(|x| x as f32 * consts::voxel::VOXEL_METER_LENGTH);
-            //ui.label(format!(
-            //    "Bounds: {:.2}mX{:.2}mX{:.2}m",
-            //    length.x, length.y, length.z
-            //));
-        }
+            // Doesn't make sense to change if the model is dynamic (has its own unique model) if it doesn't have an asset
+            // path attached.
+            let can_change_dynamic = renderable.model_asset_path().is_some();
+            let mut is_dynamic = renderable.is_dynamic();
+            ui.add_enabled(can_change_dynamic, egui::Checkbox::new(&mut is_dynamic, ""));
+
+            if let Some(model_id) = renderable.voxel_model_id() {
+                if !renderable.is_dynamic()
+                    && is_dynamic
+                {
+                    assert!(
+                        renderable.model_asset_path().is_some(),
+                        "RenderableVoxelEntity with a model id and changed to dynamic should have an asset path."
+                    );
+                    let new_model_id = ctx
+                        .voxel_registry.clone_model(model_id);
+                    renderable.set_model_id(new_model_id);
+                } else if renderable.is_dynamic() && !is_dynamic {
+                    // TODO: Unload old model and itll auto load the asset model.
+                }
+            }
+            renderable.set_dynamic(is_dynamic);
+        });
     }
 
     fn show_rigid_body_component(
@@ -682,6 +521,7 @@ impl EntityPropertiesPane {
             voxel_registry: ctx.voxel_registry,
             commands: ctx.commands,
             session: ctx.session,
+            assets: ctx.assets,
         };
 
         // Components we are rendering manually.

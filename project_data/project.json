@@ -7,62 +7,18 @@
     {
       "id": 0,
       "asset": {
-        "asset_path": "materials::grass::grass_mat::rmat"
+        "asset_path": "materials::dirt::dirt_mat::rmat"
       }
     },
     {
       "id": 1,
       "asset": {
-        "asset_path": "materials::dirt::dirt_mat::rmat"
+        "asset_path": "materials::grass::grass_mat::rmat"
       }
     }
   ],
   "scene": {
     "entities": [
-      {
-        "components": [
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "ccc6052b-8be8-4b82-91db-43b438589a65",
-              "name": "Camera"
-            }
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                0.0,
-                6.65,
-                -9.650015
-              ],
-              "rotation": [
-                0.19765733,
-                0.0,
-                0.0,
-                0.98027116
-              ],
-              "scale": [
-                1.0,
-                1.0,
-                1.0
-              ]
-            }
-          },
-          {
-            "name": "CameraController",
-            "data": null
-          },
-          {
-            "name": "Camera",
-            "data": {
-              "fov": 1.7453293,
-              "near_plane": 0.01,
-              "far_plane": 10000.0
-            }
-          }
-        ]
-      },
       {
         "components": [
           {
@@ -75,8 +31,10 @@
           {
             "name": "RenderableVoxelEntity",
             "data": {
-              "model_asset_path": null,
-              "is_dynamic": false
+              "model_asset_path": {
+                "asset_path": "models::player::rvox"
+              },
+              "is_dynamic": true 
             }
           },
           {
@@ -133,7 +91,7 @@
             "data": {
               "position": [
                 0.0,
-                13.52,
+                -0.3,
                 0.0
               ],
               "rotation": [
@@ -152,6 +110,50 @@
           {
             "name": "PlayerController",
             "data": null
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "ccc6052b-8be8-4b82-91db-43b438589a65",
+              "name": "Camera"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                6.65,
+                -9.650015
+              ],
+              "rotation": [
+                0.19765733,
+                0.0,
+                0.0,
+                0.98027116
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          },
+          {
+            "name": "CameraController",
+            "data": null
+          },
+          {
+            "name": "Camera",
+            "data": {
+              "fov": 1.7453293,
+              "near_plane": 0.01,
+              "far_plane": 10000.0
+            }
           }
         ]
       }

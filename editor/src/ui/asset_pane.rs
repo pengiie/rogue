@@ -152,6 +152,19 @@ impl AssetsPane {
     pub fn show_header(ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Assets").size(20.0));
+            ui.menu_button("Create", |ui| {
+                if ui.button("Voxel model").clicked() {
+                    use crate::ui::create_voxel_model_dialog::{
+                        CreateVoxelModelDialogCreateInfo, create_voxel_model_dialog,
+                    };
+                    ctx.commands.push(create_voxel_model_dialog(
+                        CreateVoxelModelDialogCreateInfo {
+                            target_entity: None,
+                        },
+                    ));
+                    ui.close_menu();
+                }
+            });
         });
     }
 }

@@ -11,14 +11,18 @@ use super::{
     thc::VoxelModelTHCCompressed,
     voxel::{VoxelModelImpl, VoxelModelImplMethods},
 };
-use crate::voxel::{
-    attachment::{AttachmentMap, BuiltInMaterial},
-    voxel::VoxelModelTrace,
+use crate::{
+    common::color::Color,
+    voxel::{
+        attachment::{AttachmentMap, BuiltInMaterial},
+        rvox_asset::RVOXAsset,
+        voxel::{VoxelMaterialData, VoxelModelTrace},
+    },
 };
 use crate::{common::geometry::ray::Ray, voxel::voxel::VoxelEditData};
 use crate::{common::morton, consts};
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub struct SFTNodeCompressed {
     // Left most bit determines if this node is a leaf.
     pub child_ptr: u32,
@@ -82,6 +86,7 @@ pub struct VoxelModelSFTCompressed {
     pub node_data: Vec<SFTNodeCompressed>,
     pub attachment_lookup_data: AttachmentMap<Vec<SFTAttachmentLookupNodeCompressed>>,
     pub attachment_raw_data: AttachmentMap<Vec<u32>>,
+    pub update_tracker: u32,
 }
 
 impl VoxelModelSFTCompressed {
@@ -98,6 +103,7 @@ impl VoxelModelSFTCompressed {
             attachment_lookup_data: AttachmentMap::new(),
             attachment_raw_data: AttachmentMap::new(),
             attachment_map: AttachmentMap::new(),
+            update_tracker: 0,
         }
     }
 
@@ -120,6 +126,172 @@ impl VoxelModelSFTCompressed {
             return x;
         }
         return x << 1;
+    }
+
+    pub fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
+        assert!(self.in_bounds_local(position.cast::<i32>()));
+        let height = self.tree_height() - 1;
+
+        let mut curr_node_index = 0;
+        let mut curr_child_pos = position.map(|x| (x >> ((height) * 2)) & 3);
+        let mut curr_child_index = morton::morton_encode(curr_child_pos);
+        for i in 0..height {
+            let curr_node = self.node_data[curr_node_index].clone();
+            let child_ptr = curr_node.child_ptr;
+            let is_present = (curr_node.child_mask & (1 << curr_child_index)) > 0;
+
+            if !is_present {
+                return None;
+            }
+            let child_offset = (curr_node.child_mask & ((1 << curr_child_index) - 1)).count_ones();
+            curr_node_index = (curr_node.child_ptr + child_offset) as usize;
+            curr_child_pos = position.map(|x| (x >> ((height - i - 1) * 2)) & 3);
+            curr_child_index = morton::morton_encode(curr_child_pos);
+        }
+
+        let curr_node = &self.node_data[curr_node_index];
+        let child_bit = 1 << curr_child_index;
+        if (curr_node.leaf_mask & child_bit) == 0 {
+            return None;
+        }
+
+        let bmat_lookup_node = &self
+            .attachment_lookup_data
+            .get(Attachment::BMAT_ID)
+            .unwrap()[curr_node_index];
+        let bmat_attachment_data = self.attachment_raw_data.get(Attachment::BMAT_ID).unwrap();
+        let attachment_exists = bmat_lookup_node.attachment_mask & child_bit > 0;
+        if !attachment_exists {
+            return None;
+        }
+        let attachment_offset =
+            (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones() as usize;
+        let data_ptr = bmat_lookup_node.data_ptr() as usize;
+        return Some(VoxelMaterialData::decode(
+            bmat_attachment_data[data_ptr + attachment_offset],
+        ));
+    }
+
+    pub fn set_voxel(&mut self, position: Vector3<u32>, material: Option<&VoxelMaterialData>) {
+        assert!(self.in_bounds_local(position.cast::<i32>()));
+        let height = self.tree_height() - 1;
+
+        let mut curr_node_index = 0;
+        let mut curr_child_pos = position.map(|x| (x >> ((height) * 2)) & 3);
+        let mut curr_child_index = morton::morton_encode(curr_child_pos);
+        for i in 0..height {
+            let curr_node = self.node_data[curr_node_index].clone();
+            let child_ptr = curr_node.child_ptr;
+            let is_present = (curr_node.child_mask & (1 << curr_child_index)) > 0;
+
+            if is_present {
+                let child_offset =
+                    (curr_node.child_mask & ((1 << curr_child_index) - 1)).count_ones();
+                curr_node_index = (curr_node.child_ptr + child_offset) as usize;
+                curr_child_pos = position.map(|x| (x >> ((height - i - 1) * 2)) & 3);
+                curr_child_index = morton::morton_encode(curr_child_pos);
+            } else {
+                if material.is_some() {
+                    let old_child_count = self.node_data[curr_node_index].child_mask.count_ones();
+                    self.node_data[curr_node_index].child_mask |= (1 << curr_child_index);
+                    let child_offset = (self.node_data[curr_node_index].child_mask
+                        & ((1 << curr_child_index) - 1))
+                        .count_ones();
+                    let new_child_ptr = self.node_data.len();
+                    for i in 0..child_offset {
+                        let n = self.node_data[(child_ptr + i) as usize];
+                        self.node_data.push(n);
+                        for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
+                            attachment_lookup_data
+                                .push(attachment_lookup_data[(child_ptr + i) as usize].clone());
+                        }
+                    }
+
+                    self.node_data.push(SFTNodeCompressed::new_empty());
+                    for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
+                        attachment_lookup_data.push(SFTAttachmentLookupNodeCompressed::new_empty());
+                    }
+
+                    for i in child_offset..old_child_count {
+                        self.node_data
+                            .push(self.node_data[(child_ptr + i) as usize]);
+                        for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
+                            attachment_lookup_data
+                                .push(attachment_lookup_data[(child_ptr + i) as usize].clone());
+                        }
+                    }
+                    assert_eq!(
+                        old_child_count as usize + 1,
+                        self.node_data.len() - new_child_ptr
+                    );
+                    self.node_data[curr_node_index].child_ptr = new_child_ptr as u32;
+                    curr_node_index = new_child_ptr + child_offset as usize;
+                    curr_child_pos = position.map(|x| (x >> ((height - i - 1) * 2)) & 3);
+                    curr_child_index = morton::morton_encode(curr_child_pos);
+                } else {
+                    // Node is already empty.
+                    return;
+                }
+            }
+        }
+
+        let curr_node = &mut self.node_data[curr_node_index];
+        let child_bit = 1 << curr_child_index;
+
+        let bmat_lookup_node = &mut self
+            .attachment_lookup_data
+            .get_mut(Attachment::BMAT_ID)
+            .unwrap()[curr_node_index];
+        let bmat_attachment_data = self
+            .attachment_raw_data
+            .get_mut(Attachment::BMAT_ID)
+            .unwrap();
+        let attachment_exists = bmat_lookup_node.attachment_mask & child_bit > 0;
+        if material.is_some() {
+            curr_node.child_mask |= child_bit;
+            curr_node.leaf_mask |= child_bit;
+            if attachment_exists {
+                let attachment_offset =
+                    (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones() as usize;
+                let data_ptr = bmat_lookup_node.data_ptr() as usize;
+                bmat_attachment_data[data_ptr + attachment_offset] = material.unwrap().encode();
+            } else {
+                bmat_lookup_node.attachment_mask |= child_bit;
+                let attachment_offset =
+                    (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones();
+                let attachment_leaf_count = bmat_lookup_node.attachment_mask.count_ones();
+                let data_ptr = bmat_attachment_data.len();
+                for i in 0..attachment_offset {
+                    bmat_attachment_data
+                        .push(bmat_attachment_data[(bmat_lookup_node.data_ptr + i) as usize]);
+                }
+                bmat_attachment_data.push(material.unwrap().encode());
+                for i in attachment_offset..(attachment_leaf_count - 1) {
+                    bmat_attachment_data
+                        .push(bmat_attachment_data[(bmat_lookup_node.data_ptr + i) as usize]);
+                }
+                bmat_lookup_node.data_ptr = data_ptr as u32;
+            }
+        } else {
+            curr_node.child_mask &= !child_bit;
+            curr_node.leaf_mask &= !child_bit;
+            if attachment_exists {
+                let attachment_offset =
+                    (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones();
+                bmat_lookup_node.attachment_mask &= !child_bit;
+                let attachment_count = bmat_lookup_node.attachment_mask.count_ones();
+
+                let data_ptr = bmat_lookup_node.data_ptr();
+                for i in attachment_offset..attachment_count {
+                    bmat_attachment_data[(data_ptr + i) as usize] =
+                        bmat_attachment_data[(data_ptr + i + 1) as usize];
+                }
+            }
+        }
+    }
+
+    pub fn side_length(&self) -> u32 {
+        return self.side_length;
     }
 
     pub fn collect_attachment_data(
@@ -179,6 +351,40 @@ impl VoxelModelSFTCompressed {
 
 impl VoxelModelImpl for VoxelModelSFTCompressed {
     const NAME: &'static str = "SFTCompressed";
+
+    fn resize_model(&mut self, new_side_length: Vector3<u32>) {
+        assert!(
+            new_side_length.x == new_side_length.y && new_side_length.y == new_side_length.z,
+            "Should check if the side length is valid for the model before resizing."
+        );
+        let new_side_length = new_side_length.x;
+        assert_ne!(
+            new_side_length, self.side_length,
+            "New side length should be different."
+        );
+
+        let mut new_sft = Self::new_empty(new_side_length);
+        new_sft.initialize_attachment_buffers(&Attachment::BMAT);
+
+        if new_side_length > self.side_length {
+            let offset = ((new_side_length - self.side_length) / 2) as u32;
+            for x in 0..self.side_length {
+                for y in 0..self.side_length {
+                    for z in 0..self.side_length {
+                        let pos = Vector3::new(x, y, z);
+
+                        let mat = self.get_voxel(Vector3::new(x, y, z));
+                        new_sft.set_voxel(pos + Vector3::new(offset, offset, offset), mat.as_ref());
+                    }
+                }
+            }
+        } else {
+            // TODO: do this
+        }
+        new_sft.update_tracker = self.update_tracker + 1;
+
+        *self = new_sft;
+    }
 
     fn trace(
         &self,
@@ -259,6 +465,8 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
                             depth_t,
                         });
                     }
+
+                    assert!(curr_node.child_ptr != u32::MAX);
                     let child_offset =
                         (curr_node.child_mask & ((1 << child_index) - 1)).count_ones();
                     stack.push(curr_node_index);
@@ -289,45 +497,88 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
     }
 
     fn set_voxel_range_impl(&mut self, edit: &super::voxel::VoxelModelEdit) {
+        self.update_tracker += 1;
         let sl = self.side_length;
+        let volume = sl.pow(3);
         let is_entire_bounds =
             edit.min == Vector3::new(0, 0, 0) && edit.max == Vector3::new(sl, sl, sl);
-        match edit.data {
+        match &edit.data {
             VoxelEditData::Fill { material } => {
                 if is_entire_bounds {
-                    // Create full tree
-                    let height = self.tree_height();
-                    let n = (64u32.pow(height) - 1) / 63;
-                    self.node_data = Vec::with_capacity(n as usize);
-                    self.attachment_lookup_data
-                        .insert(Attachment::BMAT_ID, Vec::with_capacity(n as usize));
-                    self.attachment_raw_data.insert(
-                        Attachment::BMAT_ID,
-                        vec![BuiltInMaterial::new(material.index() as u16).encode(); n as usize],
-                    );
-                    for i in 0..n {
-                        let child_ptr = if i < (n - 1) / 64 {
-                            (i + 1) / 64 * 64
-                        } else {
-                            u32::MAX
-                        };
-                        self.node_data.push(SFTNodeCompressed {
-                            child_ptr,
-                            child_mask: u64::MAX,
-                            leaf_mask: u64::MAX,
-                        });
+                    if let Some(comp_material) = material.as_ref().map(|m| m.encode()) {
+                        // Create full tree
+                        let height = self.tree_height();
+                        let n = (64u32.pow(height) - 1) / 63;
+                        let leaf_count = 64u32.pow(height - 1);
+                        self.node_data = Vec::with_capacity(n as usize);
+                        self.attachment_lookup_data
+                            .insert(Attachment::BMAT_ID, Vec::with_capacity(n as usize));
+                        self.attachment_raw_data
+                            .insert(Attachment::BMAT_ID, vec![comp_material; volume as usize]);
+                        for i in 0..n {
+                            let is_leaf = i >= (n - leaf_count);
+                            let child_ptr = if is_leaf { u32::MAX } else { i * 64 + 1 };
+                            let leaf_mask = if is_leaf { u64::MAX } else { 0 };
+                            self.node_data.push(SFTNodeCompressed {
+                                child_ptr,
+                                child_mask: u64::MAX,
+                                leaf_mask,
+                            });
+                            let data_ptr = if is_leaf {
+                                (i - (n - leaf_count)) * 64
+                            } else {
+                                0
+                            } as u32;
+                            self.attachment_lookup_data
+                                .get_mut(Attachment::BMAT_ID)
+                                .unwrap()
+                                .push(SFTAttachmentLookupNodeCompressed {
+                                    data_ptr,
+                                    attachment_mask: leaf_mask,
+                                });
+                        }
+                    } else {
+                        // Clear the whole tree.
+                        self.node_data = vec![SFTNodeCompressed {
+                            child_ptr: u32::MAX,
+                            child_mask: 0,
+                            leaf_mask: 0,
+                        }];
+                        self.attachment_lookup_data.clear();
+                        self.attachment_raw_data.clear();
                     }
                     return;
                 }
                 todo!()
             }
+            VoxelEditData::Sphere {
+                material,
+                center,
+                radius,
+            } => {
+                for x in edit.min.x..=edit.max.x {
+                    for y in edit.min.y..=edit.max.y {
+                        for z in edit.min.z..=edit.max.z {
+                            let pos = Vector3::new(x, y, z);
+                            if (pos.cast::<f32>() - center.cast::<f32>()).norm() as u32 <= *radius {
+                                // Set voxel at pos to comp_material.
+                                self.set_voxel(pos, material.as_ref());
+                            }
+                        }
+                    }
+                }
+            }
         }
-
-        todo!();
     }
 
     fn length(&self) -> Vector3<u32> {
         return Vector3::new(self.side_length, self.side_length, self.side_length);
+    }
+
+    fn create_rvox_asset(&self) -> RVOXAsset {
+        RVOXAsset {
+            sft_compressed: self.clone(),
+        }
     }
 }
 
@@ -460,6 +711,7 @@ impl From<&VoxelModelTHCCompressed> for VoxelModelSFTCompressed {
             node_data,
             attachment_lookup_data,
             attachment_raw_data,
+            update_tracker: 0,
         };
     }
 }
@@ -688,6 +940,7 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
                     }],
                     attachment_lookup_data,
                     attachment_raw_data,
+                    update_tracker: 0,
                 };
             }
             SFTFlatNode::Child(nodes) => nodes,
@@ -742,6 +995,7 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
             node_data,
             attachment_lookup_data,
             attachment_raw_data,
+            update_tracker: 0,
         };
     }
 }

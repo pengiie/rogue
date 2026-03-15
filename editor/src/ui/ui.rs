@@ -3,9 +3,10 @@ use std::{
     sync::mpsc::{Receiver, Sender, channel},
 };
 
-use nalgebra::Vector4;
+use nalgebra::{Vector2, Vector4};
 use rogue_engine::{
     asset::asset::Assets,
+    debug::debug_renderer::DebugRenderer,
     egui::Egui,
     entity::ecs_world::ECSWorld,
     event::Events,
@@ -24,6 +25,7 @@ use crate::{
     ui::{
         asset_pane::AssetsPane,
         asset_properties_pane::AssetPropertiesPane,
+        editing_pane::EditingPane,
         entity_hierarchy::EntityHierarchyUI,
         entity_properties::EntityPropertiesPane,
         global_state::GlobalStateEditorUI,
@@ -35,6 +37,7 @@ use crate::{
         top_bar::TopBarPane,
         world_pane::WorldPane,
     },
+    voxel_editing::EditorVoxelEditing,
     world::generator::WorldGenerator,
 };
 
@@ -53,6 +56,8 @@ pub struct EditorUIContext<'a> {
     pub commands: &'a mut EditorCommands,
     pub sky: &'a mut Sky,
     pub ui_state: &'a mut GlobalStateEditorUI,
+    pub voxel_editing: &'a mut EditorVoxelEditing,
+    pub debug_renderer: &'a mut DebugRenderer,
 }
 
 pub struct EditorCommands {
@@ -86,6 +91,7 @@ pub enum EditorCommand {
         picker_type: FilePickerType,
         callback: FilePickerFn,
         extensions: Vec<String>,
+        preset_file_path: Option<PathBuf>,
     },
     OpenDialog(EditorDialog),
     CloseDialog(/*id*/ String),
@@ -122,7 +128,8 @@ impl EditorSide {
 struct EditorFilePicker {
     file_picker_send: Sender<Option<PathBuf>>,
     file_picker_recv: Receiver<Option<PathBuf>>,
-    file_picker_callback: Option<Box<dyn FnOnce(EditorUIContext<'_>, PathBuf)>>,
+    file_picker_callback:
+        Option<Box<dyn FnOnce(EditorUIContext<'_>, /*relative asset path to assets dir*/ PathBuf)>>,
     file_picker_type: Option<FilePickerType>,
 }
 
@@ -179,6 +186,7 @@ impl EditorFilePicker {
         picker_type: FilePickerType,
         callback: FilePickerFn,
         extensions: Vec<String>,
+        preset_file_path: Option<PathBuf>,
         assets: &Assets,
     ) {
         assert!(
@@ -192,7 +200,7 @@ impl EditorFilePicker {
         let sender = self.file_picker_send.clone();
         std::thread::spawn(move || {
             pollster::block_on(async move {
-                let file_picker = rfd::FileDialog::new()
+                let mut file_picker = rfd::FileDialog::new()
                     .add_filter(
                         "Supported files",
                         &extensions.iter().map(|e| e.as_str()).collect::<Vec<_>>(),
@@ -200,6 +208,15 @@ impl EditorFilePicker {
                     .add_filter("All files", &["*"])
                     .set_can_create_directories(true)
                     .set_directory(assets_dir.unwrap_or_else(|| PathBuf::from("./")));
+                if let Some(preset_file_path) = preset_file_path {
+                    if preset_file_path.is_dir() {
+                        file_picker = file_picker.set_directory(preset_file_path);
+                    } else {
+                        file_picker = file_picker
+                            .set_directory(preset_file_path.parent().unwrap())
+                            .set_file_name(preset_file_path.file_name().unwrap().to_string_lossy());
+                    }
+                }
                 let file = match picker_type {
                     FilePickerType::OpenFile => file_picker.pick_file(),
                     FilePickerType::CreateFile => file_picker.save_file(),
@@ -248,6 +265,16 @@ impl EditorUI {
         &self.content_padding
     }
 
+    pub fn backbuffer_size(&self, window: &Window) -> Vector2<u32> {
+        let width = window.width() - self.content_padding.z - self.content_padding.w;
+        let height = window.height() - self.content_padding.x - self.content_padding.y;
+        Vector2::new(width, height)
+    }
+
+    pub fn backbuffer_offset(&self) -> Vector2<u32> {
+        Vector2::new(self.content_padding.z, self.content_padding.x)
+    }
+
     pub fn resolve_egui_ui(
         mut editor_ui: ResMut<EditorUI>,
         mut egui: ResMut<Egui>,
@@ -263,6 +290,8 @@ impl EditorUI {
         mut region_map: ResMut<RegionMap>,
         mut world_generator: ResMut<WorldGenerator>,
         mut sky: ResMut<Sky>,
+        mut voxel_editing: ResMut<EditorVoxelEditing>,
+        mut debug_renderer: ResMut<DebugRenderer>,
     ) {
         let editor_ui = &mut *editor_ui;
         let mut commands = EditorCommands::new();
@@ -283,6 +312,8 @@ impl EditorUI {
                 world_generator: &mut world_generator,
                 sky: &mut sky,
                 ui_state: &mut editor_ui.global_state,
+                voxel_editing: &mut voxel_editing,
+                debug_renderer: &mut debug_renderer,
             };
             let mut padding = Vector4::zeros();
             padding.x =
@@ -373,6 +404,8 @@ impl EditorUI {
             world_generator: &mut world_generator,
             sky: &mut sky,
             ui_state: &mut editor_ui.global_state,
+            voxel_editing: &mut voxel_editing,
+            debug_renderer: &mut debug_renderer,
         };
         editor_ui.file_picker.update(res_ctx);
 
@@ -386,11 +419,16 @@ impl EditorUI {
                     picker_type,
                     callback,
                     extensions,
+                    preset_file_path,
                 } => {
                     if !editor_ui.file_picker.is_open() {
-                        editor_ui
-                            .file_picker
-                            .open(picker_type, callback, extensions, &assets);
+                        editor_ui.file_picker.open(
+                            picker_type,
+                            callback,
+                            extensions,
+                            preset_file_path,
+                            &assets,
+                        );
                     }
                 }
                 EditorCommand::OpenDialog(dialog) => {
@@ -431,6 +469,7 @@ impl EditorUI {
                 AssetPropertiesPane::ID => {
                     self.spawn_pane(AssetPropertiesPane::new(), EditorSide::Right)
                 }
+                EditingPane::ID => self.spawn_pane(EditingPane::new(), EditorSide::Right),
                 _ => {
                     log::warn!(
                         "Tried to open pane with id {pane_id} but no implementation exists to spawn that pane."

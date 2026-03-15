@@ -134,6 +134,7 @@ impl Assets {
             .project_dir
             .as_ref()
             .expect("Shouldn't save if no project exists.");
+        // Save project.json asset
         let project_asset_path = AssetPath::new_project_file(project_dir.clone());
         let project_asset = match ProjectAsset::serialize(ser_context) {
             Ok(ass) => ass,

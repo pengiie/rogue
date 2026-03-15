@@ -435,6 +435,10 @@ impl TypeInfoCloneable {
         }
     }
 
+    pub unsafe fn clone_data(&self, data: *const u8) -> *mut u8 {
+        Box::into_raw((self.clone_fn)(data))
+    }
+
     pub fn type_id(&self) -> std::any::TypeId {
         self.type_id
     }

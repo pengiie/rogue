@@ -7,12 +7,15 @@ use crate::input::Input;
 use crate::material::{MaterialBank, material_gpu::MaterialBankGpu};
 use crate::physics::physics_world::PhysicsWorld;
 use crate::system::System;
+use crate::voxel::baker_gpu::VoxelBakerGpu;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use crate::voxel::voxel_registry_gpu::VoxelModelRegistryGpu;
 use crate::window::time::{Instant, Time};
 use crate::world::region_map::RegionMap;
+use crate::world::renderable::entities_gpu::WorldEntitiesGpu;
+use crate::world::renderable::region_map_gpu::RegionMapGpu;
 use crate::world::sky::Sky;
-use crate::world::world_renderable::WorldRenderable;
+use crate::world::world_entities::WorldEntities;
 use crate::world::world_streaming::WorldChunkStreamer;
 use crate::{
     app::{App, AppStage},
@@ -62,6 +65,8 @@ pub fn game_loop(app: &App) {
         app.run_system(PhysicsWorld::end_time_step);
     }
 
+    // ------- ENTITIES ----------
+    app.run_system(WorldEntities::load_entity_models);
     // Handle ECSWorld events.
     app.run_system(ECSWorld::handle_entity_commands);
 
@@ -81,7 +86,6 @@ pub fn game_loop(app: &App) {
     // Update from chunk editing commands and submits chunk events.
     app.run_system(RegionMap::update_chunks);
     // Marks regions which should be written based off of region events.
-    app.run_system(WorldRenderable::update_region_gpu_repr);
 
     // ==============================================
     // ============== GPU RENDERING =================
@@ -96,11 +100,15 @@ pub fn game_loop(app: &App) {
     app.run_system(MaterialBankGpu::write_render_data);
 
     // Requests the gpu voxel model representation for any used chunk models in the world.
-    app.run_system(WorldRenderable::update_gpu_chunk_models);
+    app.run_system(RegionMapGpu::update_gpu_chunk_models);
+    app.run_system(WorldEntitiesGpu::write_render_data);
+
     // Allocates gpu voxel model data and invalidates any requested voxel model material data.
     app.run_system(VoxelModelRegistryGpu::write_render_data);
-    // Write the gpu data used for terrain and entity rendering.
-    app.run_system(WorldRenderable::write_render_data);
+
+    // Write the gpu data used for terrain and entity rendering after gpu model ptrs are allocated.
+    app.run_system(RegionMapGpu::write_render_data);
+
     // Write the debug renderer buffers.
     app.run_system(DebugRenderer::write_render_data);
 
@@ -117,7 +125,7 @@ pub fn game_loop(app: &App) {
         }
         app.run_system(Renderer::write_frame_uniforms);
 
-        app.run_system(WorldRenderable::write_graph_passes);
+        app.run_system(VoxelBakerGpu::write_graph_passes);
         if let Some(systems) = app.systems(AppStage::RenderWrite) {
             for system in systems {
                 system.run(app.resource_bank());

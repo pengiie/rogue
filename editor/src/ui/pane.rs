@@ -3,8 +3,8 @@ use serde::ser::SerializeStruct;
 
 use crate::ui::{
     EditorUIContext, asset_pane::AssetsPane, asset_properties_pane::AssetPropertiesPane,
-    entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
-    materials_pane::MaterialsPane, world_pane::WorldPane,
+    editing_pane::EditingPane, entity_hierarchy::EntityHierarchyUI,
+    entity_properties::EntityPropertiesPane, materials_pane::MaterialsPane, world_pane::WorldPane,
 };
 
 pub struct EditorUIPaneData {
@@ -93,6 +93,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for EditorUIPaneDataDeserializeSeed {
             WorldPane::ID => deserialize_pane::<WorldPane, D>(de),
             AssetsPane::ID => deserialize_pane::<AssetsPane, D>(de),
             AssetPropertiesPane::ID => deserialize_pane::<AssetPropertiesPane, D>(de),
+            EditingPane::ID => deserialize_pane::<EditingPane, D>(de),
             _ => panic!("Unknown pane id: {}", self.id),
         }
     }
@@ -302,12 +303,29 @@ impl EditorUIPane for EditorUITabPane {
         if show_tabs {
             ui.horizontal(|ui| {
                 ui.style_mut().spacing.item_spacing.x = 0.0;
+                let mut to_remove_tab = None;
                 for (i, pane) in self.tabs.iter().enumerate() {
+                    let tab_selected = i == self.selected_tab;
                     if ui
-                        .add_enabled(self.selected_tab != i, egui::Button::new(pane.name()))
+                        .add_enabled(!tab_selected, egui::Button::new(pane.name()))
                         .clicked()
                     {
                         self.selected_tab = i;
+                    }
+                    if tab_selected {
+                        if ui
+                            .add(egui::Button::new("x").small())
+                            .on_hover_text("Close tab")
+                            .clicked()
+                        {
+                            to_remove_tab = Some(i);
+                        }
+                    }
+                }
+                if let Some(i) = to_remove_tab {
+                    self.tabs.remove(i);
+                    if self.selected_tab >= i {
+                        self.selected_tab = self.selected_tab.saturating_sub(1);
                     }
                 }
             });

@@ -80,6 +80,11 @@ impl MaterialBankGpu {
         }
     }
 
+    pub fn is_material_loaded(&self, material_id: MaterialId) -> bool {
+        self.material_map.contains_key(&material_id)
+            && !self.loading_materials.contains(&material_id)
+    }
+
     fn get_or_create_sampler_static(
         options_to_sampler_map: &mut HashMap<MaterialSamplerOptions, MaterialGpuSamplerId>,
         material_samplers: &mut FreeList<ResourceId<Sampler>>,

@@ -77,6 +77,10 @@ impl MaterialBank {
         return self.materials.next_free_handle();
     }
 
+    pub fn loading_materials(&self) -> bool {
+        !self.to_load_materials.is_empty() || !self.loading_materials.is_empty()
+    }
+
     pub fn request_material(&mut self, asset_path: GameAssetPath) {
         if self.asset_path_map.contains_key(&asset_path) {
             return;

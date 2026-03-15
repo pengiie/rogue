@@ -1,6 +1,6 @@
 use std::{
     any::TypeId,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::{Deref, DerefMut},
     path::Path,
     ptr::NonNull,
@@ -17,26 +17,26 @@ use super::{
     thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
     voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl, VoxelModelImplMethods},
 };
-use crate::common::{
-    archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
-    dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable},
-    freelist::{FreeList, FreeListHandle},
-};
 use crate::entity::{
     RenderableVoxelEntity,
     ecs_world::{ECSWorld, Entity},
 };
 use crate::event::{EventReader, Events};
 use crate::resource::{Res, ResMut};
-use crate::voxel::{
-    voxel_allocator::VoxelDataAllocator, voxel_events::EventVoxelRenderableEntityLoad,
-};
 use crate::{
     asset::{
         asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
         repr::voxel::any::VoxelModelAsset,
     },
     common::vtable,
+};
+use crate::{
+    common::{
+        archetype::{Archetype, ArchetypeIter, ArchetypeIterMut},
+        dyn_vec::{DynVec, TypeInfo, TypeInfoCloneable},
+        freelist::{FreeList, FreeListHandle},
+    },
+    voxel::rvox_asset::RVOXAsset,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -68,11 +68,9 @@ impl VoxelModelId {
     }
 }
 
-pub enum VoxelRegistryEvent {
-    RegisteredAssetModel {
-        model_id: VoxelModelId,
-        asset_path: GameAssetPath,
-    },
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VoxelModelEvent {
+    UpdatedModel(VoxelModelId),
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -107,13 +105,11 @@ pub struct VoxelModelRegistry {
     /// Models which are tied to a specific project asset and are not destructible.
     /// Essentially allows for caching and reuse of model data between entities.
     pub static_asset_models: HashMap<GameAssetPath, VoxelModelId>,
-    model_load_event_reader: EventReader<EventVoxelRenderableEntityLoad>,
     loading_static_model_handles: HashMap<GameAssetPath, AssetHandle>,
-    loading_renderable_entities: HashMap<GameAssetPath, Vec<Entity>>,
+    to_load_static_asset_models: HashSet<GameAssetPath>,
     ///// Non-terrain voxel models that need their normals updated.
     //pub to_update_model_normals: Vec<VoxelModelId>,
     //
-    events: Vec<VoxelRegistryEvent>,
 }
 
 impl VoxelModelRegistry {
@@ -125,17 +121,26 @@ impl VoxelModelRegistry {
             voxel_model_info: FreeList::new(),
 
             static_asset_models: HashMap::new(),
-            model_load_event_reader: EventReader::new(),
             loading_static_model_handles: HashMap::new(),
-            loading_renderable_entities: HashMap::new(),
-            events: Vec::new(),
+            to_load_static_asset_models: HashSet::new(),
         };
 
-        s.register_voxel_model_type::<VoxelModelFlat>();
-        s.register_voxel_model_type::<VoxelModelSFT>();
+        //s.register_voxel_model_type::<VoxelModelFlat>();
+        //s.register_voxel_model_type::<VoxelModelSFT>();
         s.register_voxel_model_type::<VoxelModelSFTCompressed>();
 
         s
+    }
+
+    pub fn get_asset_model_id(&self, asset_path: &GameAssetPath) -> Option<VoxelModelId> {
+        self.static_asset_models.get(asset_path).cloned()
+    }
+
+    pub fn get_voxel_model_type_id(&self, voxel_model_id: VoxelModelId) -> TypeId {
+        self.voxel_model_info
+            .get(voxel_model_id.handle)
+            .expect("Given id doesn't exist.")
+            .model_type_id
     }
 
     pub fn register_voxel_model_type<T: VoxelModelImpl>(&mut self) {
@@ -189,9 +194,58 @@ impl VoxelModelRegistry {
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut events: ResMut<Events>,
     ) {
-        for event in voxel_registry.events.drain(..) {
-            events.push(event);
+    }
+
+    pub fn set_model_asset_path(
+        &mut self,
+        voxel_model_id: VoxelModelId,
+        asset_path: Option<GameAssetPath>,
+    ) {
+        self.voxel_model_info
+            .get_mut(voxel_model_id.handle)
+            .expect("Given id doesn't exist.")
+            .asset_path = asset_path;
+    }
+
+    pub fn load_asset_model(&mut self, asset_path: &GameAssetPath) {
+        assert!(
+            !self.static_asset_models.contains_key(asset_path),
+            "Should check if the asset model is loaded already."
+        );
+        if self.loading_static_model_handles.contains_key(asset_path) {
+            return;
         }
+        self.to_load_static_asset_models.insert(asset_path.clone());
+    }
+
+    pub fn clone_model(&mut self, voxel_model_id: VoxelModelId) -> VoxelModelId {
+        let info = self
+            .voxel_model_info
+            .get(voxel_model_id.handle)
+            .expect("Given id doesn't exist.");
+        let type_id = info.model_type_id;
+        let type_info = self
+            .voxel_model_types
+            .get(&type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the registry.");
+        let dyn_vec = self
+            .voxel_model_data
+            .get_mut(&type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+        let data = dyn_vec.get_bytes(info.index as usize).as_ptr();
+
+        // Safety: We use the same type_id to index into the type info and the dyn vec so data
+        // should be the expected type.
+        let new_model_ptr = unsafe { type_info.model_type_info.clone_data(data) };
+        let index = dyn_vec.len() as u64;
+        unsafe { dyn_vec.push_unchecked(new_model_ptr) };
+
+        let voxel_id = self.voxel_model_info.push(VoxelModelInfo {
+            model_type_id: type_id,
+            index,
+            asset_path: info.asset_path.clone(),
+        });
+        VoxelModelId::new(voxel_id)
     }
 
     pub fn handle_model_load_events(
@@ -200,54 +254,26 @@ impl VoxelModelRegistry {
         mut assets: ResMut<Assets>,
         mut ecs_world: ResMut<ECSWorld>,
     ) {
+        let Some(project_dir) = assets.project_dir().clone() else {
+            log::error!("Tried loading voxel model assets before project dir is set.");
+            return;
+        };
         let voxel_registry = &mut voxel_registry as &mut VoxelModelRegistry;
 
-        // Look for any renderable load requests.
-        for event in voxel_registry.model_load_event_reader.read(&events) {
-            let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(event.entity)
-            else {
-                // Ignore events where the renderable doesn't exist.
-                continue;
-            };
-            let Some(model_asset_path) = renderable.model_asset_path() else {
-                log::error!(
-                    "Should not be sending EventVoxelRenderableEntityLoad for a renderable entity without an asset path."
-                );
-                continue;
-            };
-            // If we don't worry about force reloading then use a cached model.
-            if !event.reload {
-                if let Some(model_id) = voxel_registry.static_asset_models.get(model_asset_path) {
-                    if renderable.is_dynamic() {
-                        todo!("clone then create new model");
-                    } else {
-                        renderable.set_model_id(*model_id);
-                    }
-                    continue;
-                }
-            }
-
-            // Enqueue this entity to be loaded when the model is loaded.
-            voxel_registry
-                .loading_renderable_entities
-                .entry(model_asset_path.clone())
-                .or_default()
-                .push(event.entity);
-
-            // Start loading this static model if it isn't already loading.
-            if !voxel_registry
-                .loading_static_model_handles
-                .contains_key(model_asset_path)
-            {
-                let model_asset_handle = assets.load_asset::<VoxelModelAsset>(todo!());
-                voxel_registry
+        for to_load_asset in voxel_registry.to_load_static_asset_models.drain() {
+            assert!(
+                !voxel_registry
                     .loading_static_model_handles
-                    .insert(model_asset_path.clone(), model_asset_handle);
-            }
+                    .contains_key(&to_load_asset),
+                "Should only request load of an asset once."
+            );
+            let asset_path = to_load_asset.as_file_asset_path(&project_dir);
+            let asset_handle = assets.load_asset::<RVOXAsset>(asset_path);
+            voxel_registry
+                .loading_static_model_handles
+                .insert(to_load_asset.clone(), asset_handle);
         }
 
-        // Check on the state of any loading static voxel model assets.
-        let mut finished_asset_paths = Vec::new();
         // Clone because of the use of voxel_registry later.
         // TODO: Clean up and make rust like me.
         for (asset_path, asset_handle) in &voxel_registry.loading_static_model_handles.clone() {
@@ -257,9 +283,15 @@ impl VoxelModelRegistry {
                 }
                 AssetStatus::Saved => unreachable!(),
                 AssetStatus::Loaded => {
+                    voxel_registry
+                        .loading_static_model_handles
+                        .remove(asset_path);
                     // Register the loaded static voxel model asset.
-                    let asset = assets.take_asset::<VoxelModelAsset>(asset_handle).unwrap();
-                    let voxel_model_id = voxel_registry.register_voxel_model_asset(*asset);
+                    let asset = assets
+                        .take_asset::<RVOXAsset>(asset_handle)
+                        .expect("Asset should exist if loaded.");
+                    let voxel_model_id = voxel_registry
+                        .register_voxel_model(asset.sft_compressed, Some(asset_path.clone()));
                     voxel_registry
                         .static_asset_models
                         .insert(asset_path.clone(), voxel_model_id);
@@ -277,36 +309,6 @@ impl VoxelModelRegistry {
                         asset_path.asset_path,
                         error
                     );
-                }
-            }
-            finished_asset_paths.push(asset_path.clone());
-        }
-
-        // Update any waiting RenderableEntity components with the loaded static model asset.
-        for asset_path in finished_asset_paths {
-            voxel_registry
-                .loading_static_model_handles
-                .remove(&asset_path);
-            let Some(entities) = voxel_registry
-                .loading_renderable_entities
-                .get_mut(&asset_path)
-            else {
-                continue;
-            };
-            let Some(static_model_id) = voxel_registry.static_asset_models.get(&asset_path) else {
-                // Model must have failed to load for some reason.
-                entities.clear();
-                continue;
-            };
-            for entity in entities.drain(..) {
-                let Ok(mut renderable) = ecs_world.get::<&mut RenderableVoxelEntity>(entity) else {
-                    // Ignore any entities which no longer have a renderable component.
-                    continue;
-                };
-                if renderable.is_dynamic() {
-                    todo!("Figure out dynamic loading and stuff.");
-                } else {
-                    renderable.set_model(Some(asset_path.clone()), *static_model_id);
                 }
             }
         }
@@ -332,197 +334,9 @@ impl VoxelModelRegistry {
         if let Some(asset_path) = asset_path {
             self.static_asset_models
                 .insert(asset_path.clone(), VoxelModelId::new(voxel_id));
-            self.events.push(VoxelRegistryEvent::RegisteredAssetModel {
-                model_id: VoxelModelId::new(voxel_id),
-                asset_path,
-            });
         }
         VoxelModelId::new(voxel_id)
     }
-
-    pub fn register_voxel_model_asset(&mut self, asset: VoxelModelAsset) -> VoxelModelId {
-        todo!()
-    }
-
-    //// TODO: Add more methods to the Impl so we don't have like 50 match statements.
-    //pub fn register_renderable_voxel_model_any(
-    //    &mut self,
-    //    name: impl ToString,
-    //    voxel_model_any: VoxelModelAnyAsset,
-    //) -> VoxelModelId {
-    //    let voxel_model_gpu: Box<dyn VoxelModelGpuImpl> = match voxel_model_any.model_type {
-    //        VoxelModelType::Flat => Box::new(VoxelModelFlatGpu::new()),
-    //        VoxelModelType::THC => Box::new(VoxelModelTHCGpu::new()),
-    //        VoxelModelType::THCCompressed => Box::new(VoxelModelTHCCompressedGpu::new()),
-    //        VoxelModelType::SFT => Box::new(VoxelModelSFTGpu::new()),
-    //        VoxelModelType::SFTCompressed => Box::new(VoxelModelSFTCompressedGpu::new()),
-    //    };
-    //    let model_type_info = match voxel_model_any.model_type {
-    //        VoxelModelType::Flat => TypeInfoCloneable::new::<VoxelModelFlat>(),
-    //        VoxelModelType::THC => TypeInfoCloneable::new::<VoxelModelTHC>(),
-    //        VoxelModelType::THCCompressed => TypeInfoCloneable::new::<VoxelModelTHCCompressed>(),
-    //        VoxelModelType::SFT => TypeInfoCloneable::new::<VoxelModelSFT>(),
-    //        VoxelModelType::SFTCompressed => TypeInfoCloneable::new::<VoxelModelSFTCompressed>(),
-    //    };
-    //    let gpu_type_info = match voxel_model_any.model_type {
-    //        VoxelModelType::Flat => TypeInfoCloneable::new::<VoxelModelFlatGpu>(),
-    //        VoxelModelType::THC => TypeInfoCloneable::new::<VoxelModelTHCGpu>(),
-    //        VoxelModelType::THCCompressed => TypeInfoCloneable::new::<VoxelModelTHCCompressedGpu>(),
-    //        VoxelModelType::SFT => TypeInfoCloneable::new::<VoxelModelSFTGpu>(),
-    //        VoxelModelType::SFTCompressed => TypeInfoCloneable::new::<VoxelModelSFTCompressedGpu>(),
-    //    };
-    //    let id = self.peek_next_id();
-
-    //    // Extract fat pointers for this voxel model T's implementation of VoxelModelImpl and
-    //    // T::Gpu's VoxelModelGpuImpl.
-    //    let voxel_model_vtable_ptr = {
-    //        let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model_any.model.deref() as &dyn VoxelModelImpl;
-    //        let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
-    //        // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
-    //        unsafe { fat_ptr.as_ref() }.unwrap().1
-    //    };
-    //    let voxel_model_gpu_vtable_ptr = {
-    //        let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model_gpu.deref() as &dyn VoxelModelGpuImpl;
-    //        let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
-    //        // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
-    //        unsafe { fat_ptr.as_ref() }.unwrap().1
-    //    };
-
-    //    self.type_vtables
-    //        .insert(model_type_info.type_id(), voxel_model_vtable_ptr);
-    //    self.type_vtables
-    //        .insert(gpu_type_info.type_id(), voxel_model_gpu_vtable_ptr);
-
-    //    let (ref mut archetype, _) = self
-    //        .renderable_voxel_model_archtypes
-    //        .entry(model_type_info.type_id())
-    //        .or_insert_with(|| {
-    //            (
-    //                Archetype::new(vec![model_type_info, gpu_type_info]),
-    //                gpu_type_info.type_id(),
-    //            )
-    //        });
-
-    //    let archetype_index = match voxel_model_any.model_type {
-    //        VoxelModelType::Flat => archetype.insert(
-    //            id.handle.as_untyped(),
-    //            (
-    //                *voxel_model_any.model.downcast::<VoxelModelFlat>().unwrap(),
-    //                *voxel_model_gpu.downcast::<VoxelModelFlatGpu>().unwrap(),
-    //            ),
-    //        ),
-    //        VoxelModelType::THC => archetype.insert(
-    //            id.handle.as_untyped(),
-    //            (
-    //                *voxel_model_any.model.downcast::<VoxelModelTHC>().unwrap(),
-    //                *voxel_model_gpu.downcast::<VoxelModelTHCGpu>().unwrap(),
-    //            ),
-    //        ),
-    //        VoxelModelType::THCCompressed => archetype.insert(
-    //            id.handle.as_untyped(),
-    //            (
-    //                *voxel_model_any
-    //                    .model
-    //                    .downcast::<VoxelModelTHCCompressed>()
-    //                    .unwrap(),
-    //                *voxel_model_gpu
-    //                    .downcast::<VoxelModelTHCCompressedGpu>()
-    //                    .unwrap(),
-    //            ),
-    //        ),
-    //        VoxelModelType::SFT => archetype.insert(
-    //            id.handle.as_untyped(),
-    //            (
-    //                *voxel_model_any.model.downcast::<VoxelModelSFT>().unwrap(),
-    //                *voxel_model_gpu.downcast::<VoxelModelSFTGpu>().unwrap(),
-    //            ),
-    //        ),
-    //        VoxelModelType::SFTCompressed => archetype.insert(
-    //            id.handle.as_untyped(),
-    //            (
-    //                *voxel_model_any
-    //                    .model
-    //                    .downcast::<VoxelModelSFTCompressed>()
-    //                    .unwrap(),
-    //                *voxel_model_gpu
-    //                    .downcast::<VoxelModelSFTCompressedGpu>()
-    //                    .unwrap(),
-    //            ),
-    //        ),
-    //    };
-
-    //    let info = VoxelModelInfo {
-    //        name: name.to_string(),
-    //        model_type: Some(voxel_model_any.model_type),
-    //        model_type_id: model_type_info.type_id(),
-    //        gpu_type: Some(gpu_type_info.type_id()),
-    //        archetype_index,
-    //        asset_path: None,
-    //    };
-    //    self.voxel_model_info.push(info);
-
-    //    id
-    //}
-
-    //pub fn register_renderable_voxel_model<T>(
-    //    &mut self,
-    //    name: impl ToString,
-    //    voxel_model: VoxelModel<T>,
-    //) -> VoxelModelId
-    //where
-    //    T: VoxelModelImplConcrete,
-    //{
-    //    let voxel_model_gpu = VoxelModelGpu::new(T::Gpu::new());
-    //    let model_type_info = TypeInfoCloneable::new::<T>();
-    //    let gpu_type_info = TypeInfoCloneable::new::<T::Gpu>();
-    //    let id = self.peek_next_id();
-
-    //    // Extract fat pointers for this voxel model T's implementation of VoxelModelImpl and
-    //    // T::Gpu's VoxelModelGpuImpl.
-    //    let voxel_model_vtable_ptr = {
-    //        let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model.deref() as &dyn VoxelModelImpl;
-    //        let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
-    //        // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
-    //        unsafe { fat_ptr.as_ref() }.unwrap().1
-    //    };
-    //    let voxel_model_gpu_vtable_ptr = {
-    //        let dyn_ref/*: (*mut (), *mut ())*/ = voxel_model_gpu.deref() as &dyn VoxelModelGpuImpl;
-    //        let fat_ptr = std::ptr::from_ref(&dyn_ref) as *const _ as *const (*mut (), *mut ());
-    //        // Safety: We know &dyn T aka. fat_ptr is a fat pointer containing two pointers.
-    //        unsafe { fat_ptr.as_ref() }.unwrap().1
-    //    };
-
-    //    self.type_vtables
-    //        .insert(model_type_info.type_id(), voxel_model_vtable_ptr);
-    //    self.type_vtables
-    //        .insert(gpu_type_info.type_id(), voxel_model_gpu_vtable_ptr);
-
-    //    let (ref mut archetype, _) = self
-    //        .renderable_voxel_model_archtypes
-    //        .entry(model_type_info.type_id())
-    //        .or_insert_with(|| {
-    //            (
-    //                Archetype::new(vec![model_type_info, gpu_type_info]),
-    //                gpu_type_info.type_id(),
-    //            )
-    //        });
-    //    let archetype_index = archetype.insert(
-    //        id.handle.as_untyped(),
-    //        (voxel_model.into_model(), voxel_model_gpu.into_model_gpu()),
-    //    );
-
-    //    let info = VoxelModelInfo {
-    //        name: name.to_string(),
-    //        model_type: T::model_type(),
-    //        model_type_id: model_type_info.type_id(),
-    //        gpu_type: Some(gpu_type_info.type_id()),
-    //        archetype_index,
-    //        asset_path: None,
-    //    };
-    //    self.voxel_model_info.push(info);
-
-    //    id
-    //}
 
     pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImplMethods {
         let info = self
@@ -547,211 +361,23 @@ impl VoxelModelRegistry {
         &'a mut self,
         id: VoxelModelId,
     ) -> &'a mut dyn VoxelModelImplMethods {
-        todo!()
+        let info = self
+            .voxel_model_info
+            .get(id.handle)
+            .expect("Given id doesn't exist.");
+        let data = self
+            .voxel_model_data
+            .get_mut(&info.model_type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+        let data_ptr = data.get_mut_bytes(info.index as usize).as_mut_ptr();
+        let vtable_ptr = self
+            .voxel_model_types
+            .get(&info.model_type_id)
+            .expect("Type should exist")
+            .model_impl_vtable;
+        // Safety: Dyn ref is just a fat pointer with ptr to data and ptr to the vtable.
+        return unsafe { std::mem::transmute((data_ptr, vtable_ptr)) };
     }
-    //    let model_info = self
-    //        .voxel_model_info
-    //        .get(id.handle)
-    //        .expect("Voxel model id is invalid");
-
-    //    let archetype = if model_info.gpu_type.is_none() {
-    //        todo!("Fetch from standalone archetype");
-    //    } else {
-    //        &self
-    //            .renderable_voxel_model_archtypes
-    //            .get(&model_info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //    };
-
-    //    let model_type_info = &archetype.type_infos()[0];
-    //    assert_eq!(model_type_info.type_id(), model_info.model_type_id);
-
-    //    // Safety: If model_info is still valid, then the archetype_index it contains must best
-    //    // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
-    //    // reference to self and explicity the lifetime.
-    //    let model_ptr =
-    //        unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *const u8 };
-
-    //    let voxel_model_dyn_ref = {
-    //        let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
-    //        let fat_ptr = (model_ptr, model_vtable);
-    //        let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImpl;
-
-    //        // TODO: Write why this is safe.
-    //        unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
-    //    };
-
-    //    voxel_model_dyn_ref
-    //}
-
-    //pub fn get_model<'a, T: VoxelModelImpl>(&'a self, id: VoxelModelId) -> &'a T {
-    //    let model_info = self
-    //        .voxel_model_info
-    //        .get(id.handle)
-    //        .expect("Voxel model id is invalid");
-
-    //    let archetype = if model_info.gpu_type.is_none() {
-    //        todo!("Fetch from standalone archetype");
-    //    } else {
-    //        &self
-    //            .renderable_voxel_model_archtypes
-    //            .get(&model_info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //    };
-
-    //    let model_type_info = &archetype.type_infos()[0];
-    //    assert_eq!(model_type_info.type_id(), model_info.model_type_id);
-    //    assert_eq!(model_type_info.type_id(), std::any::TypeId::of::<T>());
-
-    //    // Safety: If model_info is still valid, then the archetype_index it contains must best
-    //    // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
-    //    // reference to self and explicity the lifetime.
-    //    let model_ptr =
-    //        unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *const u8 };
-
-    //    // Safety: We asset above the type id matches.
-    //    unsafe { (model_ptr as *const T).as_ref().unwrap() }
-    //}
-
-    //pub fn get_dyn_model_mut<'a>(&'a mut self, id: VoxelModelId) -> &'a mut dyn VoxelModelImpl {
-    //    let model_info = self
-    //        .voxel_model_info
-    //        .get(id.handle)
-    //        .expect("Voxel model id is invalid");
-
-    //    let archetype = if model_info.gpu_type.is_none() {
-    //        todo!("Fetch from standalone archetype");
-    //    } else {
-    //        &mut self
-    //            .renderable_voxel_model_archtypes
-    //            .get_mut(&model_info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //    };
-
-    //    let model_type_info = &archetype.type_infos()[0];
-    //    assert_eq!(model_type_info.type_id(), model_info.model_type_id);
-
-    //    // Safety: If model_info is still valid, then the archetype_index it contains must best
-    //    // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
-    //    // reference to self and explicity the lifetime.
-    //    let model_ptr =
-    //        unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *mut u8 };
-
-    //    let voxel_model_dyn_ref = {
-    //        let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
-    //        let fat_ptr = (model_ptr, model_vtable);
-    //        let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelImpl;
-
-    //        // TODO: Write why this is safe.
-    //        unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }
-    //    };
-
-    //    voxel_model_dyn_ref
-    //}
-
-    //pub fn get_dyn_renderable_model<'a>(
-    //    &'a self,
-    //    id: VoxelModelId,
-    //) -> (&'a dyn VoxelModelImpl, &'a dyn VoxelModelGpuImpl) {
-    //    let model_info = self
-    //        .voxel_model_info
-    //        .get(id.handle)
-    //        .expect("Voxel model id is invalid");
-
-    //    let archetype = if model_info.gpu_type.is_none() {
-    //        todo!("Fetch from standalone archetype");
-    //    } else {
-    //        &self
-    //            .renderable_voxel_model_archtypes
-    //            .get(&model_info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //    };
-
-    //    let model_type_info = &archetype.type_infos()[0];
-    //    assert_eq!(model_type_info.type_id(), model_info.model_type_id);
-    //    let model_gpu_type_info = &archetype.type_infos()[1];
-    //    assert_eq!(model_gpu_type_info.type_id(), model_info.gpu_type.unwrap());
-
-    //    // Safety: If model_info is still valid, then the archetype_index it contains must best
-    //    // valid to the archetype. We can also cast to to a *mut ptr since we take a mutable
-    //    // reference to self and explicity the lifetime.
-    //    let model_ptr =
-    //        unsafe { archetype.get_raw(model_type_info, model_info.archetype_index) as *mut u8 };
-
-    //    let voxel_model_dyn_ref = {
-    //        let model_vtable = *self.type_vtables.get(&model_info.model_type_id).unwrap();
-    //        let fat_ptr = (model_ptr, model_vtable);
-    //        let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImpl;
-
-    //        // TODO: Write why this is safe.
-    //        unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
-    //    };
-
-    //    let model_gpu_ptr = unsafe {
-    //        archetype.get_raw(model_gpu_type_info, model_info.archetype_index) as *mut u8
-    //    };
-
-    //    let voxel_model_gpu_dyn_ref = {
-    //        let model_gpu_vtable = *self
-    //            .type_vtables
-    //            .get(&model_gpu_type_info.type_id())
-    //            .unwrap();
-    //        let fat_ptr = (model_gpu_ptr, model_gpu_vtable);
-    //        let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelGpuImpl;
-
-    //        // TODO: Write why this is safe.
-    //        unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
-    //    };
-
-    //    (voxel_model_dyn_ref, voxel_model_gpu_dyn_ref)
-    //}
-
-    //pub fn get_dyn_gpu_model_mut<'a>(
-    //    &'a mut self,
-    //    id: VoxelModelId,
-    //) -> &'a mut dyn VoxelModelGpuImpl {
-    //    let model_info = self
-    //        .voxel_model_info
-    //        .get(id.handle)
-    //        .expect("Voxel model id is invalid");
-
-    //    let archetype = if model_info.gpu_type.is_none() {
-    //        panic!("nope");
-    //    } else {
-    //        &self
-    //            .renderable_voxel_model_archtypes
-    //            .get(&model_info.model_type_id)
-    //            .unwrap()
-    //            .0
-    //    };
-
-    //    let model_type_info = &archetype.type_infos()[0];
-    //    assert_eq!(model_type_info.type_id(), model_info.model_type_id);
-    //    let model_gpu_type_info = &archetype.type_infos()[1];
-    //    assert_eq!(model_gpu_type_info.type_id(), model_info.gpu_type.unwrap());
-
-    //    let model_gpu_ptr = unsafe {
-    //        archetype.get_raw(model_gpu_type_info, model_info.archetype_index) as *mut u8
-    //    };
-
-    //    let voxel_model_gpu_dyn_ref = {
-    //        let model_gpu_vtable = *self
-    //            .type_vtables
-    //            .get(&model_gpu_type_info.type_id())
-    //            .unwrap();
-    //        let fat_ptr = (model_gpu_ptr, model_gpu_vtable);
-    //        let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelGpuImpl;
-
-    //        // TODO: Write why this is safe.
-    //        unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }
-    //    };
-
-    //    voxel_model_gpu_dyn_ref
-    //}
 
     //pub fn renderable_models_dyn_iter(&self) -> RenderableVoxelModelIter<'_> {
     //    let archetype_iters = self

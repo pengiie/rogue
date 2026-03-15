@@ -129,7 +129,10 @@ impl ColliderRegistry {
     pub fn register_collider<C: Collider>(&mut self, collider: C) -> ColliderId {
         let type_id = std::any::TypeId::of::<C>();
         if !self.collider_vtables.contains_key(&type_id) {
-            panic!("Tried to register collider of type `{}` which has not been registered within the ColliderRegisty.", std::any::type_name::<C>());
+            panic!(
+                "Tried to register collider of type `{}` which has not been registered within the ColliderRegisty.",
+                std::any::type_name::<C>()
+            );
         }
 
         let vec = self
@@ -154,8 +157,10 @@ impl ColliderRegistry {
     ) -> ColliderId {
         let type_id = type_info_cloneable.type_id();
         if !self.collider_vtables.contains_key(&type_id) {
-            panic!("Tried to register collider of type `{:?}` which has not been registered within the ColliderRegisty.", 
-                type_info_cloneable.type_id());
+            panic!(
+                "Tried to register collider of type `{:?}` which has not been registered within the ColliderRegisty.",
+                type_info_cloneable.type_id()
+            );
         }
 
         let vec = self
