@@ -88,8 +88,7 @@ public struct SFT {
                        curr_local_grid.y > 3 || curr_local_grid.z > 3;
       if (should_pop) {
         if (curr_height == 0) {
-          //break;
-          return RayModelTest.hit(float3(1.0, 0.0, 0.0), float3(0.0), 0.0);
+          break;
         }
 
         curr_height -= 1;

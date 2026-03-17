@@ -1,4 +1,8 @@
-use std::{collections::HashSet, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use rogue_engine::{
     asset::asset::{Assets, GameAssetPath},
@@ -9,7 +13,10 @@ use rogue_engine::{
     material::MaterialBank,
     physics::{physics_world::PhysicsWorld, transform::Transform},
     resource::{Res, ResMut},
-    voxel::{rvox_asset::RVOXAsset, voxel_registry::VoxelModelRegistry},
+    voxel::{
+        rvox_asset::RVOXAsset,
+        voxel_registry::{VoxelModelId, VoxelModelRegistry},
+    },
     window::{time::Time, window::Window},
     world::{
         region_map::RegionMap,
@@ -21,6 +28,7 @@ use winit::event::MouseButton;
 
 use crate::{
     camera_controller::{EditorCameraController, EditorCameraControllerType},
+    editor_project_settings::{EditorProjectSettings, EditorProjectSettingsData},
     editor_settings::{UserEditorSettingsAsset, UserEditorSettingsAssetProxy},
     game_session::EditorGameSession,
     ui::EditorUI,
@@ -30,7 +38,7 @@ use crate::{
 pub enum EditorEvent {
     SaveEditorSettings,
     SaveProject,
-    SaveVoxelModel(GameAssetPath),
+    SaveVoxelModel(VoxelModelId),
 }
 
 #[derive(Resource)]
@@ -47,7 +55,11 @@ pub struct EditorSession {
 }
 
 impl EditorSession {
-    pub fn new(ecs_world: &mut ECSWorld, main_camera: &mut MainCamera) -> Self {
+    pub fn new(
+        ecs_world: &mut ECSWorld,
+        main_camera: &mut MainCamera,
+        project_settings: Option<&EditorProjectSettingsData>,
+    ) -> Self {
         let editor_camera = Self::init_editor_camera(ecs_world);
         main_camera.set_camera(editor_camera, "editor_camera");
 
@@ -57,10 +69,17 @@ impl EditorSession {
             hovered_entity: None,
 
             editor_camera,
-            editor_camera_controller: EditorCameraController::new(),
+            editor_camera_controller: project_settings.map_or_else(
+                || EditorCameraController::new(),
+                |settings| EditorCameraController::from_project_settings(settings),
+            ),
             double_right_click_buffer: InputBuffer::new(2),
             editor_event_reader: EventReader::new(),
         }
+    }
+
+    pub fn editor_camera(&self) -> Entity {
+        self.editor_camera
     }
 
     pub fn init_editor_camera(ecs_world: &mut ECSWorld) -> Entity {
@@ -162,7 +181,9 @@ impl EditorSession {
         main_camera: Res<MainCamera>,
         region_map: Res<RegionMap>,
         game_session: Res<EditorGameSession>,
+        mut project_settings: ResMut<EditorProjectSettings>,
     ) {
+        let session = &mut *session;
         let mut unique_events = HashSet::new();
         for event in session.editor_event_reader.read(&events) {
             unique_events.insert(event);
@@ -172,9 +193,22 @@ impl EditorSession {
             match event {
                 EditorEvent::SaveEditorSettings => {
                     log::info!("Saving editor settings");
+                    if let Some(project_dir) = assets.project_dir() {
+                        project_settings.projects.insert(
+                            project_dir.clone(),
+                            EditorProjectSettingsData {
+                                editor_camera_anchor: session
+                                    .editor_camera_controller
+                                    .rotation_anchor,
+                                editor_camera_rotation: session.editor_camera_controller.euler,
+                                editor_camera_distance: session.editor_camera_controller.distance,
+                            },
+                        );
+                    }
                     let editor_settings = UserEditorSettingsAssetProxy {
                         last_project_dir: assets.project_dir(),
                         editor_ui: &editor_ui,
+                        user_project_settings: &project_settings,
                     };
                     editor_settings.save_settings();
                 }
@@ -192,18 +226,14 @@ impl EditorSession {
                         },
                     );
                 }
-                EditorEvent::SaveVoxelModel(game_asset_path) => {
+                EditorEvent::SaveVoxelModel(voxel_model_id) => {
                     let Some(project_dir) = assets.project_dir() else {
                         return;
                     };
-                    let Some(voxel_model_id) = voxel_registry.get_asset_model_id(&game_asset_path)
-                    else {
-                        log::error!("Tried to save voxel model that doesn't exist in registry!");
-                        return;
-                    };
                     let asset = voxel_registry
-                        .get_dyn_model(voxel_model_id)
+                        .get_dyn_model(*voxel_model_id)
                         .create_rvox_asset();
+                    let game_asset_path = voxel_registry.get_model_asset_path(*voxel_model_id).expect("Should not request to save voxel model if it doesn't have an associated asset path.");
                     let asset_path = game_asset_path.as_file_asset_path(&project_dir);
                     Assets::save_asset_sync::<RVOXAsset>(asset_path, asset);
                 }

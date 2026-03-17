@@ -22,36 +22,6 @@
       {
         "components": [
           {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
-              "name": "Player"
-            }
-          },
-          {
-            "name": "RenderableVoxelEntity",
-            "data": {
-              "model_asset_path": {
-                "asset_path": "models::player::rvox"
-              },
-              "is_dynamic": true 
-            }
-          },
-          {
-            "name": "RigidBody",
-            "data": {
-              "rigid_body_type": "Kinematic",
-              "mass": 1.0,
-              "restitution": 0.0,
-              "friction": 0.3,
-              "locked_rotational_axes": [
-                false,
-                false,
-                false
-              ]
-            }
-          },
-          {
             "name": "Colliders",
             "data": [
               {
@@ -87,39 +57,63 @@
             ]
           },
           {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
+              "name": "Head"
+            }
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "models::player::rvox"
+              },
+              "is_dynamic": true
+            }
+          },
+          {
             "name": "Transform",
             "data": {
               "position": [
                 0.0,
-                -0.3,
+                -17.86,
                 0.0
               ],
               "rotation": [
-                0.004363265,
-                0.0043632677,
-                -0.000019038454,
-                0.9999809
+                -0.0,
+                0.0,
+                -0.0,
+                1.0
               ],
               "scale": [
-                1.0,
-                1.0,
-                1.0
+                0.25,
+                0.25,
+                0.25
               ]
             }
-          },
-          {
-            "name": "PlayerController",
-            "data": null
           }
         ]
       },
       {
         "components": [
           {
+            "name": "CameraController",
+            "data": null
+          },
+          {
             "name": "GameEntity",
             "data": {
               "uuid": "ccc6052b-8be8-4b82-91db-43b438589a65",
               "name": "Camera"
+            }
+          },
+          {
+            "name": "Camera",
+            "data": {
+              "fov": 1.7453293,
+              "near_plane": 0.01,
+              "far_plane": 10000.0
             }
           },
           {
@@ -141,18 +135,6 @@
                 1.0,
                 1.0
               ]
-            }
-          },
-          {
-            "name": "CameraController",
-            "data": null
-          },
-          {
-            "name": "Camera",
-            "data": {
-              "fov": 1.7453293,
-              "near_plane": 0.01,
-              "far_plane": 10000.0
             }
           }
         ]

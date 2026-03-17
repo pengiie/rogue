@@ -1,7 +1,10 @@
 use rogue_engine::common::color::{Color, ColorSpaceSrgb};
 use strum::VariantArray;
 
-use crate::{ui::pane::EditorUIPane, voxel_editing::EditorBrush};
+use crate::{
+    editing::voxel_editing::{EditorBrush, EditorBrushType},
+    ui::pane::EditorUIPane,
+};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -47,25 +50,26 @@ impl EditingPane {
             ui.label("Editing Enabled:");
             ui.checkbox(&mut ctx.voxel_editing.enabled, "");
         });
+
         self.show_color_picker(ui, &mut ctx.voxel_editing.color);
 
         ui.horizontal_wrapped(|ui| {
-            for brush in EditorBrush::VARIANTS {
+            for brush_type in EditorBrushType::VARIANTS {
                 if ui
                     .add_enabled(
-                        *brush != ctx.voxel_editing.brush,
-                        egui::Button::new(brush.to_string()),
+                        *brush_type != ctx.voxel_editing.brush.brush_type,
+                        egui::Button::new(brush_type.to_string()),
                     )
                     .clicked()
                 {
-                    ctx.voxel_editing.brush = *brush;
+                    ctx.voxel_editing.brush.brush_type = *brush_type;
                 }
             }
         });
 
         ui.horizontal(|ui| {
             ui.label("Brush Size:");
-            ui.add(egui::DragValue::new(&mut ctx.voxel_editing.brush_size).range(1..=128));
+            ui.add(egui::DragValue::new(&mut ctx.voxel_editing.brush.brush_size).range(1..=128));
         });
     }
 }

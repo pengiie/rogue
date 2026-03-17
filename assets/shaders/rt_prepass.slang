@@ -57,7 +57,7 @@ void main(uint3 id: SV_DispatchThreadID) {
       sun_dir = -sun_dir;
       sun_color = Sky.moon_color() * 0.3;
     }
-    let l = clamp(pow(dot(normal, sun_dir) + 0.3, 2.0), 0.035, 1.0);
+    let l = clamp(pow(dot(normal, sun_dir) * 0.7 + 0.3, 2.0), 0.035, 1.0);
     out_color = out_color * l * sun_color;
   }
 
@@ -69,5 +69,4 @@ void main(uint3 id: SV_DispatchThreadID) {
   let clip_depth = z_clip / w_clip;
   u_shader.backbuffer_depth.Store(coord.xy, saturate(clip_depth));
   u_shader.backbuffer.Store(coord.xy, float4(out_color, 1.0));
-  //u_shader.backbuffer.Store(coord.xy, float4(clip_depth,clip_depth,clip_depth, 1.0));
 }

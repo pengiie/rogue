@@ -21,6 +21,8 @@ use rogue_engine::{
 use rogue_macros::Resource;
 
 use crate::{
+    editing::voxel_editing::EditorVoxelEditing,
+    game_session::EditorGameSession,
     session::EditorSession,
     ui::{
         asset_pane::AssetsPane,
@@ -37,13 +39,13 @@ use crate::{
         top_bar::TopBarPane,
         world_pane::WorldPane,
     },
-    voxel_editing::EditorVoxelEditing,
     world::generator::WorldGenerator,
 };
 
 /// Context that we pass down to every component so we don't have 10 argument functions.
 pub struct EditorUIContext<'a> {
     pub session: &'a mut EditorSession,
+    pub game_session: &'a mut EditorGameSession,
     pub ecs_world: &'a mut ECSWorld,
     pub voxel_registry: &'a mut VoxelModelRegistry,
     pub physics_world: &'a mut PhysicsWorld,
@@ -292,6 +294,7 @@ impl EditorUI {
         mut sky: ResMut<Sky>,
         mut voxel_editing: ResMut<EditorVoxelEditing>,
         mut debug_renderer: ResMut<DebugRenderer>,
+        mut game_session: ResMut<EditorGameSession>,
     ) {
         let editor_ui = &mut *editor_ui;
         let mut commands = EditorCommands::new();
@@ -299,6 +302,7 @@ impl EditorUI {
             let frame = egui::Frame::new().fill(ctx.style().visuals.window_fill);
 
             let mut res_ctx = EditorUIContext {
+                game_session: &mut game_session,
                 ecs_world: &mut ecs_world,
                 session: &mut session,
                 voxel_registry: &mut voxel_registry,
@@ -393,6 +397,7 @@ impl EditorUI {
         let mut res_ctx = EditorUIContext {
             ecs_world: &mut ecs_world,
             session: &mut session,
+            game_session: &mut game_session,
             voxel_registry: &mut voxel_registry,
             physics_world: &mut physics_world,
             material_bank: &mut material_bank,

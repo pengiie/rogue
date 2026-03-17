@@ -6,11 +6,34 @@ namespace voxel {
 public struct EntityInfo {
   float3 aabb_min; // offset = 0
   float3 aabb_max; // offset = 16
+  // Rows of the rotation matrix.
   float3 rotation_1; // offset = 32
   float3 rotation_2; // offset = 48
   float3 rotation_3; // offset = 64
   uint model_info_ptr; // offset = 76
+
+  public RayEntityTest trace_entity(Ray ray) {
+    let entity_aabb = AABB.new_min_max(this.aabb_min, this.aabb_max);
+
+    let entity_rotation = matrix3x3(this.rotation_1,
+                                    this.rotation_2,
+                                    this.rotation_3);
+    let rotated_ray_pos = mul(entity_rotation, ray.origin - entity_aabb.center) + entity_aabb.center;
+    let rotated_ray_dir = mul(entity_rotation, ray.dir);
+    let rotated_ray = Ray(rotated_ray_pos, rotated_ray_dir);
+    let hit_info = rotated_ray.test_aabb(entity_aabb);
+
+    if(hit_info.hit) {
+      var model_test = trace_model(rotated_ray, entity_aabb, this.model_info_ptr);
+      if (model_test.did_hit) {
+        let world_normal = mul(transpose(entity_rotation), model_test.normal);
+        return RayEntityTest.hit(model_test.albedo, world_normal, model_test.ray_t.x);
+      }
+    }
+    return RayEntityTest.miss();
+  }
 }
+
 
 public struct RayEntityTest {
   public bool did_hit;
@@ -38,22 +61,9 @@ public struct EntityData {
     min_test.depth_t = 100000.0;
     for (uint i = 0; i < entity_data.entity_count; i++) {
       let entity_info = entity_data.accel_buf.Load(i);
-      let entity_aabb = AABB.new_min_max(entity_info.aabb_min, entity_info.aabb_max);
-
-      let entity_rotation = matrix3x3(entity_info.rotation_1,
-                                                         entity_info.rotation_2,
-                                                         entity_info.rotation_3);
-      let rotated_ray_pos = mul(entity_rotation, ray.origin - entity_aabb.center) + entity_aabb.center;
-      let rotated_ray_dir = mul(entity_rotation, ray.dir);
-      let rotated_ray = Ray(rotated_ray_pos, rotated_ray_dir);
-      let hit_info = rotated_ray.test_aabb(entity_aabb);
-
-      if(hit_info.hit) {
-        let model_test = trace_model(rotated_ray, entity_aabb, entity_info.model_info_ptr);
-        if (model_test.did_hit && model_test.ray_t.x < min_test.depth_t) {
-          let world_normal = mul(transpose(entity_rotation), model_test.normal);
-          min_test = RayEntityTest.hit(model_test.albedo, world_normal, model_test.ray_t.x);
-        }
+      let entity_test = entity_info.trace_entity(ray);
+      if(entity_test.did_hit && entity_test.depth_t.x < min_test.depth_t) {
+         min_test = entity_test;
       }
     }
 

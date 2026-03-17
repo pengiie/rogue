@@ -58,11 +58,10 @@ impl WorldEntities {
             let model = voxel_registry.get_dyn_model(model_id);
             let model_side_length = model.length();
             let obb = transform.as_voxel_model_obb(model_side_length);
-            let rotated_ray_pos = obb
-                .rotation
-                .transform_vector(&(ray.origin - transform.position))
-                + transform.position;
-            let rotated_ray_dir = obb.rotation.transform_vector(&ray.dir);
+            let inv_rot = obb.rotation.inverse();
+            let rotated_ray_pos =
+                inv_rot.transform_vector(&(ray.origin - transform.position)) + transform.position;
+            let rotated_ray_dir = inv_rot.transform_vector(&ray.dir);
             let rotated_ray = Ray::new(rotated_ray_pos, rotated_ray_dir);
             if let Some(trace) = model.trace(&rotated_ray, &obb.aabb) {
                 let should_update_hit = match &hit {

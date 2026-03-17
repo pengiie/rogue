@@ -141,7 +141,10 @@ impl WorldEntitiesGpu {
             let voxel_model = voxel_registry.get_dyn_model(voxel_model_id);
             let obb = transform.as_voxel_model_obb(voxel_model.length());
             let aabb = obb.aabb;
-            // Transpose cause slang is column major.
+            // TODO: It feels like the matrix is getting inverted somewhere being sent to the
+            // shader but i havent debuged it yet so im not sure if it is or what, its
+            // just weird the math works currently cause theoretically it shouldnt be working i
+            // need to send the inverted rotation which im not explicitly doing idk.
             let rotation = transform.rotation.to_homogeneous();
             let entity_info = EntityInfo {
                 aabb_min: [aabb.min.x, aabb.min.y, aabb.min.z, 0.0],

@@ -17,7 +17,7 @@ public struct Sky {
     //var background_color = color::srgb_to_lsrgb(float3(acos(-ray.dir) / 3.14));
     const float3 really_dark_blue = float3(0.01, 0.02, 0.05);
     const float3 dark_blue = float3(0.4, 0.5, 0.75);
-    const float3 light_blue = float3(0.6, 0.78, 0.98);
+    const float3 light_blue = float3(0.6, 0.73, 0.88);
 
     let t = saturate(sun_dir.y * 2.0);
 
@@ -37,7 +37,7 @@ public struct Sky {
     }
 
     let dithered_dir = dither(ray.dir);
-    var c = color::srgb_to_lsrgb(lerp(dark_blue, light_blue, smoothstep_saturate((dithered_dir.y + 0.35) / 0.5)));
+    var c = color::srgb_to_lsrgb(lerp(dark_blue, light_blue, smoothstep_saturate((dithered_dir.y + 0.3) / 0.5)));
     if (sun_dir.y < 0.0) {
       c *= 1.0 - saturate(abs(sun_dir.y) / 0.2) * 0.8;
     }

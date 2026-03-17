@@ -2418,7 +2418,6 @@ impl VulkanResourceManager {
 
         let mut depth_stencil_state = ash::vk::PipelineDepthStencilStateCreateInfo::default();
         if create_info.depth_format.is_some() {
-            log::info!("fhas depth");
             depth_stencil_state = depth_stencil_state
                 .depth_test_enable(true)
                 .depth_write_enable(true)
@@ -2456,7 +2455,6 @@ impl VulkanResourceManager {
         let mut dynamic_rendering = ash::vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_attachment_formats);
         if let Some(format) = create_info.depth_format {
-            log::info!("has depth format");
             dynamic_rendering = dynamic_rendering.depth_attachment_format(format.into());
         }
 

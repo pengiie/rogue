@@ -650,6 +650,9 @@ impl ShaderCompiler {
                         (shader_slang::ScalarType::Uint32, 3) => {
                             Some(std::any::TypeId::of::<nalgebra::Vector3<u32>>())
                         }
+                        (shader_slang::ScalarType::Uint32, 2) => {
+                            Some(std::any::TypeId::of::<nalgebra::Vector2<u32>>())
+                        }
                         _ => None,
                     };
 

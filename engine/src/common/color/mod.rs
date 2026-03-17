@@ -1,10 +1,19 @@
 use nalgebra::{ComplexField, Matrix3, Vector3};
 
-#[derive(PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
     pub xyz: Vector3<f32>,
     #[serde(skip)]
     _marker: std::marker::PhantomData<S>,
+}
+
+impl<T> PartialEq for Color<T>
+where
+    T: ColorSpace,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.xyz.eq(&other.xyz)
+    }
 }
 
 impl<S: ColorSpace> Color<S> {

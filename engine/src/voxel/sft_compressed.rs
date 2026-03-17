@@ -107,6 +107,16 @@ impl VoxelModelSFTCompressed {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.node_data = vec![SFTNodeCompressed::new_empty()];
+        for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
+            *attachment_lookup_data = vec![SFTAttachmentLookupNodeCompressed::new_empty()];
+        }
+        for attachment_raw_data in self.attachment_raw_data.values_mut() {
+            attachment_raw_data.clear();
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.node_data[0].child_mask == 0
     }
@@ -499,7 +509,7 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
     fn set_voxel_range_impl(&mut self, edit: &super::voxel::VoxelModelEdit) {
         self.update_tracker += 1;
         let sl = self.side_length;
-        let volume = sl.pow(3);
+        let volume = (sl as u64).pow(3);
         let is_entire_bounds =
             edit.min == Vector3::new(0, 0, 0) && edit.max == Vector3::new(sl, sl, sl);
         match &edit.data {

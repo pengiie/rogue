@@ -22,19 +22,28 @@ use rogue_engine::{
 use winit::event::{DeviceEvent, ElementState};
 
 use crate::{
-    editor_settings::UserEditorSettingsAsset, game_session::EditorGameSession, gizmo::EditorGizmo,
-    render_graph::EditorRenderGraph, session::EditorSession, ui::EditorUI,
-    voxel_editing::EditorVoxelEditing, world::generator::WorldGenerator,
+    editing::{
+        voxel_editing::EditorVoxelEditing, voxel_editing_preview_gpu::EditorVoxelEditingPreviewGpu,
+    },
+    editor_project_settings::EditorProjectSettings,
+    editor_settings::UserEditorSettingsAsset,
+    game_session::EditorGameSession,
+    gizmo::EditorGizmo,
+    render_graph::EditorRenderGraph,
+    session::EditorSession,
+    ui::EditorUI,
+    world::generator::WorldGenerator,
 };
 
 pub mod camera_controller;
+pub mod editing;
+pub mod editor_project_settings;
 pub mod editor_settings;
 pub mod game_session;
 pub mod gizmo;
 mod render_graph;
 pub mod session;
 pub mod ui;
-pub mod voxel_editing;
 pub mod world;
 
 fn main() {
@@ -59,6 +68,7 @@ fn main() {
     let editor_settings = UserEditorSettingsAsset::load_editor_settings();
     let project = editor_settings.load_project();
 
+    // Setup game session early since it relys on ProjectSettings.
     let game_session = EditorGameSession::new(&project.settings);
     let mut app = App::new(AppCreateInfo {
         project,
@@ -66,22 +76,28 @@ fn main() {
         on_window_event_fn: Some(Box::new(on_window_event)),
         on_device_event_fn: Some(Box::new(on_device_event)),
     });
+    app.insert_resource(editor_settings.user_project_settings);
     app.insert_resource(game_session);
 
     /// Initialize the saved editor ui layout.
     app.insert_resource(editor_settings.editor_ui);
 
-    setup_editor_systems(&mut app);
+    setup_systems(&mut app);
 
     app.run_with_window();
 }
 
 /// Called only once after graphics initialization.
 fn on_post_graphics_init(rb: &mut ResourceBank) {
+    let editor_project_settings = rb.get_resource::<EditorProjectSettings>();
+    let project_settings =
+        editor_project_settings.get_project_settings(&rb.get_resource::<Assets>());
     let session = EditorSession::new(
         &mut rb.get_resource_mut::<ECSWorld>(),
         &mut rb.get_resource_mut::<MainCamera>(),
+        project_settings,
     );
+    drop(editor_project_settings);
     rb.insert(session);
 
     rb.insert(DebugRenderer::new());
@@ -94,6 +110,7 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     rb.insert(world_generator);
 
     rb.insert(EditorVoxelEditing::new());
+    rb.insert(EditorVoxelEditingPreviewGpu::new());
     rb.insert(EditorGizmo::new());
 
     rb.run_system(EditorRenderGraph::init_render_graph);
@@ -149,7 +166,7 @@ fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> 
     return false;
 }
 
-fn setup_editor_systems(app: &mut App) {
+fn setup_systems(app: &mut App) {
     // Update editor session related systems.
     app.insert_system(
         AppStage::Update,
@@ -165,6 +182,11 @@ fn setup_editor_systems(app: &mut App) {
         AppStage::Update,
         EditorVoxelEditing::update_voxel_editing_entity,
     );
+    // Ensure the preview model exists on the gpu voxel registry.
+    app.insert_system(
+        AppStage::Update,
+        EditorVoxelEditingPreviewGpu::update_preview_gpu,
+    );
 
     // Update the voxel-based world generator.
     app.insert_system(AppStage::Update, WorldGenerator::update);
@@ -172,16 +194,21 @@ fn setup_editor_systems(app: &mut App) {
     // Handles events such as project/settings saving and loading.
     app.insert_system(AppStage::Update, EditorSession::update_editor_events);
 
-    // Update editor gizmo actions.
-    app.insert_system(AppStage::Update, EditorGizmo::update);
-    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
-
+    // Update game state from any events.
+    app.insert_system(
+        AppStage::Update,
+        EditorGameSession::update_game_session_state,
+    );
     // Insert game script systems which run conditionally on editor game state.
     app.insert_system(AppStage::Update, EditorGameSession::try_run_game_on_update);
     app.insert_system(
         AppStage::Update,
         EditorGameSession::try_run_game_on_fixed_update,
     );
+
+    // Update editor gizmo actions and rendering.
+    app.insert_system(AppStage::Update, EditorGizmo::update);
+    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);
@@ -197,6 +224,10 @@ fn setup_editor_systems(app: &mut App) {
 
     // Write the render graph pass input for rasterizing the debug shapes.
     app.insert_system(AppStage::RenderWrite, DebugRenderer::write_graph_pass);
+    app.insert_system(
+        AppStage::RenderWrite,
+        EditorVoxelEditingPreviewGpu::write_render_preview_pass,
+    );
 }
 
 fn init_ecs_world() -> ECSWorld {

@@ -1,4 +1,5 @@
 use crate::{
+    game_session::EditorGameSessionEvent,
     session::EditorEvent,
     ui::{
         EditorCommand, EditorUIContext, asset_pane::AssetsPane, editing_pane::EditingPane,
@@ -67,6 +68,38 @@ impl TopBarPane {
                 ui.label(format!("{}", project_dir.to_string_lossy()));
             } else {
                 ui.label("Please perform File -> New to start a project.");
+            }
+        });
+
+        // Under the menu bar, quick actions.
+        ui.horizontal(|ui| {
+            ui.style_mut().spacing.item_spacing.x = 4.0;
+            if ui
+                .add_enabled(
+                    ctx.game_session.can_start_game(),
+                    egui::Button::new("\u{25B6}"),
+                )
+                .clicked()
+            {
+                ctx.events.push(EditorGameSessionEvent::StartGame);
+            }
+            if ui
+                .add_enabled(
+                    ctx.game_session.can_pause_game(),
+                    egui::Button::new("\u{23F8}"),
+                )
+                .clicked()
+            {
+                ctx.events.push(EditorGameSessionEvent::PauseGame);
+            }
+            if ui
+                .add_enabled(
+                    ctx.game_session.can_stop_game(),
+                    egui::Button::new("\u{25A0}"),
+                )
+                .clicked()
+            {
+                ctx.events.push(EditorGameSessionEvent::StopGame);
             }
         });
     }

@@ -55,6 +55,7 @@ public float3 octahedral_normal_decode(uint2 compressed, uint bits_per_component
 }
 
 public struct BMaterial {
+  // Albedo in srgb.
   public float3 albedo;
   public float3 normal;
 
@@ -74,8 +75,9 @@ public struct BMaterial {
     let r = (float) ((comp >> 10) & 0b11111) / 0b11111;
     let g = (float) ((comp >> 5) & 0b11111) / 0b11111;
     let b = (float) (comp & 0b11111) / 0b11111;
-
-    return BMaterial(float3(r, g, b), normal);
+    let color = color::srgb_to_lsrgb(float3(r,g,b));
+    
+    return BMaterial(color, normal);
   }
 
   public uint encode() {

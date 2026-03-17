@@ -3091,6 +3091,8 @@ dependencies = [
  "serde",
  "serde_json",
  "shader-slang",
+ "strum",
+ "strum_macros",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",

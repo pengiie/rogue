@@ -90,4 +90,24 @@ macro_rules! impl_system {
     };
 }
 
+//macro_rules! impl_system_param_tuple {
+//    ($($param:ident), *$(,)? $($num:literal),*) => {
+//        impl<$($param: SystemParam),*> SystemParam for ($($param),*)
+//        where
+//            $($param: SystemParam),*
+//        {
+//            type Item<'rb> = Self;
+//
+//            fn from_resource_bank(resource_bank: &ResourceBank) -> Self::Item<'_> {
+//                (
+//                    $(
+//                        <$param as SystemParam>::from_resource_bank(resource_bank)
+//                    ),*
+//                )
+//            }
+//        }
+//    };
+//}
+//generate_tuples!(impl_system_param_tuple, 2, 16);
+
 generate_tuples!(impl_system, 0, 16);

@@ -3,13 +3,14 @@ use rogue_engine::{
     common::color::Color,
     debug::debug_renderer::DebugRenderer,
     entity::{RenderableVoxelEntity, ecs_world::ECSWorld},
+    graphics::camera::MainCamera,
     physics::transform::Transform,
     resource::{Res, ResMut},
     voxel::voxel_registry::VoxelModelRegistry,
 };
 use rogue_macros::Resource;
 
-use crate::session::EditorSession;
+use crate::{editing::voxel_editing::EditorVoxelEditing, session::EditorSession};
 
 /// Tool for modifying the currently selected entity.
 #[derive(Resource)]
@@ -22,13 +23,21 @@ impl EditorGizmo {
 
     pub fn update(
         mut gizmo: ResMut<EditorGizmo>,
-        mut session: ResMut<EditorSession>,
+        mut editor_session: ResMut<EditorSession>,
         mut debug_renderer: ResMut<DebugRenderer>,
         ecs_world: Res<ECSWorld>,
+        main_camera: Res<MainCamera>,
+        voxel_editing: Res<EditorVoxelEditing>,
     ) {
-        let Some(selected_entity) = session.selected_entity else {
+        if voxel_editing.is_enabled() {
+            return;
+        }
+        let Some(selected_entity) = editor_session.selected_entity else {
             return;
         };
+        if main_camera.camera() != Some(editor_session.editor_camera()) {
+            return;
+        }
 
         let local_transform = ecs_world
             .get::<&Transform>(selected_entity)
@@ -58,15 +67,23 @@ impl EditorGizmo {
     }
 
     pub fn visualize_selected_entity(
-        mut session: ResMut<EditorSession>,
+        mut editor_session: ResMut<EditorSession>,
         mut debug_renderer: ResMut<DebugRenderer>,
         ecs_world: Res<ECSWorld>,
         voxel_registry: Res<VoxelModelRegistry>,
+        main_camera: Res<MainCamera>,
+        voxel_editing: Res<EditorVoxelEditing>,
     ) {
+        if voxel_editing.is_enabled() {
+            return;
+        }
         const SELECTION_COLOR: &'static str = "#ffffff";
-        let Some(selected_entity) = session.selected_entity else {
+        let Some(selected_entity) = editor_session.selected_entity else {
             return;
         };
+        if main_camera.camera() != Some(editor_session.editor_camera()) {
+            return;
+        }
 
         let local_transform = ecs_world
             .get::<&Transform>(selected_entity)

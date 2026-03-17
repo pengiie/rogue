@@ -54,6 +54,7 @@ impl EditorGameSession {
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut physics_world: ResMut<PhysicsWorld>,
         mut main_camera: ResMut<MainCamera>,
+        mut editor_session: ResMut<EditorSession>,
     ) {
         let game_session = &mut *game_session;
         let mut new_game_state = None;
@@ -77,20 +78,34 @@ impl EditorGameSession {
         let Some(new_game_state) = new_game_state else {
             return;
         };
-        game_session.game_state = new_game_state;
 
         match new_game_state {
             SessionGameState::Playing => {
-                game_session.start_game(
+                if game_session.game_state == SessionGameState::Paused {
+                    game_session.resume_game(&mut physics_world);
+                } else {
+                    game_session.start_game(
+                        &mut ecs_world,
+                        &mut physics_world,
+                        &mut voxel_registry,
+                        &mut main_camera,
+                    );
+                }
+            }
+            SessionGameState::Paused => {
+                game_session.pause_game(&mut physics_world);
+            }
+            SessionGameState::Stopped => {
+                game_session.stop_game(
                     &mut ecs_world,
                     &mut physics_world,
                     &mut voxel_registry,
+                    &mut editor_session,
                     &mut main_camera,
                 );
             }
-            SessionGameState::Paused => {}
-            SessionGameState::Stopped => {}
         }
+        game_session.game_state = new_game_state;
     }
 
     pub fn can_start_game(&self) -> bool {
@@ -105,6 +120,11 @@ impl EditorGameSession {
         self.game_state != SessionGameState::Stopped
     }
 
+    pub fn resume_game(&mut self, physics_world: &mut PhysicsWorld) {
+        assert_eq!(self.game_state, SessionGameState::Paused);
+        physics_world.do_dynamics = true;
+    }
+
     pub fn start_game(
         &mut self,
         ecs_world: &mut ECSWorld,
@@ -112,13 +132,14 @@ impl EditorGameSession {
         voxel_registry: &mut VoxelModelRegistry,
         main_camera: &mut MainCamera,
     ) {
-        assert!(self.can_start_game());
+        assert!(self.can_start_game() && self.game_state == SessionGameState::Stopped);
 
         let fresh_ecs_world = ecs_world.clone_game_entities(&mut GameComponentCloneContext {
             voxel_registry,
             collider_registry: &mut physics_world.colliders,
         });
-        self.saved_game_world = Some(std::mem::replace(ecs_world, fresh_ecs_world));
+        self.saved_game_world = Some(fresh_ecs_world);
+        main_camera.set_camera(self.game_camera.clone().unwrap(), "game_camera");
 
         physics_world.do_dynamics = true;
     }

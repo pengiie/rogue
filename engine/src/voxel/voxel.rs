@@ -60,7 +60,7 @@ pub struct MaterialPalette {
     palette: HashMap<u16, MaterialId>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, strum_macros::EnumIs)]
 pub enum VoxelMaterialData {
     Unbaked(MaterialId),
     Baked { color: Color<ColorSpaceSrgb> },

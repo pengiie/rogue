@@ -5,6 +5,8 @@ use rogue_engine::{
     window::{time::Time, window::Window},
 };
 
+use crate::editor_project_settings::EditorProjectSettingsData;
+
 pub enum EditorCameraControllerType {
     PanOrbit,
     Fps,
@@ -27,6 +29,15 @@ impl EditorCameraController {
             euler: Vector3::zeros(),
             distance: 10.0,
 
+            controller_type: EditorCameraControllerType::PanOrbit,
+        }
+    }
+
+    pub fn from_project_settings(settings: &EditorProjectSettingsData) -> Self {
+        Self {
+            rotation_anchor: settings.editor_camera_anchor,
+            euler: settings.editor_camera_rotation,
+            distance: settings.editor_camera_distance,
             controller_type: EditorCameraControllerType::PanOrbit,
         }
     }

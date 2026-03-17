@@ -136,6 +136,14 @@ impl VoxelModelRegistry {
         self.static_asset_models.get(asset_path).cloned()
     }
 
+    pub fn get_model_asset_path(&self, voxel_model_id: VoxelModelId) -> Option<GameAssetPath> {
+        self.voxel_model_info
+            .get(voxel_model_id.handle)
+            .expect("Given id doesn't exist.")
+            .asset_path
+            .clone()
+    }
+
     pub fn get_voxel_model_type_id(&self, voxel_model_id: VoxelModelId) -> TypeId {
         self.voxel_model_info
             .get(voxel_model_id.handle)
@@ -336,6 +344,46 @@ impl VoxelModelRegistry {
                 .insert(asset_path.clone(), VoxelModelId::new(voxel_id));
         }
         VoxelModelId::new(voxel_id)
+    }
+
+    pub fn get_model<'a, T: VoxelModelImpl>(&'a self, id: VoxelModelId) -> &'a T {
+        let info = self
+            .voxel_model_info
+            .get(id.handle)
+            .expect("Given id doesn't exist.");
+        let data = self
+            .voxel_model_data
+            .get(&info.model_type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+        assert!(
+            data.type_info().type_id() == std::any::TypeId::of::<T>(),
+            "Given id is of type {:?} but requested type is {:?}.",
+            data.type_info().name(),
+            std::any::type_name::<T>()
+        );
+        let data_ptr = data.get_bytes(info.index as usize).as_ptr();
+        // Safety: We assert the type id is the same as T.
+        unsafe { &*(data_ptr as *const T) }
+    }
+
+    pub fn get_model_mut<'a, T: VoxelModelImpl>(&mut self, id: VoxelModelId) -> &'a mut T {
+        let info = self
+            .voxel_model_info
+            .get(id.handle)
+            .expect("Given id doesn't exist.");
+        let data = self
+            .voxel_model_data
+            .get_mut(&info.model_type_id)
+            .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+        assert!(
+            data.type_info().type_id() == std::any::TypeId::of::<T>(),
+            "Given id is of type {:?} but requested type is {:?}.",
+            data.type_info().name(),
+            std::any::type_name::<T>()
+        );
+        let data_ptr = data.get_mut_bytes(info.index as usize).as_ptr();
+        // Safety: We assert the type id is the same as T.
+        unsafe { &mut *(data_ptr as *mut T) }
     }
 
     pub fn get_dyn_model<'a>(&'a self, id: VoxelModelId) -> &'a dyn VoxelModelImplMethods {

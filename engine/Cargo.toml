@@ -40,6 +40,8 @@ petgraph = "0.6.5"
 pollster = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
+strum = "0.28.0"
+strum_macros = "0.28.0"
 erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
 uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
 wide = "1.1.1"

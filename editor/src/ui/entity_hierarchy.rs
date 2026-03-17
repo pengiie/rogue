@@ -74,12 +74,18 @@ impl EntityHierarchyUI {
         entity_id: Entity,
         entity_name: String,
     ) {
-        let label_id = egui::Id::new(format!(
-            "left_panel_{}_{}_entity_label",
+        let dnd_source_id = egui::Id::new(format!(
+            "left_panel_{}_{}_entity_label_dnd_source",
             entity_id.index(),
             entity_id.generation()
         ));
-        let is_hovering = ui.data(|w| w.get_temp(label_id).unwrap_or(false));
+
+        let label_hover_id = egui::Id::new(format!(
+            "left_panel_{}_{}_entity_label_hover",
+            entity_id.index(),
+            entity_id.generation()
+        ));
+        let is_hovering = ui.data(|w| w.get_temp(label_hover_id).unwrap_or(false));
 
         let mut text = egui::RichText::new(entity_name);
         if is_hovering {
@@ -90,9 +96,13 @@ impl EntityHierarchyUI {
         {
             text = text.background_color(egui::Color32::from_white_alpha(3));
         }
-        let mut label = ui.add(egui::Label::new(text).truncate());
+        let mut label = ui
+            .dnd_drag_source(dnd_source_id, (), |ui| {
+                ui.add(egui::Label::new(text).truncate());
+            })
+            .response;
 
-        ui.data_mut(|w| w.insert_temp(label_id, label.hovered()));
+        ui.data_mut(|w| w.insert_temp(label_hover_id, label.hovered()));
         if label.hovered() {
             ctx.session.hovered_entity = Some(entity_id);
         }

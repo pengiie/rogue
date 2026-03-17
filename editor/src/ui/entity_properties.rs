@@ -203,7 +203,7 @@ impl EntityPropertiesShowFns {
                             }
 
                             ctx.events
-                                .push(EditorEvent::SaveVoxelModel(model_asset_path));
+                                .push(EditorEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
                         }),
                         extensions: vec!["rvox".to_owned()],
                         preset_file_path: Some(path.path().to_path_buf()),

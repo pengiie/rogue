@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
+use nalgebra::Vector3;
 use rogue_engine::{
     asset::{
         asset::{AssetLoadError, AssetPath, Assets},
@@ -8,26 +9,36 @@ use rogue_engine::{
     impl_asset_load_save_serde, impl_asset_save_serde,
 };
 
-use crate::{editor_settings, init_ecs_world, ui::EditorUI};
+use crate::{
+    editor_project_settings::EditorProjectSettings, editor_settings, init_ecs_world, ui::EditorUI,
+};
 
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UserEditorSettingsAsset {
-    #[serde(default)]
     pub last_project_dir: Option<PathBuf>,
 
     /// Saved editor UI state.
-    #[serde(default = "EditorUI::new")]
     pub editor_ui: EditorUI,
+
+    pub user_project_settings: EditorProjectSettings,
 }
 
 #[derive(serde::Serialize)]
 pub struct UserEditorSettingsAssetProxy<'a> {
     pub last_project_dir: &'a Option<PathBuf>,
     pub editor_ui: &'a EditorUI,
+    pub user_project_settings: &'a EditorProjectSettings,
 }
 
 impl_asset_load_save_serde!(UserEditorSettingsAsset);
 impl_asset_save_serde!(UserEditorSettingsAssetProxy<'_>);
+
+impl Default for UserEditorSettingsAsset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl UserEditorSettingsAsset {
     const ASSET_PATH: &str = "editor::editor_settings::json";
@@ -36,6 +47,7 @@ impl UserEditorSettingsAsset {
         Self {
             last_project_dir: None,
             editor_ui: EditorUI::new(),
+            user_project_settings: EditorProjectSettings::new(),
         }
     }
 

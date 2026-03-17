@@ -5,11 +5,13 @@ use rogue_engine::egui::egui_gpu::EguiGpu;
 use rogue_engine::graphics::backend::{GfxBlitInfo, GfxFilterMode};
 use rogue_engine::graphics::device::DeviceResource;
 use rogue_engine::graphics::frame_graph::FrameGraphImageInfo;
+use rogue_engine::graphics::post_process_pass::PostProcessPass;
 use rogue_engine::graphics::{frame_graph::FrameGraphBuilder, renderer::Renderer};
 use rogue_engine::resource::{Res, ResMut};
 use rogue_engine::voxel::baker_gpu::VoxelBakerGpu;
 use rogue_engine::world::renderable::rt_pass::WorldRTPass;
 
+use crate::editing::voxel_editing_preview_gpu::EditorVoxelEditingPreviewGpu;
 use crate::ui::EditorUI;
 
 pub struct EditorRenderGraphConstants {
@@ -18,6 +20,8 @@ pub struct EditorRenderGraphConstants {
     pub backbuffer_depth_r16_name: &'static str,
     pub backbuffer_depth_name: &'static str,
     pub backbuffer_blit_offset_input: &'static str,
+
+    pub intermediate_image_name: &'static str,
 }
 
 pub struct EditorRenderGraph {}
@@ -29,6 +33,7 @@ impl EditorRenderGraph {
         backbuffer_depth_r16_name: "editor_backbuffer_r16_depth",
         backbuffer_depth_name: "editor_backbuffer_depth",
         backbuffer_blit_offset_input: "editor_backbuffer_blit_offset",
+        intermediate_image_name: "editor_intermediate_image",
     };
 
     /// Supplies inputs such as backbuffer size or backbuffer blit offset, etc. to the
@@ -55,6 +60,7 @@ impl EditorRenderGraph {
         mut world_rt_pass_gpu: ResMut<WorldRTPass>,
         mut voxel_baker_gpu: ResMut<VoxelBakerGpu>,
         mut debug_renderer: ResMut<DebugRenderer>,
+        mut voxel_editing_preview: ResMut<EditorVoxelEditingPreviewGpu>,
     ) {
         let mut fg = FrameGraphBuilder::new();
 
@@ -77,6 +83,8 @@ impl EditorRenderGraph {
 
         // World render pass, draws the terrain and entities.
         world_rt_pass_gpu.set_graph_rt_pass(&mut fg, backbuffer, backbuffer_depth_r16);
+        // Preview editor voxel editing.
+        voxel_editing_preview.set_graph_voxel_preview_pass(&mut fg, backbuffer);
 
         fg.create_pass(
             "depth_copy_pass",
@@ -110,35 +118,49 @@ impl EditorRenderGraph {
         let swapchain_image_size =
             fg.create_input::<Vector2<u32>>(Renderer::GRAPH.image_swapchain_size);
 
-        // Clear the swapchaain image and blit the backbuffer to it.
+        let intermediate_image = fg
+            .create_frame_image_with_ctx(Self::GRAPH.intermediate_image_name, move |ctx| {
+                FrameGraphImageInfo::new_rgba8(ctx.get_vec2(swapchain_image_size))
+            });
+        // Clear the swapchaain image and blit the backbuffer to it while computing
+        // post processing effects.
         let blit_offset_input =
             fg.create_input::<Vector2<u32>>(Self::GRAPH.backbuffer_blit_offset_input);
-        let swapchain_prepare_pass = fg.create_pass(
-            "swapchain_prepare_pass",
-            &[&swapchain_image],
-            &[&swapchain_image],
-            move |recorder, ctx| {
-                let swapchain_image = ctx.get_image(&swapchain_image);
-                recorder.clear_color(swapchain_image, Color::new_srgb(0.0, 0.0, 0.0));
-
-                let backbuffer_image = ctx.get_image(&backbuffer);
-                let backbuffer_size = recorder.get_image_info(&backbuffer_image).resolution_xy();
-                let blit_offset = ctx.get_vec2(&blit_offset_input);
-                recorder.blit(GfxBlitInfo {
-                    src: backbuffer_image,
-                    src_offset: Vector2::new(0, 0),
-                    src_length: backbuffer_size,
-                    dst: swapchain_image,
-                    dst_offset: blit_offset,
-                    dst_length: backbuffer_size,
-                    filter: GfxFilterMode::Nearest,
-                });
-            },
+        PostProcessPass::set_graph_post_process_blit_pass(
+            &mut fg,
+            blit_offset_input,
+            backbuffer,
+            intermediate_image,
         );
 
         // Egui pass, draws the editor UI.
         // TODO: Pass dependencies so its not just linear.
-        egui_gpu.set_graph_egui_pass(&mut fg, swapchain_image, &[]);
+        egui_gpu.set_graph_egui_pass(&mut fg, intermediate_image, &[]);
+
+        fg.create_pass(
+            "blit_intermediate_to_swapchain_pass",
+            &[&intermediate_image, &swapchain_image],
+            &[&swapchain_image],
+            move |recorder, ctx| {
+                let intermediate = ctx.get_image(&intermediate_image);
+                let swapchain = ctx.get_image(&swapchain_image);
+                let intermediate_info = recorder.get_image_info(&intermediate);
+                let swapchain_info = recorder.get_image_info(&swapchain);
+                assert_eq!(
+                    intermediate_info.resolution_xy(),
+                    swapchain_info.resolution_xy()
+                );
+                recorder.blit(GfxBlitInfo {
+                    src: intermediate,
+                    src_offset: Vector2::new(0, 0),
+                    src_length: intermediate_info.resolution_xy(),
+                    dst: swapchain,
+                    dst_offset: Vector2::new(0, 0),
+                    dst_length: swapchain_info.resolution_xy(),
+                    filter: GfxFilterMode::Nearest,
+                });
+            },
+        );
 
         fg.present_image(swapchain_image);
 

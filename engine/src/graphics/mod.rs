@@ -9,6 +9,7 @@ pub mod camera;
 pub mod device;
 pub mod frame_graph;
 pub mod gpu_allocator;
+pub mod post_process_pass;
 pub mod renderer;
 pub mod shader;
 pub mod vulkan;
