@@ -1,4 +1,48 @@
-use nalgebra::{ComplexField, Matrix3, Vector3};
+use nalgebra::{ComplexField, Matrix3, Vector3, Vector4};
+
+#[derive(serde::Serialize, serde::Deserialize, Copy, Clone, PartialEq)]
+pub struct ColorSrgba {
+    pub rgb: Color<ColorSpaceSrgb>,
+    pub alpha: f32,
+}
+
+impl ColorSrgba {
+    pub fn new(r: f32, g: f32, b: f32, alpha: f32) -> Self {
+        Self {
+            rgb: Color::new_srgb(r, g, b),
+            alpha: alpha.clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn new_srgb_hex(hex: impl ToString, alpha: f32) -> Self {
+        Self {
+            rgb: Color::new_srgb_hex(hex),
+            alpha,
+        }
+    }
+
+    pub fn rgba_vec(&self) -> Vector4<f32> {
+        Vector4::new(self.r(), self.g(), self.b(), self.a())
+    }
+
+    pub fn a(&self) -> f32 {
+        self.alpha
+    }
+}
+
+impl std::ops::Deref for ColorSrgba {
+    type Target = Color<ColorSpaceSrgb>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rgb
+    }
+}
+
+impl std::ops::DerefMut for ColorSrgba {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rgb
+    }
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Color<S: ColorSpace = ColorSpaceSrgb> {
@@ -72,6 +116,20 @@ impl Color<ColorSpaceSrgb> {
         Self::new(r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0))
     }
 
+    /// Doesn't exactly belong here except for Color is shorter than ColoSrgba
+    pub fn new_srgba(r: f32, g: f32, b: f32, a: f32) -> ColorSrgba {
+        ColorSrgba::new(
+            r.clamp(0.0, 1.0),
+            g.clamp(0.0, 1.0),
+            b.clamp(0.0, 1.0),
+            a.clamp(0.0, 1.0),
+        )
+    }
+
+    pub fn new_srgba_hex(hex: impl ToString, alpha: f32) -> ColorSrgba {
+        ColorSrgba::new_srgb_hex(hex, alpha)
+    }
+
     pub fn new_srgb_hex(hex: impl ToString) -> Self {
         let hex_str = hex.to_string();
         let hex_str = hex_str.trim_start_matches("#");
@@ -99,6 +157,10 @@ impl Color<ColorSpaceSrgb> {
 
     pub fn multiply_gamma(&mut self, mul: f32) {
         self.xyz *= mul;
+    }
+
+    pub fn to_srgba(&self, a: f32) -> ColorSrgba {
+        ColorSrgba::new(self.r(), self.g(), self.b(), a)
     }
 }
 

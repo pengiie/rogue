@@ -644,6 +644,7 @@ impl VoxelModelImpl for VoxelModelFlat {
 
         let mut dda = ray.begin_dda(aabb, self.side_length);
         let mut last_t = Vector3::new(0.0, 0.0, 0.0);
+        let mut last_mask = Vector3::new(0, 0, 0);
         while (dda.in_bounds()) {
             let curr_grid_pos = dda.curr_grid_pos().map(|x| x as u32);
             let voxel = self.get_voxel(curr_grid_pos);
@@ -651,12 +652,15 @@ impl VoxelModelImpl for VoxelModelFlat {
                 let t_scaling =
                     (aabb.max - aabb.min).zip_map(&self.side_length.cast::<f32>(), |x, y| x / y);
                 let depth_t = model_t + (last_t.component_mul(&t_scaling)).min();
+                let normal = last_mask.component_mul(&ray.dir.map(|x| -x.signum() as i32));
                 return Some(VoxelModelTrace {
                     local_position: curr_grid_pos,
                     depth_t,
+                    local_normal: normal,
                 });
             }
             last_t = dda.curr_t();
+            last_mask = dda.curr_step_mask();
             dda.step();
         }
 

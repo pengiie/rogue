@@ -62,10 +62,11 @@ public struct Material {
     return uv_x + uv_y + uv_z;
   }
 
-  public voxel::BMaterial into_bmat(int3 world_voxel_pos, float3 normal) {
-    voxel::BMaterial bmat;
-    bmat.albedo = calculate_triplanar_color(world_voxel_pos, normalize(normal)).rgb;
-    //bmat.albedo  = null_color(frac((float2) world_voxel_pos.xz / 64.0)).rgb;
+  public voxel::BakedVoxelMaterial into_bmat(int3 world_voxel_pos, float3 normal) {
+    voxel::BakedVoxelMaterial bmat;
+    let rgba = calculate_triplanar_color(world_voxel_pos, normalize(normal));
+    bmat.albedo = rgba.rgb;
+    bmat.alpha = rgba.a;
     bmat.normal = normal;
     return bmat;
   }

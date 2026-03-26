@@ -1,3 +1,4 @@
+use crate::app::{App, AppStage};
 use crate::asset::asset::Assets;
 use crate::debug::debug_renderer::DebugRenderer;
 use crate::entity::{ecs_world::ECSWorld, scripting::Scripts};
@@ -17,10 +18,6 @@ use crate::world::renderable::region_map_gpu::RegionMapGpu;
 use crate::world::sky::Sky;
 use crate::world::world_entities::WorldEntities;
 use crate::world::world_streaming::WorldChunkStreamer;
-use crate::{
-    app::{App, AppStage},
-    game::game_loop,
-};
 
 pub fn game_loop(app: &App) {
     // This system is called in app.

@@ -163,6 +163,7 @@ impl EditorGameSession {
 
         let editor_camera = EditorSession::init_editor_camera(ecs_world);
         main_camera.set_camera(editor_camera, "editor_camera");
+        editor_session.editor_camera = editor_camera;
         physics_world.do_dynamics = false;
     }
 
@@ -172,7 +173,7 @@ impl EditorGameSession {
             return;
         }
 
-        log::info!("Running game update");
+        rogue_game::on_update(rb);
     }
 
     pub fn try_run_game_on_fixed_update(rb: &ResourceBank) {
@@ -181,6 +182,6 @@ impl EditorGameSession {
             return;
         }
 
-        log::info!("Running game fixed update");
+        rogue_game::on_update(rb);
     }
 }

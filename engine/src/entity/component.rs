@@ -6,6 +6,7 @@ use crate::physics::collider_registry::ColliderRegistry;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use rogue_macros::generate_tuples;
 
+#[derive(Clone)]
 pub struct GameComponentType {
     pub type_info: TypeInfo,
     pub component_name: String,

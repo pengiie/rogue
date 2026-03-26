@@ -28,19 +28,25 @@ void main(uint id: SV_DispatchThreadID) {
   let chunk_voxel_length = 1 << ((consts::TERRAIN_REGION_TREE_HEIGHT - u_shader.chunk_height)) * 2;
   let world_voxel_pos = chunk_voxel_pos + local_voxel_pos * chunk_voxel_length;
 
-  let mat_comp = voxel::Terrain.get().get_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos);
-  if (!mat_comp.hasValue) {
+  let mat_opt = voxel::Terrain.get().get_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos);
+  if (!mat_opt.hasValue) {
     return;
   }
-  let mat_val = mat_comp.value;
-  if (voxel::BMaterial.is_bmaterial(mat_val)) {
+  let mat_comp = mat_opt.value;
+  if (!mat_comp.need_normal_baking()) {
     return;
   }
 
   let normal = calculate_normal(world_voxel_pos, chunk_voxel_length);
-  let mat = MaterialBank.get_material(mat_val);
-  var bmat = mat.into_bmat(world_voxel_pos, normal);
-  voxel::Terrain.get().set_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos, bmat.encode());
+  var bmat_data: voxel::BakedVoxelMaterial;
+  if (mat_comp.needs_material_baking()) {
+    let mat = MaterialBank.get_material(mat_comp.b & 0xFFFF);
+    bmat_data = mat.into_bmat((int3) local_voxel_pos, normal);
+  } else {
+    bmat_data = voxel::BakedVoxelMaterial.decode(mat_comp);
+    bmat_data.normal = normal;
+  }
+  voxel::Terrain.get().set_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos, bmat_data.encode());
 }
 
 float3 calculate_normal(int3 world_voxel_pos, int voxel_length) {

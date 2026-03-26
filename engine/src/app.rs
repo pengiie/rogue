@@ -48,13 +48,16 @@ enum AppEvent {
     Init { device: DeviceResource },
 }
 
+pub type OnWindowEventBoxedFn =
+    Box<dyn Fn(&mut ResourceBank, &mut winit::event::WindowEvent) -> bool>;
+pub type OnDeviceEventBoxedFn =
+    Box<dyn Fn(&mut ResourceBank, &mut winit::event::DeviceEvent) -> bool>;
+
 pub struct AppCreateInfo {
     pub project: ProjectAsset,
     pub on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
-    pub on_window_event_fn:
-        Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent) -> bool>>,
-    pub on_device_event_fn:
-        Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent) -> bool>>,
+    pub on_window_event_fn: Option<OnWindowEventBoxedFn>,
+    pub on_device_event_fn: Option<OnDeviceEventBoxedFn>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -86,8 +89,8 @@ pub struct App {
     systems: HashMap<AppStage, Vec<SystemErased>>,
 
     on_post_graphics_init_fn: Option<Box<dyn Fn(&mut ResourceBank)>>,
-    on_window_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::WindowEvent) -> bool>>,
-    on_device_event_fn: Option<Box<dyn Fn(&mut ResourceBank, &winit::event::DeviceEvent) -> bool>>,
+    on_window_event_fn: Option<OnWindowEventBoxedFn>,
+    on_device_event_fn: Option<OnDeviceEventBoxedFn>,
 
     event_sender: Sender<AppEvent>,
     event_receiver: Receiver<AppEvent>,
@@ -236,10 +239,10 @@ impl winit::application::ApplicationHandler for App {
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
         _window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
+        mut event: winit::event::WindowEvent,
     ) {
         if let Some(on_window_event_fn) = &self.on_window_event_fn {
-            let consumed = (*on_window_event_fn)(&mut self.resource_bank, &event);
+            let consumed = (*on_window_event_fn)(&mut self.resource_bank, &mut event);
             if consumed {
                 return;
             }
@@ -326,10 +329,10 @@ impl winit::application::ApplicationHandler for App {
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
         device_id: winit::event::DeviceId,
-        event: winit::event::DeviceEvent,
+        mut event: winit::event::DeviceEvent,
     ) {
         if let Some(on_device_event_fn) = &self.on_device_event_fn {
-            let consumed = (*on_device_event_fn)(&mut self.resource_bank, &event);
+            let consumed = (*on_device_event_fn)(&mut self.resource_bank, &mut event);
             if consumed {
                 return;
             }

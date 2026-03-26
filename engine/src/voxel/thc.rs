@@ -455,6 +455,7 @@ impl VoxelModelImpl for VoxelModelTHC {
                             return Some(VoxelModelTrace {
                                 local_position: global_grid_pos,
                                 depth_t,
+                                local_normal: todo!(),
                             });
                         }
                     }
@@ -810,6 +811,7 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
         let quarter_sl = self.side_length >> 2;
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
 
+        let mut last_mask = Vector3::zeros();
         let mut curr_ray = Ray::new(dda_pos, ray.dir);
         let mut curr_node_index = 0;
         let mut curr_height = 0;
@@ -855,9 +857,11 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
                         let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
                         let world_pos_hit = aabb.min + curr_ray.origin.component_mul(&t_scaling);
                         let depth_t = ray.origin.metric_distance(&world_pos_hit);
+                        let normal = last_mask.component_mul(&ray.dir.map(|x| -x.signum() as i32));
                         return Some(VoxelModelTrace {
                             local_position: global_grid_pos,
                             depth_t,
+                            local_normal: normal,
                         });
                     }
                     let child_offset =
@@ -879,6 +883,7 @@ impl VoxelModelImpl for VoxelModelTHCCompressed {
             let next_t = curr_ray.intersect_point(next_point.cast::<f32>());
             let min_t = next_t.min();
             let mask = next_t.map(|x| if x == min_t { 1 } else { 0 });
+            last_mask = mask;
 
             curr_local_grid += unit_grid.component_mul(&mask);
             // Epsilon since sometimes we advance out of bounds but due to fp math it's just barely

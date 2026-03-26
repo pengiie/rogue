@@ -3,6 +3,7 @@ pub mod capsule_collider;
 pub mod collider;
 pub mod collider_component;
 pub mod collider_registry;
+pub mod collider_voxel_registry;
 pub mod physics_world;
 pub mod plane_collider;
 pub mod rigid_body;

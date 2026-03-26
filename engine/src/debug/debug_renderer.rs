@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Translation3, UnitQuaternion, Vector3, Vector4};
 use rogue_macros::Resource;
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
         gltf::GltfAsset,
     },
     common::{
-        color::{Color, ColorSpaceSrgb},
+        color::{Color, ColorSpaceSrgb, ColorSrgba},
         geometry::obb::OBB,
     },
     graphics::{
@@ -49,7 +49,17 @@ pub enum DebugShapeType {
 
 pub struct DebugShape {
     transform: nalgebra::Matrix4<f32>,
-    color: Color<ColorSpaceSrgb>,
+    color: ColorSrgba,
+    flags: DebugShapeFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    pub struct DebugShapeFlags: u32 {
+        const NONE = 0;
+        const SHADING = 1;
+        const DEPTH_TEST = 1 << 1;
+    }
 }
 
 #[derive(Resource)]
@@ -178,15 +188,16 @@ impl DebugRenderer {
             .insert(shape_type, DebugMesh { vertices, indices });
     }
 
-    pub fn draw_line(
+    pub fn draw_line_3d(
         &mut self,
         start: Vector3<f32>,
         end: Vector3<f32>,
         radius: f32,
-        color: Color<ColorSpaceSrgb>,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
     ) {
         let diff = end - start;
-        let rot = if diff != Vector3::y() {
+        let rot = if (diff.normalize()).dot(&Vector3::y()) <= 0.9999 {
             UnitQuaternion::face_towards(&diff, &Vector3::y())
         } else {
             UnitQuaternion::from_scaled_axis(Vector3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0))
@@ -194,21 +205,38 @@ impl DebugRenderer {
         let midpoint = (start + end) * 0.5;
         let isometry = nalgebra::Isometry3::from_parts(Translation3::from(midpoint), rot);
         let scale = Vector3::new(radius, radius, diff.norm() * 0.5 + radius);
-        self.draw_cube(isometry, scale, color);
+        self.draw_cube(isometry, scale, color, flags);
+    }
+
+    pub fn draw_obb_filled(&mut self, obb: &OBB, color: ColorSrgba, flags: DebugShapeFlags) {
+        let (min, _) = obb.rotated_min_max();
+        let side_length = obb.aabb.side_length();
+        let center = min + side_length * 0.5;
+        let isometry = nalgebra::Isometry3::from_parts(
+            Translation3::from(center),
+            UnitQuaternion::face_towards(&obb.forward(), &obb.up()),
+        );
+        let scale = Vector3::new(side_length.x, side_length.y, side_length.z) * 0.5;
+        self.draw_cube(isometry, scale, color, flags);
     }
 
     pub fn draw_cube(
         &mut self,
         isometry: nalgebra::Isometry3<f32>,
         scale: Vector3<f32>,
-        color: Color<ColorSpaceSrgb>,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
     ) {
         let transform =
             isometry.to_homogeneous() * nalgebra::Matrix4::new_nonuniform_scaling(&scale);
         self.shapes
             .entry(DebugShapeType::Cube)
             .or_default()
-            .push(DebugShape { transform, color });
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
     }
 
     pub fn draw_arrow(
@@ -216,7 +244,8 @@ impl DebugRenderer {
         start: Vector3<f32>,
         end: Vector3<f32>,
         scale: f32,
-        color: Color<ColorSpaceSrgb>,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
     ) {
         let diff = end - start;
         let isometry = if diff != Vector3::y() {
@@ -236,83 +265,124 @@ impl DebugRenderer {
         self.shapes
             .entry(DebugShapeType::Arrow)
             .or_default()
-            .push(DebugShape { transform, color });
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
     }
 
-    pub fn draw_obb(&mut self, obb: &OBB, line_radius: f32, color: Color<ColorSpaceSrgb>) {
+    pub fn draw_obb_outline(
+        &mut self,
+        obb: &OBB,
+        line_radius: f32,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
         let (min, _) = obb.rotated_min_max();
         let side_length = obb.aabb.side_length();
         // Bottom
-        self.draw_line(min, min + obb.right() * side_length.x, line_radius, color);
-        self.draw_line(min, min + obb.forward() * side_length.z, line_radius, color);
-        self.draw_line(
+        self.draw_line_3d(
+            min,
+            min + obb.right() * side_length.x,
+            line_radius,
+            color,
+            flags,
+        );
+        self.draw_line_3d(
+            min,
+            min + obb.forward() * side_length.z,
+            line_radius,
+            color,
+            flags,
+        );
+        self.draw_line_3d(
             min + obb.right() * side_length.x,
             min + obb.right() * side_length.x + obb.forward() * side_length.z,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + obb.forward() * side_length.z,
             min + obb.right() * side_length.x + obb.forward() * side_length.z,
             line_radius,
             color,
+            flags,
         );
 
         // Top
         let top_offset = obb.up() * side_length.y;
-        self.draw_line(
+        self.draw_line_3d(
             min + top_offset,
             min + obb.right() * side_length.x + top_offset,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + top_offset,
             min + obb.forward() * side_length.z + top_offset,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + obb.right() * side_length.x + top_offset,
             min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + obb.forward() * side_length.z + top_offset,
             min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
             line_radius,
             color,
+            flags,
         );
 
         // Lines between top and bottom.
-        self.draw_line(min, min + top_offset, line_radius, color);
-        self.draw_line(
+        self.draw_line_3d(min, min + top_offset, line_radius, color, flags);
+        self.draw_line_3d(
             min + obb.right() * side_length.x,
             min + obb.right() * side_length.x + top_offset,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + obb.forward() * side_length.z,
             min + obb.forward() * side_length.z + top_offset,
             line_radius,
             color,
+            flags,
         );
-        self.draw_line(
+        self.draw_line_3d(
             min + obb.right() * side_length.x + obb.forward() * side_length.z,
             min + obb.right() * side_length.x + obb.forward() * side_length.z + top_offset,
             line_radius,
             color,
+            flags,
         );
     }
 
-    pub fn draw_sphere(&mut self, center: Vector3<f32>, radius: f32, color: Color<ColorSpaceSrgb>) {
+    pub fn draw_sphere(
+        &mut self,
+        center: Vector3<f32>,
+        radius: f32,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
         let transform = nalgebra::Matrix4::new_scaling(radius).append_translation(&center);
         self.shapes
             .entry(DebugShapeType::Sphere)
             .or_default()
-            .push(DebugShape { transform, color });
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
     }
 
     fn init_mesh_buffers(&mut self, device_resource: &mut DeviceResource) {
@@ -424,8 +494,10 @@ impl DebugRenderer {
         #[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
         struct MeshInstance {
             transform: nalgebra::Matrix4<f32>,
-            color: Vector3<f32>,
+            color: Vector4<f32>,
             mesh_ptr: u32,
+            flags: u32,
+            padding: [u32; 2], // Pad to 16 byte alignment.
         }
         let instances_size = debug_renderer
             .shapes
@@ -481,8 +553,10 @@ impl DebugRenderer {
                 instances_data.extend_from_slice(bytemuck::bytes_of(&MeshInstance {
                     // Transpose since slang is row major.
                     transform: shape.transform.transpose(),
-                    color: shape.color.xyz,
+                    color: shape.color.rgba_vec(),
                     mesh_ptr: *debug_renderer.shape_mesh_offests.get(shape_type).unwrap(),
+                    flags: 0,
+                    padding: [0; 2],
                 }));
             }
             instances_offset += shapes.len() as u32;

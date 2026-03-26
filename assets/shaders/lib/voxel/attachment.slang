@@ -54,6 +54,52 @@ public float3 octahedral_normal_decode(uint2 compressed, uint bits_per_component
   return normalize(n);
 }
 
+public struct BakedVoxelMaterial {
+  // In srgb.
+  public float3 albedo = float3(0.0);
+  public float alpha = 1.0;
+  public float3 normal = float3(0.0);
+
+  public CompressedVoxelMaterial encode() {
+    CompressedVoxelMaterial comp;
+    let r = (uint) (this.albedo.r * 255.0);
+    let g = (uint) (this.albedo.g * 255.0);
+    let b = (uint) (this.albedo.b * 255.0);
+    let a = (uint) (this.alpha * 255.0);
+    comp.b = (r << 24) | (g << 16) | (b << 8) | a;
+    let normal_oct = octahedral_normal_encode(this.normal, /*bits_per_component*/8);
+    comp.a = ((normal_oct.x & 0xFF) << 8) | (normal_oct.y & 0xFF);
+    return comp;
+  }
+
+  public static BakedVoxelMaterial decode(CompressedVoxelMaterial comp) {
+    BakedVoxelMaterial mat;
+    let rgba = comp.b;
+    mat.albedo = float3(
+      ((rgba >> 24) & 0xFF) / 255.0,
+      ((rgba >> 16) & 0xFF) / 255.0,
+      ((rgba >> 8) & 0xFF) / 255.0,
+    );
+    mat.alpha = (rgba & 0xFF) / 255.0;
+    let normal_oct = uint2((comp.a >> 8) & 0xFF, comp.a & 0xFF);
+    mat.normal = octahedral_normal_decode(normal_oct, /*bits_per_component*/8);
+    return mat;
+  }
+}
+
+public struct CompressedVoxelMaterial {
+  // A = most signifigant, b is least in terms of u64.
+  public uint a = 0; public uint b = 0;
+
+  public bool needs_material_baking() {
+    return (this.a & 0x80000000) > 0;
+  }
+
+  public bool need_normal_baking() {
+    return (this.a & 0x40000000) > 0 || this.needs_material_baking();
+  }
+}
+
 public struct BMaterial {
   // Albedo in srgb.
   public float3 albedo;

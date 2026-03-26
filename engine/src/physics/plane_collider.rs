@@ -3,6 +3,7 @@ use nalgebra::{Rotation3, UnitQuaternion, Vector2, Vector3};
 use super::{capsule_collider::CapsuleCollider, transform::Transform};
 use crate::common::geometry::aabb::AABB;
 use crate::physics::collider::{Collider, ColliderMethods, ContactManifold, ContactPair};
+use crate::physics::collider_voxel_registry::VoxelColliderRegistry;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -27,7 +28,7 @@ impl PlaneCollider {}
 impl Collider for PlaneCollider {
     const NAME: &str = "PlaneCollider";
 
-    fn aabb(&self, world_transform: &Transform) -> AABB {
+    fn aabb(&self, world_transform: &Transform, _: &VoxelColliderRegistry) -> Option<AABB> {
         let rot = UnitQuaternion::from_rotation_matrix(
             &Rotation3::rotation_between(&Vector3::y(), &self.normal)
                 .unwrap_or(Rotation3::identity()),
@@ -35,7 +36,7 @@ impl Collider for PlaneCollider {
         let size_3 = Vector3::new(self.size.x, 0.0, self.size.y);
         let min = self.center + rot * -size_3;
         let max = self.center + rot * size_3;
-        return AABB::new_two_point(min, max);
+        return Some(AABB::new_two_point(min, max));
     }
 
     fn serialize_collider(

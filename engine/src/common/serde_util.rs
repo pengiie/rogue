@@ -1,3 +1,4 @@
+#[macro_export]
 macro_rules! impl_unit_type_serde {
     ($type_name:ty) => {
         impl serde::Serialize for $type_name {

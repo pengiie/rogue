@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
 };
 
-use downcast::{downcast, Any};
+use downcast::{Any, downcast};
 
 use crate::system::System;
 
@@ -31,33 +31,32 @@ impl ResourceBank {
         self.resources.contains_key(&TypeId::of::<R>())
     }
 
-    pub fn get_resource<R: Resource>(&self) -> Res<R> {
-        Ref::map(
-            self.resources
-                .get(&TypeId::of::<R>())
-                .expect(&format!(
-                    "Failed to get resource: {}",
-                    std::any::type_name::<R>()
-                ))
-                .borrow(),
-            |r| r.downcast_ref().unwrap(),
-        )
+    pub fn try_get_resource<R: Resource>(&self) -> Option<Res<R>> {
+        let ref_cell = self.resources.get(&TypeId::of::<R>())?;
+        Some(Ref::map(ref_cell.borrow(), |r| r.downcast_ref().unwrap()))
+    }
+
+    pub fn try_get_resource_mut<R: Resource>(&self) -> Option<ResMut<R>> {
+        let ref_cell = self.resources.get(&TypeId::of::<R>())?;
+        Some(RefMut::map(ref_cell.borrow_mut(), |r| {
+            r.downcast_mut().unwrap()
+        }))
+    }
+
+    pub fn get_resource<R: Resource>(&self) -> Res<R>
+    where
+        R: Resource,
+    {
+        self.try_get_resource::<R>()
+            .unwrap_or_else(|| panic!("Resource of type {} not found", std::any::type_name::<R>()))
     }
 
     pub fn get_resource_mut<R: Resource>(&self) -> ResMut<R>
     where
         R: Resource,
     {
-        RefMut::map(
-            self.resources
-                .get(&TypeId::of::<R>())
-                .expect(&format!(
-                    "Failed to get resource: {}",
-                    std::any::type_name::<R>()
-                ))
-                .borrow_mut(),
-            |r| r.downcast_mut().unwrap(),
-        )
+        self.try_get_resource_mut::<R>()
+            .unwrap_or_else(|| panic!("Resource of type {} not found", std::any::type_name::<R>()))
     }
 
     pub fn insert<R: Resource>(&mut self, resource: R) {

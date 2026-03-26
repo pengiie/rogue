@@ -14,6 +14,8 @@ use crate::ui::{
     pane::{EditorUIPane, EditorUIPaneMethods},
 };
 
+type EntityPayload = Entity;
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct EntityHierarchyUI;
 
@@ -30,9 +32,18 @@ impl EditorUIPane for EntityHierarchyUI {
 impl EntityHierarchyUI {
     fn section_header(ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
         ui.horizontal(|ui| {
-            ui.add(egui::Label::new(
+            let label = ui.add(egui::Label::new(
                 egui::RichText::new("Inspector").size(20.0),
             ));
+            // Unparent entity since it was dragged onto the top of the hierarchy.
+            // Probably doesn't need to be a command here but its safest to do so in ui code.
+            if let Some(new_child) = label.dnd_release_payload::<EntityPayload>() {
+                ctx.events.push(EntityCommandEvent::SetParent {
+                    parent: None,
+                    child: *new_child,
+                    modify_transform: true,
+                });
+            }
 
             ui.menu_button("Add", |ui| {
                 if ui.button("Empty").clicked() {
@@ -48,7 +59,7 @@ impl EntityHierarchyUI {
     }
 
     fn section_entities(ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
-        egui::ScrollArea::vertical()
+        let scroll_area_output = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let mut game_entity_query = ctx
@@ -85,6 +96,11 @@ impl EntityHierarchyUI {
             entity_id.index(),
             entity_id.generation()
         ));
+        let label_click_id = egui::Id::new(format!(
+            "left_panel_{}_{}_entity_label_hover",
+            entity_id.index(),
+            entity_id.generation()
+        ));
         let is_hovering = ui.data(|w| w.get_temp(label_hover_id).unwrap_or(false));
 
         let mut text = egui::RichText::new(entity_name);
@@ -96,18 +112,34 @@ impl EntityHierarchyUI {
         {
             text = text.background_color(egui::Color32::from_white_alpha(3));
         }
-        let mut label = ui
-            .dnd_drag_source(dnd_source_id, (), |ui| {
+
+        let label = ui
+            .dnd_drag_source::<EntityPayload, _>(dnd_source_id, entity_id, |ui| {
                 ui.add(egui::Label::new(text).truncate());
             })
             .response;
+        // dnd_drag_source makes it grabby hand icon and I dont like that.
+        if label.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
+
+        // Parent entity with drag and drop.
+        if let Some(new_child) = label.dnd_release_payload::<EntityPayload>()
+            && *new_child != entity_id
+        {
+            ctx.events.push(EntityCommandEvent::SetParent {
+                parent: Some(entity_id),
+                child: *new_child,
+                modify_transform: true,
+            });
+        }
 
         ui.data_mut(|w| w.insert_temp(label_hover_id, label.hovered()));
         if label.hovered() {
             ctx.session.hovered_entity = Some(entity_id);
         }
 
-        if label.clicked() {
+        if label.interact(egui::Sense::click()).clicked() {
             ctx.session.selected_entity = Some(entity_id);
             ctx.commands
                 .push(EditorCommand::open_ui(EntityPropertiesPane::ID));
@@ -150,7 +182,7 @@ impl EntityHierarchyUI {
         drop(children_query);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.vertical(|ui| {
+            let res = ui.vertical(|ui| {
                 for child in children {
                     let Ok(child_game_entity) = ctx.ecs_world.get::<&GameEntity>(child) else {
                         continue;
@@ -161,6 +193,9 @@ impl EntityHierarchyUI {
                     Self::render_children(ui, ctx, child);
                 }
             });
+            if res.response.interact(egui::Sense::click()).clicked() {
+                ctx.session.selected_entity = None;
+            }
         });
     }
 }

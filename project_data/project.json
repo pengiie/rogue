@@ -22,83 +22,7 @@
       {
         "components": [
           {
-            "name": "Colliders",
-            "data": [
-              {
-                "name": "BoxCollider",
-                "data": {
-                  "obb": {
-                    "aabb": {
-                      "min": [
-                        -2.0,
-                        -2.0,
-                        -2.0
-                      ],
-                      "max": [
-                        2.0,
-                        2.0,
-                        2.0
-                      ]
-                    },
-                    "rotation": [
-                      0.0,
-                      0.0,
-                      0.0,
-                      1.0
-                    ],
-                    "rotation_anchor": [
-                      0.0,
-                      0.0,
-                      0.0
-                    ]
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
-              "name": "Head"
-            }
-          },
-          {
-            "name": "RenderableVoxelEntity",
-            "data": {
-              "model_asset_path": {
-                "asset_path": "models::player::rvox"
-              },
-              "is_dynamic": true
-            }
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                0.0,
-                -17.86,
-                0.0
-              ],
-              "rotation": [
-                -0.0,
-                0.0,
-                -0.0,
-                1.0
-              ],
-              "scale": [
-                0.25,
-                0.25,
-                0.25
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
-            "name": "CameraController",
+            "name": "PlayerCameraController",
             "data": null
           },
           {
@@ -134,6 +58,130 @@
                 1.0,
                 1.0,
                 1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "CapsuleCollider",
+                "data": {
+                  "center": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "orientation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "radius": 1.0,
+                  "half_height": 2.0
+                }
+              }
+            ]
+          },
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Dynamic",
+              "mass": 1.0,
+              "restitution": 0.5,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ]
+            }
+          },
+          {
+            "name": "PlayerController",
+            "data": null
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6",
+              "name": "Player"
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                -17.95,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
+              "name": "Head"
+            }
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "models::player::rvox"
+              },
+              "is_dynamic": true
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                0.25,
+                0.25,
+                0.25
               ]
             }
           }

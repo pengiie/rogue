@@ -104,9 +104,9 @@ impl EditorCameraController {
             translation.y -= 1.0;
         }
 
-        let mut movement_speed = 30.0;
+        let mut movement_speed = 3.5;
         if input.is_key_down(Key::LControl) {
-            movement_speed = 500.0;
+            movement_speed = 30.0;
         }
         transform.position += translation * movement_speed * time.delta_time().as_secs_f32();
     }

@@ -1,3 +1,6 @@
+use rogue_engine::world::renderable::rt_pass::{ShadingMode, WorldRTPass};
+use strum::VariantArray;
+
 use crate::{
     game_session::EditorGameSessionEvent,
     session::EditorEvent,
@@ -100,6 +103,38 @@ impl TopBarPane {
                 .clicked()
             {
                 ctx.events.push(EditorGameSessionEvent::StopGame);
+            }
+
+            let is_editor_camera = ctx.main_camera.camera() == Some(ctx.session.editor_camera());
+            if ui
+                .add_enabled(!is_editor_camera, egui::Button::new("Scene"))
+                .clicked()
+            {
+                ctx.main_camera
+                    .set_camera(ctx.session.editor_camera(), "editor_camera");
+            }
+            let game_camera = &ctx.game_session.game_camera;
+            if ui
+                .add_enabled(
+                    is_editor_camera && game_camera.is_some(),
+                    egui::Button::new("Game"),
+                )
+                .clicked()
+            {
+                ctx.main_camera
+                    .set_camera(game_camera.unwrap(), "editor_camera");
+            }
+
+            for shading_mode in ShadingMode::VARIANTS {
+                if ui
+                    .add_enabled(
+                        &ctx.world_rt_pass.shading_mode != shading_mode,
+                        egui::Button::new(shading_mode.to_string()),
+                    )
+                    .clicked()
+                {
+                    ctx.world_rt_pass.shading_mode = *shading_mode;
+                }
             }
         });
     }

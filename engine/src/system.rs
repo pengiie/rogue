@@ -78,7 +78,9 @@ pub trait System<Marker> {
 
 macro_rules! impl_system {
     ($($param:ident), *$(,)? $($num:literal),*) => {
-        impl<F, $($param: SystemParam),*> System<($($param),*)> for F
+        // Have the Marker as fn(P1,P2,..) -> () since (P1,P2) has an impl for
+        // SystemParam which would conflict with the System impl for System<(P1,)>.
+        impl<F, $($param: SystemParam),*> System<fn($($param),*) -> ()> for F
         where
             F: Fn($($param),*) + Fn($(SystemParamItem<$param>),*),
             $($param: SystemParam),*
@@ -90,24 +92,26 @@ macro_rules! impl_system {
     };
 }
 
-//macro_rules! impl_system_param_tuple {
-//    ($($param:ident), *$(,)? $($num:literal),*) => {
-//        impl<$($param: SystemParam),*> SystemParam for ($($param),*)
-//        where
-//            $($param: SystemParam),*
-//        {
-//            type Item<'rb> = Self;
-//
-//            fn from_resource_bank(resource_bank: &ResourceBank) -> Self::Item<'_> {
-//                (
-//                    $(
-//                        <$param as SystemParam>::from_resource_bank(resource_bank)
-//                    ),*
-//                )
-//            }
-//        }
-//    };
-//}
-//generate_tuples!(impl_system_param_tuple, 2, 16);
+macro_rules! impl_system_param_tuple {
+    ($($param:ident), *$(,)? $($num:literal),*) => {
+        impl<$($param: SystemParam),*> SystemParam for ($($param),*)
+        where
+            $($param: SystemParam),*
+        {
+            type Item<'rb> = (
+                $($param::Item<'rb>),*
+            );
+
+            fn from_resource_bank(resource_bank: &ResourceBank) -> Self::Item<'_> {
+                (
+                    $(
+                        <$param as SystemParam>::from_resource_bank(resource_bank)
+                    ),*
+                )
+            }
+        }
+    };
+}
+generate_tuples!(impl_system_param_tuple, 2, 16);
 
 generate_tuples!(impl_system, 0, 16);

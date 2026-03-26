@@ -694,7 +694,10 @@ impl<'a> ShaderWriter<'a> {
                 "No set with the name `{}` exists for the submitted uniform `{}`",
                 set_name, full_uniform_name,
             ));
-        assert!(set_info.global_uniform_binding_index.is_some());
+        assert!(
+            set_info.global_uniform_binding_index.is_some(),
+            "Tried to write uniform but no uniforms has been declared/used in the shader."
+        );
 
         let (expected_type, size, offset) = set_info
             .bindings

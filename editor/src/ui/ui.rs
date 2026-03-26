@@ -16,7 +16,7 @@ use rogue_engine::{
     resource::{Res, ResMut, Resource},
     voxel::voxel_registry::VoxelModelRegistry,
     window::window::Window,
-    world::{region_map::RegionMap, sky::Sky},
+    world::{region_map::RegionMap, renderable::rt_pass::WorldRTPass, sky::Sky},
 };
 use rogue_macros::Resource;
 
@@ -60,6 +60,7 @@ pub struct EditorUIContext<'a> {
     pub ui_state: &'a mut GlobalStateEditorUI,
     pub voxel_editing: &'a mut EditorVoxelEditing,
     pub debug_renderer: &'a mut DebugRenderer,
+    pub world_rt_pass: &'a mut WorldRTPass,
 }
 
 pub struct EditorCommands {
@@ -294,7 +295,7 @@ impl EditorUI {
         mut sky: ResMut<Sky>,
         mut voxel_editing: ResMut<EditorVoxelEditing>,
         mut debug_renderer: ResMut<DebugRenderer>,
-        mut game_session: ResMut<EditorGameSession>,
+        (mut game_session, mut world_rt_pass): (ResMut<EditorGameSession>, ResMut<WorldRTPass>),
     ) {
         let editor_ui = &mut *editor_ui;
         let mut commands = EditorCommands::new();
@@ -318,6 +319,7 @@ impl EditorUI {
                 ui_state: &mut editor_ui.global_state,
                 voxel_editing: &mut voxel_editing,
                 debug_renderer: &mut debug_renderer,
+                world_rt_pass: &mut world_rt_pass,
             };
             let mut padding = Vector4::zeros();
             padding.x =
@@ -411,6 +413,7 @@ impl EditorUI {
             ui_state: &mut editor_ui.global_state,
             voxel_editing: &mut voxel_editing,
             debug_renderer: &mut debug_renderer,
+            world_rt_pass: &mut world_rt_pass,
         };
         editor_ui.file_picker.update(res_ctx);
 

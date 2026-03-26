@@ -27,7 +27,6 @@ use crate::entity::component::{
 use crate::entity::ecs_world;
 use crate::entity::query::{Query, QueryBorrow, QueryItem, QueryItemRef, QueryMany, QueryOne};
 use crate::event::{EventReader, Events};
-use crate::game;
 use crate::graphics::camera::{Camera, MainCamera};
 use crate::physics::collider_component::EntityColliders;
 use crate::physics::{rigid_body::RigidBody, transform::Transform};
@@ -43,6 +42,12 @@ pub enum EntityCommandEvent {
     Despawn {
         entity: Entity,
         despawn_children: bool,
+    },
+    /// See ECSWorld::set_parent().
+    SetParent {
+        parent: Option<Entity>,
+        child: Entity,
+        modify_transform: bool,
     },
 }
 
@@ -91,7 +96,6 @@ impl ECSWorld {
         ecs.register_game_component::<Camera>();
         ecs.register_game_component::<RigidBody>();
         ecs.register_game_component::<EntityColliders>();
-        game::init::register_game_components(&mut ecs);
 
         ecs
     }
@@ -166,6 +170,13 @@ impl ECSWorld {
                     despawn_children,
                 } => {
                     ecs_world.despawn(entity, despawn_children);
+                }
+                EntityCommandEvent::SetParent {
+                    parent,
+                    child,
+                    modify_transform,
+                } => {
+                    ecs_world.set_parent(child, parent, modify_transform);
                 }
             }
         }
@@ -384,11 +395,20 @@ impl ECSWorld {
         return Ok(());
     }
 
+    fn inherit_game_component_types(&mut self, other: &Self) {
+        for (ty, game_component) in &other.game_components {
+            self.game_component_names
+                .insert(game_component.component_name.clone(), *ty);
+            self.game_components.insert(*ty, game_component.clone());
+        }
+    }
+
     /// Clones any entity in the world with a GameEntity component. Only clones components which
     /// implement the `GameComponent` trait. This also preserves the same entity ids to keep
     /// references coherent.
     pub fn clone_game_entities(&self, mut ctx: &mut GameComponentCloneContext) -> ECSWorld {
         let mut new_world = ECSWorld::new();
+        new_world.inherit_game_component_types(self);
 
         for (entity, entity_info) in self.entities.iter_with_handle() {
             if entity_info
@@ -791,10 +811,24 @@ impl ECSWorld {
         return new_entity_id;
     }
 
-    pub fn set_parent(&mut self, entity: Entity, parent: Option<Entity>) {
-        log::info!("Setting parent of entity {:?} to {:?}", entity, parent);
+    // modify_transform should be true if you expect the child entity to stay in the same position
+    // in world space, this will modify the child's transform to be positioned correctly relative to
+    // the parent's transform.
+    pub fn set_parent(&mut self, entity: Entity, parent: Option<Entity>, modify_transform: bool) {
+        assert_ne!(
+            Some(entity),
+            parent,
+            "Should not set entity parent as itself."
+        );
         if let Some(new_parent) = parent {
             let mut old_parent = self.get::<&mut EntityParent>(entity);
+            let old_world_transform = (modify_transform)
+                .then(|| {
+                    self.get::<&Transform>(entity)
+                        .ok()
+                        .map(|transform| self.get_world_transform(entity, &transform))
+                })
+                .flatten();
             if let Ok(ref mut parent_component) = old_parent {
                 let last_parent = parent_component.parent();
                 if last_parent == new_parent {
@@ -802,7 +836,6 @@ impl ECSWorld {
                 }
                 parent_component.set_parent(new_parent);
                 drop(old_parent);
-                log::info!("Old parent: {:?}", last_parent);
 
                 let mut old_parent_children = self
                     .get::<&mut EntityChildren>(last_parent)
@@ -823,23 +856,13 @@ impl ECSWorld {
                     let mut s = HashSet::new();
                     s.insert(entity);
                     self.insert_one(new_parent, EntityChildren { children: s });
-                    log::info!(
-                        "Children after insert: {:?}",
-                        &self.get::<&EntityChildren>(new_parent).unwrap().children
-                    );
                 }
             } else {
                 drop(old_parent);
                 self.insert_one(entity, EntityParent::new(new_parent));
 
-                log::info!("No old parent.");
                 let new_parent_children = self.get::<&mut EntityChildren>(new_parent);
                 if let Ok(mut new_parent_children) = new_parent_children {
-                    log::info!(
-                        "New parent {:?} already has children {:?}.",
-                        new_parent,
-                        &new_parent_children.children
-                    );
                     new_parent_children.children.insert(entity);
                 } else {
                     drop(new_parent_children);
@@ -847,17 +870,33 @@ impl ECSWorld {
                     s.insert(entity);
                     self.insert_one(new_parent, EntityChildren { children: s })
                         .expect("Failed to insert EntityChildren component.");
-                    log::info!(
-                        "Children after insert: {:?}",
-                        &self.get::<&EntityChildren>(new_parent).unwrap().children
-                    );
                 }
+            }
+
+            if let Some(old_world_transform) = old_world_transform {
+                let parent = self.get::<&EntityParent>(entity).unwrap().parent();
+                let new_transform = if let Ok(parent_transform) = self.get::<&Transform>(parent) {
+                    let parent_world_transform =
+                        self.get_world_transform(parent, &parent_transform);
+                    drop(parent_transform);
+                    old_world_transform.as_relative_transform(&parent_world_transform)
+                } else {
+                    old_world_transform
+                };
+                *self.get::<&mut Transform>(entity).unwrap() = new_transform;
             }
         } else {
             let Ok(old_parent_ref) = self.get::<&EntityParent>(entity) else {
                 return;
             };
             let old_parent = old_parent_ref.parent();
+            if modify_transform && let Ok(mut child_transform) = self.get::<&mut Transform>(entity)
+            {
+                // Since we are removing the parent, just find the world transform and set the entity to that.
+                let child_world_transform = self.get_world_transform(entity, &child_transform);
+                *child_transform = child_world_transform;
+            }
+
             let mut parent_children = self.get::<&mut EntityChildren>(old_parent).unwrap();
             parent_children.children.remove(&entity);
             let remove_children_component = parent_children.children.is_empty();
@@ -921,10 +960,7 @@ impl ECSWorld {
             let Ok(parent_transform) = self.get::<&Transform>(parent.parent()) else {
                 break;
             };
-            curr_transform.position =
-                (parent_transform.rotation * curr_transform.position) + parent_transform.position;
-            curr_transform.rotation = parent_transform.rotation * curr_transform.rotation;
-            curr_transform.scale = curr_transform.scale.component_mul(&parent_transform.scale);
+            curr_transform.apply_parent_transform(&parent_transform);
             curr_parent = self.get::<&EntityParent>(parent.parent());
         }
 

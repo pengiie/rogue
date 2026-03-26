@@ -83,6 +83,7 @@ pub struct VoxelDataAllocator {
 
 impl VoxelDataAllocator {
     // 27 bits available to index with a stride of 4 bytes.
+    // Holds 512 mb.
     const ALLOCATION_BUFFER_SIZE: u64 = 1 << (27 + 2);
 
     pub fn new() -> Self {
@@ -126,6 +127,7 @@ impl VoxelDataAllocator {
                     ));
                 }
             }
+            log::error!("Failed to allocate voxel data of size {} bytes", bytes);
             break 'alloc None;
         };
 
@@ -156,7 +158,10 @@ impl VoxelDataAllocator {
             ));
         }
 
-        self.free(old_allocation);
+        // TODO: gpu allocator already calls free on allocation when trying to reallocate, i need
+        // to fix realloc to check if it can expand its allocation there and then free if it cant
+        // to fix this.
+        //self.free(old_allocation);
         self.allocate(device, bytes)
     }
 

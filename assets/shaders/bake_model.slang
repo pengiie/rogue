@@ -25,26 +25,25 @@ void main(uint id: SV_DispatchThreadID) {
   let local_voxel_pos = (uint3) (u_shader.voxel_offset + pos_offset);
 
   let model_ptr = u_shader.model_ptr;
-  let mat_comp = voxel::model_get_voxel_material(local_voxel_pos, model_ptr);
-  if (!mat_comp.hasValue) {
+  let mat_opt = voxel::model_get_voxel_material(local_voxel_pos, model_ptr);
+  if (!mat_opt.hasValue) {
     return;
   }
-  voxel::model_set_voxel_material(local_voxel_pos, model_ptr, 0x800000FF);
-  let mat_val = mat_comp.value;
-  if (voxel::BMaterial.is_bmaterial(mat_val)) {
+  let mat_comp = mat_opt.value;
+  if (!mat_comp.need_normal_baking()) {
     return;
   }
 
   let normal = calculate_normal((int3) local_voxel_pos, model_ptr);
-  var bmat: voxel::BMaterial;
-  if (voxel::BMaterial.needs_normal_update(mat_val)) {
-    bmat = voxel::BMaterial.decode(mat_val);
-    bmat.normal = normal;
+  var bmat_data: voxel::BakedVoxelMaterial;
+  if (mat_comp.needs_material_baking()) {
+    let mat = MaterialBank.get_material(mat_comp.b & 0xFFFF);
+    bmat_data = mat.into_bmat((int3) local_voxel_pos, normal);
   } else {
-    let mat = MaterialBank.get_material(mat_val);
-    bmat = mat.into_bmat((int3) local_voxel_pos, normal);
+    bmat_data = voxel::BakedVoxelMaterial.decode(mat_comp);
+    bmat_data.normal = normal;
   }
-  voxel::model_set_voxel_material(local_voxel_pos, model_ptr, bmat.encode());
+  voxel::model_set_voxel_material(local_voxel_pos, model_ptr, bmat_data.encode());
 }
 
 float3 calculate_normal(int3 local_voxel_pos, uint model_ptr) {

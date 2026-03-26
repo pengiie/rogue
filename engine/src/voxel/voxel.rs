@@ -14,8 +14,8 @@ use super::{
     voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
 };
-use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::ray::Ray;
+use crate::common::{color::ColorSrgba, geometry::aabb::AABB};
 use crate::graphics::{
     backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId},
     device::{DeviceResource, GfxDevice},
@@ -32,27 +32,64 @@ use crate::{
     voxel::rvox_asset::RVOXAsset,
 };
 
-pub struct VoxelModelEdit {
-    /// In local-coords.
-    pub min: Vector3<u32>,
-    pub max: Vector3<u32>,
-    pub data: VoxelEditData,
+pub struct VoxelModelEditMask {
+    pub layers: Vec<VoxelModelEditMaskLayer>,
 }
 
+impl VoxelModelEditMask {
+    pub fn new() -> Self {
+        Self { layers: Vec::new() }
+    }
+}
+
+#[derive(strum_macros::Display, Clone)]
+pub enum VoxelModelEditMaskLayer {
+    /// Apply the edit to only voxels that already exist.
+    Presence,
+    /// Apply the edit in a sphere.
+    Sphere { center: Vector3<i32>, diameter: u32 },
+}
+
+impl VoxelModelEditMaskLayer {}
+
 #[derive(Clone)]
-pub enum VoxelEditData {
-    Fill {
-        material: Option<VoxelMaterialData>,
+pub enum VoxelModelEditRegion {
+    Rect {
+        min: Vector3<u32>,
+        max: Vector3<u32>,
     },
-    Sphere {
-        material: Option<VoxelMaterialData>,
-        center: Vector3<i32>,
-        radius: u32,
-    },
+    Intersect(Vec<VoxelModelEditRegion>),
+}
+
+impl VoxelModelEditRegion {
+    pub fn with_intersect_rect(mut self, min: Vector3<u32>, max: Vector3<u32>) -> Self {
+        match &mut self {
+            VoxelModelEditRegion::Rect {
+                min: min_s,
+                max: max_s,
+            } => {
+                *min_s = min.zip_map(&min_s, |x, y| x.max(y));
+                *max_s = max.zip_map(&max_s, |x, y| x.min(y));
+            }
+            VoxelModelEditRegion::Intersect(voxel_model_edit_regions) => todo!(),
+        }
+        self
+    }
+}
+
+pub struct VoxelModelEdit {
+    pub region: VoxelModelEditRegion,
+    pub mask: VoxelModelEditMask,
+    pub operator: VoxelModelEditOperator,
+}
+
+pub enum VoxelModelEditOperator {
+    Replace(Option<VoxelMaterialData>),
 }
 
 pub struct VoxelModelTrace {
     pub local_position: Vector3<u32>,
+    pub local_normal: Vector3<i32>,
     pub depth_t: f32,
 }
 
@@ -60,45 +97,47 @@ pub struct MaterialPalette {
     palette: HashMap<u16, MaterialId>,
 }
 
+/// 64 bit material data, two halves:
+/// Starting from MSB:
+///
 #[derive(Clone, strum_macros::EnumIs)]
 pub enum VoxelMaterialData {
-    Unbaked(MaterialId),
-    Baked { color: Color<ColorSpaceSrgb> },
+    Unbaked(u32),
+    Baked { color: ColorSrgba },
 }
 
 impl VoxelMaterialData {
-    pub fn encode(&self) -> u32 {
+    /// Bakes material and normal.
+    pub const NEEDS_MATERIAL_BAKE_FLAG: u64 = 0x8000_0000_0000_0000;
+    /// Bakes normal.
+    pub const NEED_NORMAL_FLAG: u64 = 0x4000_0000_0000_0000;
+    pub fn encode(&self) -> u64 {
         match self {
-            VoxelMaterialData::Unbaked(free_list_handle) => {
-                let material_id = free_list_handle.index() as u16;
-                material_id as u32
+            VoxelMaterialData::Unbaked(material_id) => {
+                *material_id as u64 | Self::NEEDS_MATERIAL_BAKE_FLAG | Self::NEED_NORMAL_FLAG
             }
             VoxelMaterialData::Baked { color } => {
-                let max = 2.0f32.powi(5) - 1.0;
-                let r = (color.r() * max) as u32;
-                let g = (color.g() * max) as u32;
-                let b = (color.b() * max) as u32;
-                0x4000_0000 | (r << 10) | (g << 5) | b
+                let r = (color.r() * 255.0) as u64;
+                let g = (color.g() * 255.0) as u64;
+                let b = (color.b() * 255.0) as u64;
+                let a = (color.a() * 255.0) as u64;
+                let rgba = (r << 24) | (g << 16) | (b << 8) | a;
+                Self::NEED_NORMAL_FLAG | rgba
             }
         }
     }
 
-    pub fn decode(encoded: u32) -> Self {
-        if encoded & 0x4000_0000 == 0 {
-            VoxelMaterialData::Unbaked(MaterialId::new((encoded & 0xFFFF) as u32, 0))
+    pub fn decode(encoded: u64) -> Self {
+        if (encoded & Self::NEEDS_MATERIAL_BAKE_FLAG) > 0 {
+            VoxelMaterialData::Unbaked((encoded & 0xFFFF) as u32)
         } else {
-            let r = ((encoded >> 10) & 0x1F) as f32 / 31.0;
-            let g = ((encoded >> 5) & 0x1F) as f32 / 31.0;
-            let b = (encoded & 0x1F) as f32 / 31.0;
-            log::info!(
-                "Decoded baked material {:b} with r: {}, g: {}, b: {}",
-                encoded,
-                r,
-                g,
-                b
-            );
+            let rgba = encoded & 0xFFFF_FFFF;
+            let a = (rgba & 0xFF) as f32 / 255.0;
+            let b = ((rgba >> 8) & 0xFF) as f32 / 255.0;
+            let g = ((rgba >> 16) & 0xFF) as f32 / 255.0;
+            let r = ((rgba >> 24) & 0xFF) as f32 / 255.0;
             VoxelMaterialData::Baked {
-                color: Color::new_srgb(r, g, b),
+                color: ColorSrgba::new(r, g, b, a),
             }
         }
     }

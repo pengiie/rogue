@@ -33,6 +33,28 @@ impl Transform {
         }
     }
 
+    pub fn as_relative_transform(&self, parent_transform: &Transform) -> Self {
+        // Rotate into the parent transforms reference frame.
+        let rot_position = parent_transform.rotation.inverse() * self.position;
+        let local_position =
+            (rot_position - parent_transform.position).component_mul(&parent_transform.scale);
+        let local_rot = parent_transform.rotation.inverse() * self.rotation;
+        let local_scale = self.scale.component_div(&parent_transform.scale);
+        Self {
+            position: local_position,
+            rotation: local_rot,
+            scale: local_scale,
+        }
+    }
+
+    pub fn apply_parent_transform(&mut self, parent_transform: &Transform) {
+        self.position = (parent_transform.rotation * self.position)
+            .component_mul(&parent_transform.scale)
+            + parent_transform.position;
+        self.rotation = parent_transform.rotation * self.rotation;
+        self.scale = self.scale.component_mul(&parent_transform.scale);
+    }
+
     // The world-space transformation matrix of this entity.
     pub fn to_transformation_matrix(&self) -> Matrix4<f32> {
         let translation = Matrix4::<f32>::new_translation(&self.position);

@@ -1,6 +1,9 @@
 use std::{any::TypeId, collections::HashMap, ptr::NonNull};
 
 use crate::entity::ecs_world::{ECSWorld, Entity};
+use crate::physics::capsule_collider::CapsuleCollider;
+use crate::physics::collider_voxel_registry::{self, VoxelColliderRegistry};
+use crate::physics::voxel_collider::VoxelModelCollider;
 use crate::physics::{
     box_collider::{self, BoxCollider},
     collider::{
@@ -45,12 +48,17 @@ type ColliderMethodsVtablePtr = *const ();
 // Spatial hashmap binning colliders per region.
 pub struct ColliderRegistry {
     pub bins: HashMap</*region_pos*/ Vector3<i32>, Vec<(Entity, ColliderId)>>,
+
     pub colliders: HashMap<TypeId, DynVecCloneable>,
+
     collider_vtables: HashMap<TypeId, ColliderMethodsVtablePtr>,
     pub collider_deserialize_fns: HashMap<TypeId, ColliderDeserializeFnPtr>,
     pub collider_type_info: HashMap</*Collider::NAME*/ String, TypeInfoCloneable>,
     pub collider_names: HashMap<TypeId, /*Collider::NAME*/ String>,
+
     intersection_functions: HashMap<ColliderIntersectionPair, ColliderIntersectionTestCaller>,
+
+    pub voxel_collider_registry: VoxelColliderRegistry,
 }
 
 impl ColliderRegistry {
@@ -63,11 +71,18 @@ impl ColliderRegistry {
             collider_type_info: HashMap::new(),
             collider_names: HashMap::new(),
             intersection_functions: HashMap::new(),
+
+            voxel_collider_registry: VoxelColliderRegistry::new(),
         };
 
         reg.register_collider_type::<BoxCollider>();
+        reg.register_collider_type::<CapsuleCollider>();
+        reg.register_collider_type::<VoxelModelCollider>();
         reg.register_collider_intersection_fn::<BoxCollider, BoxCollider, _, _>(
             box_collider::test_intersection_box_box,
+        );
+        reg.register_collider_intersection_fn::<VoxelModelCollider, VoxelModelCollider, _, _>(
+            collider_voxel_registry::test_intersection_voxel_voxel,
         );
 
         reg
@@ -198,7 +213,13 @@ impl ColliderRegistry {
         {
             let world_transform = ecs_world.get_world_transform(entity, transform);
             for collider_id in &colliders.colliders {
-                let aabb = self.get_collider_dyn(collider_id).aabb(&world_transform);
+                let Some(aabb) = self
+                    .get_collider_dyn(collider_id)
+                    .aabb(&world_transform, &self.voxel_collider_registry)
+                else {
+                    // Collider isn't ready to be used yet.
+                    return;
+                };
                 let region_min = RegionPos::from_world_pos(&aabb.min);
                 let region_max = RegionPos::from_world_pos(&aabb.max);
                 for region_x in region_min.x..=region_max.x {

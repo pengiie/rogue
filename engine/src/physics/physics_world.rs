@@ -340,8 +340,13 @@ impl PhysicsWorld {
 
                     let collider_a = physics_world.colliders.get_collider_dyn(collider_id_a);
                     let collider_b = physics_world.colliders.get_collider_dyn(collider_id_b);
-                    let aabb_a = collider_a.aabb(&world_transform_a);
-                    let aabb_b = collider_b.aabb(&world_transform_b);
+                    let voxel_collider_registry = &physics_world.colliders.voxel_collider_registry;
+                    let aabb_a = collider_a
+                        .aabb(&world_transform_a, voxel_collider_registry)
+                        .expect("AABB should exist if collider was binned.");
+                    let aabb_b = collider_b
+                        .aabb(&world_transform_b, voxel_collider_registry)
+                        .expect("AABB should exist if collider was binned.");
                     let could_collide = aabb_a.intersects_aabb(&aabb_b);
                     if could_collide {
                         physics_world

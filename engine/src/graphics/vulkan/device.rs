@@ -1865,7 +1865,7 @@ impl From<GfxBlendFactor> for ash::vk::BlendFactor {
             GfxBlendFactor::OneMinusSrcAlpha => ash::vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
             GfxBlendFactor::SrcColor => ash::vk::BlendFactor::SRC_COLOR,
             GfxBlendFactor::DstColor => ash::vk::BlendFactor::DST_COLOR,
-            GfxBlendFactor::SrcAlpha => ash::vk::BlendFactor::DST_ALPHA,
+            GfxBlendFactor::SrcAlpha => ash::vk::BlendFactor::SRC_ALPHA,
             GfxBlendFactor::DstAlpha => ash::vk::BlendFactor::DST_ALPHA,
             GfxBlendFactor::Zero => ash::vk::BlendFactor::ZERO,
         }

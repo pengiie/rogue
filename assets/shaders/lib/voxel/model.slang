@@ -9,6 +9,7 @@ public struct RayModelTest {
   public float3 albedo;
   // Normal in the reference frame of the ray and aabb. 
   public float3 normal;
+  public float3 face_normal;
   public float ray_t;
 
   static RayModelTest miss() {
@@ -50,18 +51,18 @@ public bool model_is_voxel_present(int3 local_voxel_pos, uint voxel_model_ptr) {
   return false;
 }
 
-public void model_set_voxel_material(uint3 local_voxel_pos, uint voxel_model_ptr, uint material_data) {
+public void model_set_voxel_material(uint3 local_voxel_pos, uint voxel_model_ptr, CompressedVoxelMaterial comp_mat) {
   let info_data = u_frame.voxel.model_info_data;
   let model_schema = info_data.Load<uint>(voxel_model_ptr << 2);
   switch (model_schema) {
     case 0:
       let sft = SFT(voxel_model_ptr);
-      sft.set_voxel_material(local_voxel_pos, material_data);
+      sft.set_voxel_material(local_voxel_pos, comp_mat);
       break;
    }
 }
 
-public Optional<uint> model_get_voxel_material(uint3 local_voxel_pos, uint voxel_model_ptr) {
+public Optional<CompressedVoxelMaterial> model_get_voxel_material(uint3 local_voxel_pos, uint voxel_model_ptr) {
   let info_data = u_frame.voxel.model_info_data;
   let model_schema = info_data.Load<uint>(voxel_model_ptr << 2);
   switch (model_schema) {

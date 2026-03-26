@@ -9,7 +9,6 @@ pub mod debug;
 pub mod egui;
 pub mod entity;
 pub mod event;
-pub mod game;
 pub mod game_loop;
 pub mod graphics;
 pub mod init;

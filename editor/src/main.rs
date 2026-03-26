@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use nalgebra::Vector2;
 use rogue_engine::{
     app::{App, AppCreateInfo, AppStage},
     asset::{
@@ -18,6 +19,7 @@ use rogue_engine::{
     resource::ResourceBank,
     task::tasks::Tasks,
     window::window::Window,
+    world::renderable::rt_pass::WorldRTPass,
 };
 use winit::event::{DeviceEvent, ElementState};
 
@@ -25,6 +27,7 @@ use crate::{
     editing::{
         voxel_editing::EditorVoxelEditing, voxel_editing_preview_gpu::EditorVoxelEditingPreviewGpu,
     },
+    editor_input::EditorInput,
     editor_project_settings::EditorProjectSettings,
     editor_settings::UserEditorSettingsAsset,
     game_session::EditorGameSession,
@@ -37,6 +40,7 @@ use crate::{
 
 pub mod camera_controller;
 pub mod editing;
+pub mod editor_input;
 pub mod editor_project_settings;
 pub mod editor_settings;
 pub mod game_session;
@@ -113,24 +117,52 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     rb.insert(EditorVoxelEditingPreviewGpu::new());
     rb.insert(EditorGizmo::new());
 
+    rb.insert(EditorInput::new());
+
     rb.run_system(EditorRenderGraph::init_render_graph);
 }
 
-fn on_window_event(rb: &mut ResourceBank, event: &winit::event::WindowEvent) -> bool {
+fn on_window_event(rb: &mut ResourceBank, event: &mut winit::event::WindowEvent) -> bool {
     if rb.has_resource::<Egui>() {
         let window = rb.get_resource::<Window>();
         // We can't force the cursor position on wayland only confine it so ignore any cursor inputs when it is locked.
         if !window.is_cursor_locked() {
-            return rb
+            if rb
                 .get_resource_mut::<Egui>()
-                .handle_window_event(&window, &event);
+                .handle_window_event(&window, &event)
+            {
+                return true;
+            }
         }
     }
+
+    if let Some(editor_ui) = rb.try_get_resource::<EditorUI>() {
+        match event {
+            winit::event::WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                if let Some(mut editor_input) = rb.try_get_resource_mut::<EditorInput>() {
+                    editor_input.global_mouse_pos =
+                        Vector2::new(position.x as f32, position.y as f32);
+                }
+                let offset = editor_ui.backbuffer_offset();
+                *position = winit::dpi::PhysicalPosition::new(
+                    position.x - offset.x as f64,
+                    position.y - offset.y as f64,
+                );
+            }
+            _ => {}
+        }
+    }
+
     return false;
 }
 
-fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> bool {
-    if !rb.has_resource::<EditorUI>() || !rb.has_resource::<Input>() || !rb.has_resource::<Window>()
+fn on_device_event(rb: &mut ResourceBank, event: &mut winit::event::DeviceEvent) -> bool {
+    if !rb.has_resource::<EditorUI>()
+        || !rb.has_resource::<EditorInput>()
+        || !rb.has_resource::<Window>()
     {
         return false;
     }
@@ -141,14 +173,15 @@ fn on_device_event(rb: &mut ResourceBank, event: &winit::event::DeviceEvent) -> 
     }
 
     let editor_ui = rb.get_resource_mut::<EditorUI>();
-    let padding = editor_ui.content_padding();
-    let input = rb.get_resource::<Input>();
-    let window_size = rb.get_resource::<Window>().size();
-    let mouse_pos = input.mouse_position().map(|x| x.floor() as u32);
-    let mouse_in_game_window = mouse_pos.x >= padding.z
-        && mouse_pos.x <= window_size.x - padding.w
-        && mouse_pos.y >= padding.x
-        && mouse_pos.y <= window_size.y - padding.y;
+    let editor_input = rb.get_resource::<EditorInput>();
+    let window = rb.get_resource::<Window>();
+    let window_size = window.size();
+    let content_padding = editor_ui.content_padding();
+    let mouse_pos = editor_input.global_mouse_pos.map(|x| x.floor() as u32);
+    let mouse_in_game_window = mouse_pos.x > content_padding.z
+        && mouse_pos.x < window_size.x - content_padding.w
+        && mouse_pos.y > content_padding.x
+        && mouse_pos.y < window_size.y - content_padding.y;
 
     match event {
         DeviceEvent::MouseWheel { .. } | DeviceEvent::Key(_) => {
@@ -177,15 +210,20 @@ fn setup_systems(app: &mut App) {
         EditorSession::update_editor_camera_controller,
     );
 
-    // Update editor voxel editing.
+    // Update editor voxel editing for entities and terrain.
     app.insert_system(
         AppStage::Update,
-        EditorVoxelEditing::update_voxel_editing_entity,
+        EditorVoxelEditing::update_voxel_editing_systems,
     );
     // Ensure the preview model exists on the gpu voxel registry.
     app.insert_system(
         AppStage::Update,
         EditorVoxelEditingPreviewGpu::update_preview_gpu,
+    );
+    // Render the selections.
+    app.insert_system(
+        AppStage::Update,
+        EditorVoxelEditingPreviewGpu::update_selections_preview_gpu,
     );
 
     // Update the voxel-based world generator.
@@ -217,6 +255,8 @@ fn setup_systems(app: &mut App) {
         AppStage::PreUniformsRenderWrite,
         EditorRenderGraph::write_general_inputs,
     );
+    // Write the world raytrace pass.
+    app.insert_system(AppStage::RenderWrite, WorldRTPass::write_graph_rt_pass);
     // Write the images and vertex/index buffers to render the ui.
     app.insert_system(AppStage::RenderWrite, EguiGpu::write_render_data);
     // Write the render graph pass input for rasterizing the ui.
@@ -232,6 +272,6 @@ fn setup_systems(app: &mut App) {
 
 fn init_ecs_world() -> ECSWorld {
     let mut e = ECSWorld::new();
-    // TODO: Register game components
+    rogue_game::register_game_types(&mut e);
     e
 }

@@ -6,7 +6,7 @@ use rogue_engine::{
     voxel::{
         attachment::Attachment,
         sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelEditData, VoxelMaterialData, VoxelModelEdit, VoxelModelImpl},
+        voxel::{VoxelMaterialData, VoxelModelEdit, VoxelModelImpl},
     },
 };
 
@@ -97,18 +97,18 @@ fn create_voxel_model_dialog_show_fn(
                             // Do nothing, already empty.
                         }
                         CreateModelPreset::Solid => {
-                            let edit = VoxelModelEdit {
-                                min: Vector3::new(0, 0, 0),
-                                max: Vector3::new(
-                                    state.side_length,
-                                    state.side_length,
-                                    state.side_length,
-                                ),
-                                data: VoxelEditData::Fill {
-                                    material: Some(VoxelMaterialData::Unbaked(state.material)),
-                                },
-                            };
-                            model.set_voxel_range_impl(&edit);
+                            //let edit = VoxelModelEdit {
+                            //    min: Vector3::new(0, 0, 0),
+                            //    max: Vector3::new(
+                            //        state.side_length,
+                            //        state.side_length,
+                            //        state.side_length,
+                            //    ),
+                            //    data: VoxelEditData::Fill {
+                            //        material: Some(VoxelMaterialData::Unbaked(state.material)),
+                            //    },
+                            //};
+                            //model.set_voxel_range_impl(&edit);
                         }
                     }
                     let model_id = ctx

@@ -14,6 +14,7 @@ pub mod sft_gpu;
 pub mod thc;
 pub mod voxel;
 pub mod voxel_allocator;
+pub mod voxel_palette;
 pub mod voxel_registry;
 pub mod voxel_registry_gpu;
 pub mod voxel_transform;

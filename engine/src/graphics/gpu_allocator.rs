@@ -162,7 +162,11 @@ impl AllocatorTree {
 
     pub fn free(&mut self, allocation: &Allocation) {
         if allocation.length_bytes() == self.size {
-            assert!(self.is_allocated);
+            assert!(
+                self.is_allocated,
+                "Tried to free allocation of size {} but it was not allocated, double free?",
+                self.size
+            );
             self.is_allocated = false;
             return;
         }

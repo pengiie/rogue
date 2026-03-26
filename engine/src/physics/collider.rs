@@ -5,6 +5,7 @@ use crate::common::geometry::aabb::AABB;
 use crate::debug::debug_renderer::DebugRenderer;
 use crate::entity::ecs_world::Entity;
 use crate::physics::collider_registry::ColliderRegistry;
+use crate::physics::collider_voxel_registry::VoxelColliderRegistry;
 use crate::physics::{collider_registry::ColliderId, transform::Transform};
 
 pub struct ContactPoint {
@@ -84,6 +85,31 @@ where
     }
 }
 
+impl<F, A: Collider, B: Collider> ColliderIntersectionTest<(A, B, VoxelColliderRegistry)> for F
+where
+    F: Fn(&A, &B, &Transform, &Transform, &VoxelColliderRegistry) -> Option<ContactManifold>,
+{
+    fn run(
+        &self,
+        collider_id_a: &ColliderId,
+        collider_id_b: &ColliderId,
+        entity_transform_a: &Transform,
+        entity_transform_b: &Transform,
+        collider_registry: &ColliderRegistry,
+    ) -> Option<ContactManifold> {
+        let collider_a = collider_registry.get_collider::<A>(collider_id_a);
+        let collider_b = collider_registry.get_collider::<B>(collider_id_a);
+        let voxel_collider_registry = &collider_registry.voxel_collider_registry;
+        self(
+            collider_a,
+            collider_b,
+            entity_transform_a,
+            entity_transform_b,
+            voxel_collider_registry,
+        )
+    }
+}
+
 type ColliderIntersectionTestErasedFn = fn(
     run_fn_ptr: *const (),
     collider_id_a: &ColliderId,
@@ -155,7 +181,11 @@ pub trait Collider: Clone + 'static {
     /// must be unique between registered collider types.
     const NAME: &str;
 
-    fn aabb(&self, world_transform: &Transform) -> AABB;
+    fn aabb(
+        &self,
+        world_transform: &Transform,
+        voxel_registry: &VoxelColliderRegistry,
+    ) -> Option<AABB>;
 
     // Type erased serialization.
     fn serialize_collider(
@@ -183,7 +213,11 @@ pub trait Collider: Clone + 'static {
 }
 
 pub trait ColliderMethods: downcast::Any {
-    fn aabb(&self, world_transform: &Transform) -> AABB;
+    fn aabb(
+        &self,
+        world_transform: &Transform,
+        voxel_registry: &VoxelColliderRegistry,
+    ) -> Option<AABB>;
 
     // Type erased serialization.
     fn serialize_collider(
@@ -201,8 +235,12 @@ pub trait ColliderMethods: downcast::Any {
 }
 
 impl<T: Collider> ColliderMethods for T {
-    fn aabb(&self, world_transform: &Transform) -> AABB {
-        Collider::aabb(self, world_transform)
+    fn aabb(
+        &self,
+        world_transform: &Transform,
+        voxel_registry: &VoxelColliderRegistry,
+    ) -> Option<AABB> {
+        Collider::aabb(self, world_transform, voxel_registry)
     }
 
     fn serialize_collider(

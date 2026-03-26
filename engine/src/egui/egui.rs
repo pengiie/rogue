@@ -53,7 +53,7 @@ impl Egui {
         self.primitives.as_slice()
     }
 
-    /// Returns if the event was consumed.
+    /// Returns true if the event was consumed.
     pub fn handle_window_event(
         &mut self,
         window: &Window,

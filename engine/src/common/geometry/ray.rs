@@ -141,13 +141,10 @@ impl RayDDA {
         let curr_grid = dda_pos.map(|x| x.floor() as i32);
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
         let next_point = curr_grid.cast::<f32>() + (unit_grid.cast::<f32>() * 0.5).add_scalar(0.5);
-        let curr_t = ray.inv_dir.component_mul(&(next_point - dda_pos)).map(|x| {
-            if x.is_infinite() {
-                1000000.00
-            } else {
-                x
-            }
-        });
+        let curr_t = ray
+            .inv_dir
+            .component_mul(&(next_point - dda_pos))
+            .map(|x| if x.is_infinite() { 1000000.00 } else { x });
         let unit_t = ray
             .inv_dir
             .map(|x| if x.is_infinite() { 0.0 } else { x.abs() });
@@ -178,9 +175,13 @@ impl RayDDA {
         self.curr_t
     }
 
-    pub fn step(&mut self) {
+    pub fn curr_step_mask(&self) -> Vector3<i32> {
         let min_t = self.curr_t.min();
-        let mask = self.curr_t.map(|x| if x == min_t { 1 } else { 0 });
+        self.curr_t.map(|x| if x == min_t { 1 } else { 0 })
+    }
+
+    pub fn step(&mut self) {
+        let mask = self.curr_step_mask();
         self.curr_grid += mask.component_mul(&self.unit_grid);
         self.curr_t += mask.cast::<f32>().component_mul(&self.unit_t);
     }

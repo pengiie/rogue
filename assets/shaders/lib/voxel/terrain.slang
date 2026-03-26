@@ -6,6 +6,7 @@ public struct RayTerrainTest {
   public bool did_hit;
   public float3 albedo;
   public float3 normal;
+  public float3 face_normal;
   public float depth_t;
 
   static RayTerrainTest miss() {
@@ -121,7 +122,7 @@ public struct Terrain {
     return region.is_voxel_present(voxel_pos);
   }
 
-  public Optional<uint> get_voxel_material(int3 chunk_pos, int chunk_height, uint3 local_voxel_pos) {
+  public Optional<CompressedVoxelMaterial> get_voxel_material(int3 chunk_pos, int chunk_height, uint3 local_voxel_pos) {
     let terrain = u_frame.voxel.terrain;
     let region_pos = this.chunk_to_region_pos(chunk_pos);
     let local_region_pos = region_pos - terrain.region_anchor;
@@ -140,7 +141,7 @@ public struct Terrain {
     return region.get_voxel_material(local_chunk_pos, chunk_height, local_voxel_pos);
   }
 
-  public void set_voxel_material(int3 chunk_pos, int chunk_height, uint3 local_voxel_pos, uint new_material) {
+  public void set_voxel_material(int3 chunk_pos, int chunk_height, uint3 local_voxel_pos, CompressedVoxelMaterial comp_mat) {
     let terrain = u_frame.voxel.terrain;
     let region_pos = this.chunk_to_region_pos(chunk_pos);
     let local_region_pos = region_pos - terrain.region_anchor;
@@ -156,7 +157,7 @@ public struct Terrain {
     
     let region = Region.new(region_ptr);
     let local_chunk_pos = (uint3) (chunk_pos % consts::TERRAIN_REGION_CHUNK_LENGTH);
-    region.set_voxel_material(local_chunk_pos, chunk_height, local_voxel_pos, new_material);
+    region.set_voxel_material(local_chunk_pos, chunk_height, local_voxel_pos, comp_mat);
   }
 }
 
@@ -244,6 +245,7 @@ public struct Region {
             let global_grid_pos = (int3) floor(curr_ray.origin);
             res.albedo = model_test.albedo;
             res.normal = model_test.normal;
+            res.face_normal = model_test.face_normal;
             return res;
           }
           did_test_node = true;
@@ -317,6 +319,7 @@ public struct Region {
               let global_grid_pos = (int3) floor(curr_ray.origin);
               res.albedo = model_test.albedo;
               res.normal = model_test.normal;
+              res.face_normal = model_test.face_normal;
               res.depth_t = model_test.ray_t + root_hit_info.t_enter;
               return res;
             }
@@ -345,7 +348,7 @@ public struct Region {
     return RayTerrainTest.miss();
   }
 
-  public void set_voxel_material(uint3 local_chunk_pos, int chunk_height, uint3 local_voxel_pos, uint new_material) {
+  public void set_voxel_material(uint3 local_chunk_pos, int chunk_height, uint3 local_voxel_pos, CompressedVoxelMaterial comp_mat) {
     if (chunk_height > this.height + 1) {
       return;
     }
@@ -357,7 +360,7 @@ public struct Region {
         if (model_ptr == 0xFFFFFFFF) {
           return;
         }
-        model_set_voxel_material(local_voxel_pos, model_ptr, new_material);
+        model_set_voxel_material(local_voxel_pos, model_ptr, comp_mat);
         return;
       }
 
@@ -385,7 +388,9 @@ public struct Region {
     }
   }
 
-  public Optional<uint> get_voxel_material(uint3 local_chunk_pos, int chunk_height, uint3 local_voxel_pos) {
+  public Optional<CompressedVoxelMaterial> get_voxel_material(uint3 local_chunk_pos, 
+                                                              int chunk_height, 
+                                                              uint3 local_voxel_pos) {
     if (chunk_height > this.height + 1) {
       return none;
     }

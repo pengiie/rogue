@@ -116,18 +116,17 @@ public struct SFT {
 
           let is_leaf_present = (leaf_half & child_bit) > 0;
           if (is_leaf_present) {
-            let next_point = curr_anchor_grid + curr_local_grid + max(unit_grid, 0);
-            let next_t = ray_point_test(curr_ray, next_point);
-            let min_t = min3(next_t.x, next_t.y, next_t.z);
             let voxel_scaling = (root_aabb.max() - root_aabb.min()) / (float3) this.side_length;
             let hit_position = root_aabb.min() + curr_ray.origin * voxel_scaling;
             let distance_to_voxel = distance(in_ray.origin, hit_position);
 
             let voxel_addr = SFTVoxelAddr(curr_node_idx, morton_half, child_bit);
-            if (let material = this.load_bmat(voxel_addr)) {
+            if (let comp_mat = this.get_voxel_material_addr(voxel_addr)) {
               var res = RayModelTest.hit();
-              res.albedo = material.albedo;
-              res.normal = material.normal;
+              let mat = BakedVoxelMaterial::decode(comp_mat);
+              res.albedo = mat.albedo;
+              res.normal = mat.normal;
+              res.face_normal = (float3) last_mask * sign(curr_ray.dir);
               res.ray_t = distance_to_voxel;
               return res;
             }
@@ -151,7 +150,7 @@ public struct SFT {
       }
 
       let curr_node_size = this.quarter_side_length >> (curr_height * 2);
-      let next_point = curr_anchor_grid + curr_local_grid * curr_node_size + max(unit_grid, 0) * curr_node_size;
+      let next_point = curr_anchor_grid + (curr_local_grid + max(unit_grid, 0)) * curr_node_size;
       let curr_t = ray_point_test(curr_ray, next_point);
       let next_t = min3(curr_t.x, curr_t.y, curr_t.z);
       let mask = curr_t == next_t;
@@ -312,7 +311,7 @@ public struct SFT {
         VoxelDataRange(attachment_raw_ptr));
   }
 
-  private Optional<VoxelDataRange> load_voxel_attachment(uint attachment_index, SFTVoxelAddr voxel_addr) {
+  private Optional<VoxelDataRange> load_voxel_attachment(uint attachment_index, uint attachment_size, SFTVoxelAddr voxel_addr) {
     let attachment_ptr_pair = load_attachment_ptrs(attachment_index, attachment_index);
     if (attachment_ptr_pair == none) {
       return none;
@@ -336,7 +335,7 @@ public struct SFT {
       load_attachment_lookup_node(attachment_presence_ptr, lookup_node_index);
     var child_offset = countbits(attachment_mask[voxel_addr.morton_half] & (voxel_addr.child_bit - 1));
     child_offset += voxel_addr.morton_half == 0 ? 0 : countbits(attachment_mask[0]);
-    return attachment_raw_ptr.with_offset(node_attachment_data_ptr + child_offset);
+    return attachment_raw_ptr.with_offset(node_attachment_data_ptr + child_offset * attachment_size);
   }
 
   private VoxelDataRange load_voxel_attachment_data(uint presence_attachment_index, 
@@ -370,7 +369,7 @@ public struct SFT {
   }
 
   private Optional<BMaterial> load_bmat(SFTVoxelAddr voxel_addr) {
-    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, voxel_addr);
+    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, 2, voxel_addr);
     if (bmaterial_data_ptr_opt == none) {
       return none;
     }
@@ -380,7 +379,7 @@ public struct SFT {
   }
 
   private Optional<float3> load_ptmaterial(SFTVoxelAddr voxel_addr) {
-    let ptmaterial_data_ptr_opt = this.load_voxel_attachment(0, voxel_addr);
+    let ptmaterial_data_ptr_opt = this.load_voxel_attachment(0, 1, voxel_addr);
     if (ptmaterial_data_ptr_opt == none) {
       return none;
     }
@@ -396,7 +395,7 @@ public struct SFT {
   }
 
   bool try_set_bmat_normal(SFTVoxelAddr voxel_addr, float3 normal) {
-    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, voxel_addr);
+    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, 1, voxel_addr);
     if (bmaterial_data_ptr_opt == none) {
       return false;
     }
@@ -439,34 +438,40 @@ public struct SFT {
     return true;
   }
 
-  public Optional<uint> get_voxel_material(uint3 local_voxel_pos) {
-    let voxel_addr_opt = this.get_voxel_addr(local_voxel_pos);
-    if (voxel_addr_opt == none) {
-      return none;
-    }
-    let voxel_addr = voxel_addr_opt.value;
-  
-    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, voxel_addr);
+  public Optional<CompressedVoxelMaterial> get_voxel_material_addr(SFTVoxelAddr voxel_addr) {
+    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, 2, voxel_addr);
     if (bmaterial_data_ptr_opt == none) {
       return none;
     }
     let bmaterial_data_ptr = bmaterial_data_ptr_opt.value;
-    return bmaterial_data_ptr.load(0);
+    var comp_mat = CompressedVoxelMaterial();
+    comp_mat.b = bmaterial_data_ptr.load(0);
+    comp_mat.a = bmaterial_data_ptr.load(1);
+    return comp_mat;
   }
 
-  public void set_voxel_material(uint3 local_voxel_pos, uint material_data) {
+  public Optional<CompressedVoxelMaterial> get_voxel_material(uint3 local_voxel_pos) {
+    let voxel_addr_opt = this.get_voxel_addr(local_voxel_pos);
+    if (voxel_addr_opt == none) {
+      return none;
+    }
+    return get_voxel_material_addr(voxel_addr_opt.value);
+  }
+
+  public void set_voxel_material(uint3 local_voxel_pos, CompressedVoxelMaterial comp_mat) {
     let voxel_addr_opt = this.get_voxel_addr(local_voxel_pos);
     if (voxel_addr_opt == none) {
       return;
     }
     let voxel_addr = voxel_addr_opt.value;
   
-    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, voxel_addr);
+    let bmaterial_data_ptr_opt = this.load_voxel_attachment(3, 2, voxel_addr);
     if (bmaterial_data_ptr_opt == none) {
       return;
     }
     let bmaterial_data_ptr = bmaterial_data_ptr_opt.value;
-    bmaterial_data_ptr.store(0, material_data);
+    bmaterial_data_ptr.store(0, comp_mat.b);
+    bmaterial_data_ptr.store(1, comp_mat.a);
   }
 
   public void set_normal(SFTVoxelAddr voxel_addr, float3 normal) {

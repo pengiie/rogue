@@ -63,17 +63,26 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
         quote! {}
     };
 
+    let crate_name = match proc_macro_crate::crate_name("rogue_engine") {
+        Ok(proc_macro_crate::FoundCrate::Itself) => quote! { crate },
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote! { #ident }
+        }
+        Err(_) => panic!("Couldn't figure out path for rogue_engine crate"),
+    };
+
     let gen = quote! {
         #item
 
-        impl crate::entity::component::GameComponent for #name {
+        impl #crate_name::entity::component::GameComponent for #name {
             const NAME: &str = #game_component_serde_name;
 
             #constructible_impl
 
             fn clone_component(
                 &self,
-                ctx: &mut crate::entity::component::GameComponentCloneContext<'_>,
+                ctx: &mut #crate_name::entity::component::GameComponentCloneContext<'_>,
                 dst_ptr: *mut u8,
             ) {
                 let dst_ptr = dst_ptr as *mut Self;
@@ -83,14 +92,14 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
 
             fn serialize_component(
                 &self,
-                ctx: &crate::entity::component::GameComponentSerializeContext<'_>,
+                ctx: &#crate_name::entity::component::GameComponentSerializeContext<'_>,
                 ser: &mut dyn erased_serde::Serializer,
             ) -> erased_serde::Result<()> {
                 erased_serde::Serialize::erased_serialize(self, ser)
             }
 
             unsafe fn deserialize_component(
-                ctx: &mut crate::entity::component::GameComponentDeserializeContext<'_>,
+                ctx: &mut #crate_name::entity::component::GameComponentDeserializeContext<'_>,
                 de: &mut dyn erased_serde::Deserializer,
                 dst_ptr: *mut u8,
             ) -> erased_serde::Result<()> {

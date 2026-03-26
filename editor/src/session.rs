@@ -47,7 +47,7 @@ pub struct EditorSession {
     pub selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
 
-    editor_camera: Entity,
+    pub editor_camera: Entity,
     editor_camera_controller: EditorCameraController,
     double_right_click_buffer: InputBuffer,
 
@@ -140,8 +140,7 @@ impl EditorSession {
         let backbuffer_size = editor_ui.backbuffer_size(&window).cast::<f32>();
         let ray = match session.editor_camera_controller.controller_type {
             EditorCameraControllerType::PanOrbit => {
-                let mouse_pos =
-                    input.mouse_position() - editor_ui.backbuffer_offset().cast::<f32>();
+                let mouse_pos = input.mouse_position();
                 let uv = mouse_pos.component_div(&backbuffer_size);
                 let aspect_ratio = backbuffer_size.x / backbuffer_size.y;
                 editor_camera.create_ray(editor_camera_transform, uv, aspect_ratio)

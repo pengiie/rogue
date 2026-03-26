@@ -29,7 +29,7 @@ impl Attachment {
         Attachment::new(Attachment::PTMATERIAL_ID, "pathtracing_material", 1);
     pub const NORMAL: Attachment = Attachment::new(Attachment::NORMAL_ID, "normal", 1);
     pub const EMMISIVE: Attachment = Attachment::new(Attachment::EMMISIVE_ID, "emmisive", 1);
-    pub const BMAT: Attachment = Attachment::new(Attachment::BMAT_ID, "builtin_material", 1);
+    pub const BMAT: Attachment = Attachment::new(Attachment::BMAT_ID, "builtin_material", 2);
 
     pub fn from_id(id: AttachmentId) -> Self {
         match id {

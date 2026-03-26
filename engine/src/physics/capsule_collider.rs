@@ -5,6 +5,7 @@ use crate::common::color::Color;
 use crate::common::geometry::aabb::AABB;
 use crate::debug::debug_renderer::DebugRenderer;
 use crate::physics::collider::{ColliderDebugColoring, ContactManifold};
+use crate::physics::collider_voxel_registry::VoxelColliderRegistry;
 use crate::physics::{box_collider::BoxCollider, collider::Collider};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -48,36 +49,14 @@ impl CapsuleCollider {
 
 impl Collider for CapsuleCollider {
     const NAME: &str = "CapsuleCollider";
-    // fn test_collision(
-    //     &self,
-    //     other: &dyn ColliderMethods,
-    //     transform_a: &Transform,
-    //     transform_b: &Transform,
-    // ) -> Option<ContactManifold> {
-    //     match other.collider_type() {
-    //         ColliderType::Box => {
-    //             let box_collider = other.downcast_ref::<BoxCollider>().unwrap();
-    //             return box_capsule_collision_test(box_collider, self, transform_b, transform_a);
-    //         }
-    //         ColliderType::Null => None,
-    //         _ => {
-    //             log::error!(
-    //                 "Collision not implemented for {:?} and {:?}",
-    //                 self.collider_type(),
-    //                 other.collider_type()
-    //             );
-    //             None
-    //         }
-    //     }
-    // }
 
-    fn aabb(&self, world_transform: &Transform) -> AABB {
+    fn aabb(&self, world_transform: &Transform, _: &VoxelColliderRegistry) -> Option<AABB> {
         let up = Vector3::y() * self.half_height;
         let forward = Vector3::z() * self.radius;
         let right = Vector3::x() * self.radius;
         let min = self.center + self.orientation * (-up - forward - right);
         let max = self.center + self.orientation * (up + forward + right);
-        return AABB::new_two_point(min, max);
+        return Some(AABB::new_two_point(min, max));
     }
 
     fn render_debug(
@@ -105,14 +84,18 @@ impl Collider for CapsuleCollider {
         &self,
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()> {
-        todo!()
+        use erased_serde::Serialize;
+        self.erased_serialize(ser)
     }
 
     unsafe fn deserialize_collider(
         de: &mut dyn erased_serde::Deserializer,
         dst_ptr: *mut u8,
     ) -> erased_serde::Result<()> {
-        todo!()
+        let dst_ptr = dst_ptr as *mut Self;
+        // Safety: dst_ptr should be allocated with the memory layout for this type.
+        unsafe { dst_ptr.write(erased_serde::deserialize::<Self>(de)?) };
+        Ok(())
     }
 }
 

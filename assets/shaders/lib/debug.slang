@@ -3,8 +3,12 @@ implementing lib;
 namespace debug {
   public struct MeshInstance {
     public float4x4 transform;
-    public float3 color;
+    public float4 color;
     public uint mesh_info_index;
+    public uint flags;
+
+    public static const uint FLAG_SHADING = 1;
+    public static const uint FLAG_DEPTH_TEST = 1 << 1;
   }
 
   public struct MeshInfo {

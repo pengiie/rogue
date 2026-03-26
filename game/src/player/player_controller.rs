@@ -1,15 +1,14 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_macros::game_component;
 
-use crate::common::serde_util::impl_unit_type_serde;
-use crate::entity::ecs_world::ECSWorld;
-use crate::input::{keyboard::Key, Input};
-use crate::physics::{
+use rogue_engine::entity::ecs_world::ECSWorld;
+use rogue_engine::input::{Input, keyboard::Key};
+use rogue_engine::physics::{
     physics_world::PhysicsWorld,
     rigid_body::{ForceType, RigidBody},
     transform::Transform,
 };
-use crate::resource::{Res, ResMut};
+use rogue_engine::resource::{Res, ResMut};
 
 #[derive(Clone)]
 #[game_component(name = "PlayerController")]
@@ -18,7 +17,7 @@ pub struct PlayerController {
 }
 
 // Don't serialize data for this component.
-impl_unit_type_serde!(PlayerController);
+rogue_engine::impl_unit_type_serde!(PlayerController);
 
 #[derive(Clone)]
 pub struct PlayerControllerInputState {

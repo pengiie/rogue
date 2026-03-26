@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 use rogue_engine::{
     common::color::Color,
-    debug::debug_renderer::DebugRenderer,
+    debug::debug_renderer::{DebugRenderer, DebugShapeFlags},
     entity::{RenderableVoxelEntity, ecs_world::ECSWorld},
     graphics::camera::MainCamera,
     physics::transform::Transform,
@@ -50,19 +50,22 @@ impl EditorGizmo {
             world_transform.position,
             world_transform.position + Vector3::x(),
             scale,
-            Color::new_srgb(1.0, 0.0, 0.0),
+            Color::new_srgba(1.0, 0.0, 0.0, 1.0),
+            DebugShapeFlags::NONE,
         );
         debug_renderer.draw_arrow(
             world_transform.position,
             world_transform.position + Vector3::y(),
             scale,
-            Color::new_srgb(0.0, 1.0, 0.0),
+            Color::new_srgba(0.0, 1.0, 0.0, 1.0),
+            DebugShapeFlags::NONE,
         );
         debug_renderer.draw_arrow(
             world_transform.position,
             world_transform.position + Vector3::z(),
             scale,
-            Color::new_srgb(0.0, 0.0, 1.0),
+            Color::new_srgba(0.0, 0.0, 1.0, 1.0),
+            DebugShapeFlags::NONE,
         );
     }
 
@@ -90,15 +93,20 @@ impl EditorGizmo {
             .expect("Should have a transform");
         let world_transform = ecs_world.get_world_transform(selected_entity, &local_transform);
 
-        let color = Color::new_srgb_hex(SELECTION_COLOR);
+        let color = Color::new_srgba_hex(SELECTION_COLOR, 1.0);
         if let Ok(renderable) = ecs_world.get::<&RenderableVoxelEntity>(selected_entity)
             && let Some(model_id) = renderable.voxel_model_id()
         {
             let side_length = voxel_registry.get_dyn_model(model_id).length();
             let obb = world_transform.as_voxel_model_obb(side_length);
-            debug_renderer.draw_obb(&obb, 0.025, color);
+            debug_renderer.draw_obb_outline(
+                &obb,
+                0.025 * world_transform.scale.min(),
+                color,
+                DebugShapeFlags::NONE,
+            );
         } else {
-            debug_renderer.draw_sphere(world_transform.position, 0.2, color);
+            //debug_renderer.draw_sphere(world_transform.position, 0.2, color, DebugShapeFlags::NONE);
         }
     }
 }

@@ -22,7 +22,7 @@ use rogue_engine::{
     voxel::{
         attachment::Attachment,
         sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelEditData, VoxelModelEdit, VoxelModelImplMethods},
+        voxel::{VoxelModelEdit, VoxelModelImplMethods},
         voxel_registry::VoxelModelRegistry,
     },
 };
@@ -213,7 +213,7 @@ impl EntityPropertiesShowFns {
 
                 let can_resize = renderable.is_dynamic() && renderable.voxel_model_id().is_some();
                 if ui.add_enabled(can_resize, egui::Button::new("Resize")).clicked() {
-                    ctx.commands.push(resize_voxel_model_dialog_cmd(ResizeVoxelModelDialogCreateInfo { 
+                    ctx.commands.push(resize_voxel_model_dialog_cmd(ResizeVoxelModelDialogCreateInfo {
                         target_model: renderable.voxel_model_id().unwrap(),
                         associated_entity: selected_entity,
                     }));
@@ -488,17 +488,15 @@ impl EntityPropertiesPane {
                 );
                 drop(parent);
                 ui.menu_button(parent_name, |ui| {
-                    // TODO: Transform entities transform so it stays the same in world space.
-                    ui.label("Set parent:");
-                    if ui.button("Select parent entity").clicked() {
-                        //ui_state.selecting_new_parent = Some(*selected_entity);
-                        ui.close_menu();
-                    }
                     if ui
                         .add_enabled(parent_entity.is_some(), egui::Button::new("Remove"))
                         .clicked()
                     {
-                        //ecs_world.set_parent(*selected_entity, None);
+                        ctx.events.push(EntityCommandEvent::SetParent {
+                            parent: None,
+                            child: selected_entity,
+                            modify_transform: true,
+                        });
                         ui.close_menu();
                     }
                 });

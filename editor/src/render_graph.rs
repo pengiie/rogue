@@ -84,7 +84,11 @@ impl EditorRenderGraph {
         // World render pass, draws the terrain and entities.
         world_rt_pass_gpu.set_graph_rt_pass(&mut fg, backbuffer, backbuffer_depth_r16);
         // Preview editor voxel editing.
-        voxel_editing_preview.set_graph_voxel_preview_pass(&mut fg, backbuffer);
+        voxel_editing_preview.set_graph_voxel_preview_pass(
+            &mut fg,
+            backbuffer,
+            backbuffer_depth_r16,
+        );
 
         fg.create_pass(
             "depth_copy_pass",

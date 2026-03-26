@@ -24,6 +24,7 @@ use rogue_engine::{
         flat::VoxelModelFlat,
         sft::VoxelModelSFT,
         sft_compressed::VoxelModelSFTCompressed,
+        voxel::VoxelMaterialData,
         voxel_registry::{self, VoxelModelRegistry},
     },
     world::{
@@ -288,11 +289,13 @@ impl ChunkGenerator {
         (density, height)
     }
 
-    pub fn sample_material(&self, world_voxel_pos: Vector3<f32>, density: f32, height: f32) -> u32 {
+    pub fn sample_material(&self, world_voxel_pos: Vector3<f32>, density: f32, height: f32) -> u64 {
+        let mut material_id = 0;
         if density < 0.1 {
-            return *self.material_map.get(GeneratorMaterials::GRASS).unwrap();
+            material_id = *self.material_map.get(GeneratorMaterials::GRASS).unwrap();
         }
-        return *self.material_map.get(GeneratorMaterials::DIRT).unwrap();
+        material_id = *self.material_map.get(GeneratorMaterials::DIRT).unwrap();
+        return VoxelMaterialData::Unbaked(material_id).encode();
     }
 
     pub fn sample_chunk_shaping(&self, world_chunk_pos: ChunkPos, lod: ChunkLOD) -> (f32, f32) {
@@ -343,7 +346,7 @@ impl ChunkGenerator {
                     ) + (wide::f32x8::new([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
                         * voxel_meter_size);
                     let mut density = wide::f32x8::splat(0.0);
-                    let mut material = wide::u32x8::splat(0);
+                    let mut material = wide::u64x8::splat(0);
                     for i in 0..8 {
                         let (d, h) = self.sample_shaping(Vector3::new(
                             voxel_x.as_array()[i],
@@ -367,8 +370,25 @@ impl ChunkGenerator {
                         .get_mut(Attachment::BMAT_ID)
                         .unwrap()
                         .set_bits(index, 8, presence_bitmask);
-                    flat.attachment_data.get_mut(Attachment::BMAT_ID).unwrap()[index..index + 8]
-                        .copy_from_slice(material.as_array());
+                    let attachment_offset = index * Attachment::BMAT.size() as usize;
+                    flat.attachment_data.get_mut(Attachment::BMAT_ID).unwrap()[attachment_offset
+                        ..(attachment_offset + 8 * Attachment::BMAT.size() as usize)]
+                        .copy_from_slice(bytemuck::cast_slice::<u64, u32>(material.as_array()));
+                    for i in index..(index + 8) {
+                        if density.as_array()[i - index] > 0.0 {
+                            let attachment_value =
+                                flat.attachment_data.get_mut(Attachment::BMAT_ID).unwrap()
+                                    [i * Attachment::BMAT.size() as usize];
+                            let attachment_value_b =
+                                flat.attachment_data.get_mut(Attachment::BMAT_ID).unwrap()
+                                    [i * Attachment::BMAT.size() as usize + 1];
+                            //log::info!(
+                            //    "Attachment data is {:032b} {:032b}",
+                            //    attachment_value,
+                            //    attachment_value_b
+                            //);
+                        }
+                    }
                 }
             }
         }

@@ -8,7 +8,6 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::voxel::voxel::VoxelEditData;
 use crate::world::{region::RegionTree, region_asset::WorldRegionAsset};
 use crate::{asset::asset::GameAssetPath, resource::ResMut};
 use crate::{
@@ -49,20 +48,20 @@ pub enum ChunkEventType {
     Updated,
 }
 
-pub struct VoxelTerrainEdit {
-    /// In world space voxel coordinates.
-    pub min: Vector3<i32>,
-    pub max: Vector3<i32>,
-    pub data: VoxelEditData,
-}
-
-pub struct VoxelRegionEdit {
-    /// In region-space voxel coordinates with the origin being
-    /// the regions minimum point.
-    pub min: Vector3<i32>,
-    pub max: Vector3<i32>,
-    pub data: VoxelEditData,
-}
+//pub struct VoxelTerrainEdit {
+//    /// In world space voxel coordinates.
+//    pub min: Vector3<i32>,
+//    pub max: Vector3<i32>,
+//    pub data: VoxelEditData,
+//}
+//
+//pub struct VoxelRegionEdit {
+//    /// In region-space voxel coordinates with the origin being
+//    /// the regions minimum point.
+//    pub min: Vector3<i32>,
+//    pub max: Vector3<i32>,
+//    pub data: VoxelEditData,
+//}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ChunkId {
@@ -410,7 +409,7 @@ pub struct RegionMap {
     /// Only contains regions that have been attempted
     /// to load from disk.
     pub regions: HashMap<RegionPos, WorldRegion>,
-    pub pending_region_edits: HashMap<RegionPos, VecDeque<VoxelRegionEdit>>,
+    //pub pending_region_edits: HashMap<RegionPos, VecDeque<VoxelRegionEdit>>,
     /// Regions that are in the process of loading, waiting on
     /// `Assets` to finish processing the region asset.
     pub loading_regions: HashMap<RegionPos, LoadingRegion>,
@@ -429,7 +428,7 @@ impl RegionMap {
     pub fn new(region_data_path: Option<PathBuf>) -> Self {
         Self {
             regions: HashMap::new(),
-            pending_region_edits: HashMap::new(),
+            //pending_region_edits: HashMap::new(),
             loading_regions: HashMap::new(),
             region_events: Vec::new(),
             chunk_events: Vec::new(),
@@ -588,47 +587,47 @@ impl RegionMap {
             .map(|old_model_ptr| region.model_handles[old_model_ptr as usize]);
     }
 
-    pub fn apply_edit(&mut self, edit: VoxelTerrainEdit) {
-        todo!()
-        //let region_min = RegionMap::world_to_region_pos(&edit.min.map(|x| x as f31));
-        //let region_max = RegionMap::world_to_region_pos(&edit.max.map(|x| x as f32));
-        //for region_x in region_min.x..=region_max.x {
-        //    for region_y in region_min.y..=region_max.y {
-        //        for region_z in region_min.z..=region_max.z {
-        //            let region_pos = Vector3::new(region_x, region_y, region_z);
-        //            let region_voxel_min =
-        //                region_pos.map(|x| x * consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32);
-        //            let region_voxel_max = region_voxel_min
-        //                + Vector3::new(
-        //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-        //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-        //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-        //                );
+    //pub fn apply_edit(&mut self, edit: VoxelTerrainEdit) {
+    //    todo!()
+    //    //let region_min = RegionMap::world_to_region_pos(&edit.min.map(|x| x as f31));
+    //    //let region_max = RegionMap::world_to_region_pos(&edit.max.map(|x| x as f32));
+    //    //for region_x in region_min.x..=region_max.x {
+    //    //    for region_y in region_min.y..=region_max.y {
+    //    //        for region_z in region_min.z..=region_max.z {
+    //    //            let region_pos = Vector3::new(region_x, region_y, region_z);
+    //    //            let region_voxel_min =
+    //    //                region_pos.map(|x| x * consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32);
+    //    //            let region_voxel_max = region_voxel_min
+    //    //                + Vector3::new(
+    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
+    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
+    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
+    //    //                );
 
-        //            // Calculate region-local bounds;
-        //            let edit_min = Vector3::new(
-        //                edit.min.x.max(region_voxel_min.x) - region_voxel_min.x,
-        //                edit.min.y.max(region_voxel_min.y) - region_voxel_min.y,
-        //                edit.min.z.max(region_voxel_min.z) - region_voxel_min.z,
-        //            );
-        //            let edit_max = Vector3::new(
-        //                edit.max.x.min(region_voxel_max.x) - region_voxel_min.x,
-        //                edit.max.y.min(region_voxel_max.y) - region_voxel_min.y,
-        //                edit.max.z.min(region_voxel_max.z) - region_voxel_min.z,
-        //            );
-        //            let region_edit = VoxelRegionEdit {
-        //                min: edit_min,
-        //                max: edit_max,
-        //                data: edit.data.clone(),
-        //            };
-        //            self.pending_region_edits
-        //                .entry(region_pos)
-        //                .or_insert_with(VecDeque::new)
-        //                .push_back(region_edit);
-        //        }
-        //    }
-        //}
-    }
+    //    //            // Calculate region-local bounds;
+    //    //            let edit_min = Vector3::new(
+    //    //                edit.min.x.max(region_voxel_min.x) - region_voxel_min.x,
+    //    //                edit.min.y.max(region_voxel_min.y) - region_voxel_min.y,
+    //    //                edit.min.z.max(region_voxel_min.z) - region_voxel_min.z,
+    //    //            );
+    //    //            let edit_max = Vector3::new(
+    //    //                edit.max.x.min(region_voxel_max.x) - region_voxel_min.x,
+    //    //                edit.max.y.min(region_voxel_max.y) - region_voxel_min.y,
+    //    //                edit.max.z.min(region_voxel_max.z) - region_voxel_min.z,
+    //    //            );
+    //    //            let region_edit = VoxelRegionEdit {
+    //    //                min: edit_min,
+    //    //                max: edit_max,
+    //    //                data: edit.data.clone(),
+    //    //            };
+    //    //            self.pending_region_edits
+    //    //                .entry(region_pos)
+    //    //                .or_insert_with(VecDeque::new)
+    //    //                .push_back(region_edit);
+    //    //        }
+    //    //    }
+    //    //}
+    //}
 
     pub fn is_region_loaded(&self, region_pos: &RegionPos) -> bool {
         self.regions.contains_key(region_pos)

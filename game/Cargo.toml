@@ -1,7 +1,32 @@
 [package]
-name = "game"
+name = "rogue_game"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Rogue
+rogue_macros = { path = "../macros" }
 rogue_engine = { path = "../engine" }
+
+nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
+serde = { version = "1.0", features = ["derive"] }
+erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
+
+log = "0.4.21"
+# anyhow = { version = "1.0.89" }
+# bitflags = "2.6.0"
+# bytemuck = { version = "1.16.1", features = ["derive"] }
+# cfg-if = "1"
+# downcast = "0.11.0"
+# env_logger = "0.11.3"
+# rand = "0.8.5"
+# regex = "1.11.0"
+# rkyv = "0.8.12"
+# ron = "0.8.1"
+# parking_lot = "0.12.1"
+# petgraph = "0.6.5"
+# serde_json = "1.0.140"
+# strum = "0.28.0"
+# strum_macros = "0.28.0"
+# uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
+# wide = "1.1.1"

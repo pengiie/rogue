@@ -69,9 +69,10 @@ impl AssetLoader for RVOXAsset {
         let attachment_data_len =
             u32::from_le_bytes(buf[cursor..cursor + 4].try_into().unwrap()) as usize;
         cursor += 4;
-        let attachment_bmat_data =
-            bytemuck::cast_slice::<u8, u32>(&buf[cursor..(cursor + attachment_data_len * 4)])
-                .to_vec();
+        let attachment_bmat_data = bytemuck::cast_slice::<u8, u32>(
+            &buf[cursor..(cursor + attachment_data_len * Attachment::BMAT.byte_size() as usize)],
+        )
+        .to_vec();
 
         let mut attachment_map = AttachmentMap::new();
         attachment_map.register_attachment(Attachment::BMAT);
@@ -128,7 +129,9 @@ impl AssetSaver for RVOXAsset {
             .attachment_raw_data
             .get(Attachment::BMAT_ID)
             .expect("all other attachments are legacy now but idk maybe its different later.");
-        bytes.extend_from_slice(&(attachment_data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(
+            &(attachment_data.len() as u32 / Attachment::BMAT.size()).to_le_bytes(),
+        );
         bytes.extend_from_slice(bytemuck::cast_slice(attachment_data.as_slice()));
 
         let mut file = out_file.write_file();

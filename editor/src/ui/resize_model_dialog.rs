@@ -4,6 +4,7 @@ use rogue_engine::{
         color::Color,
         morton::{next_power_of_4, prev_power_of_4},
     },
+    debug::debug_renderer::DebugShapeFlags,
     entity::{RenderableVoxelEntity, ecs_world::Entity},
     physics::transform::Transform,
     voxel::{
@@ -72,8 +73,12 @@ fn resize_voxel_model_dialog_show_fn(
             .length();
         const OBB_THICKNESS: f32 = 0.025;
         let new_obb = world_transform.as_voxel_model_obb(state.side_length);
-        ctx.debug_renderer
-            .draw_obb(&new_obb, OBB_THICKNESS, Color::new_srgb_hex("#FF0000"));
+        ctx.debug_renderer.draw_obb_outline(
+            &new_obb,
+            OBB_THICKNESS,
+            Color::new_srgba_hex("#FF0000", 1.0),
+            DebugShapeFlags::NONE,
+        );
     };
 
     let model_type = ctx

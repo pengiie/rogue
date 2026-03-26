@@ -89,7 +89,7 @@ impl UserEditorSettingsAsset {
             .as_ref()
             .map(|last_project_dir| {
                 log::info!("Deserializing last project at {:?}", last_project_dir);
-                ProjectAsset::from_existing_raw(last_project_dir, init_ecs_world())
+                ProjectAsset::from_existing_raw(last_project_dir, crate::init_ecs_world())
                     .map_err(|err| {
                         log::error!(
                             "Error when trying to deserialize last project. Error: {:?}",

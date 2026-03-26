@@ -5,6 +5,8 @@ import lib;
 struct ShaderUniforms {
   [format("rgba32f")]
   RWTexture2D<float4> backbuffer;
+  [format("r16f")]
+  Texture2D<float> backbuffer_depth;
   voxel::EntityInfo entity_info;
 }
 
@@ -29,7 +31,19 @@ void main(uint3 id: SV_DispatchThreadID) {
     return;
   }
 
+  var alpha = 1.0;
+  let current_depth = u_shader.backbuffer_depth.Load(int3(coord.xy, 0));
+  const float BACKBUFFER_DEPTH_BIAS = 0.001;
+  if (entity_test.depth_t > current_depth - BACKBUFFER_DEPTH_BIAS) {
+    alpha = 1.0;
+  }
+
   let current_frag = u_shader.backbuffer.Load(coord.xy);
-  let out_color = lerp(current_frag.rgb, entity_test.albedo, 0.3);
+  var out_color = lerp(current_frag.rgb, entity_test.albedo, alpha);
+  if (abs(entity_test.depth_t - current_depth) < 0.0025) {
+  }
+
+  // TODO: Run this after post process maybe? need to split blit then.
+  out_color = color::srgb_to_lsrgb(out_color);
   u_shader.backbuffer.Store(coord.xy, float4(out_color, 1.0));
 }

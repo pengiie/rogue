@@ -1,32 +1,34 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
+use rogue_engine::{
+    entity::ecs_world::ECSWorld,
+    input::{Input, keyboard::Key},
+    physics::{rigid_body::RigidBody, transform::Transform},
+    resource::{Res, ResMut},
+    window::window::Window,
+};
 use rogue_macros::game_component;
 
-use crate::entity::ecs_world::ECSWorld;
-use crate::input::{keyboard::Key, Input};
-use crate::physics::{rigid_body::RigidBody, transform::Transform};
-use crate::resource::{Res, ResMut};
-use crate::window::window::Window;
-use crate::{common::serde_util::impl_unit_type_serde, game::player_controller::PlayerController};
+use crate::player::player_controller::PlayerController;
 
 #[derive(Clone)]
-#[game_component(name = "CameraController")]
-pub struct CameraController {
+#[game_component(name = "PlayerCameraController")]
+pub struct PlayerCameraController {
     distance: f32,
     euler: Vector2<f32>,
 }
 
 // Don't serialize data for this component.
-impl_unit_type_serde!(CameraController);
+rogue_engine::impl_unit_type_serde!(PlayerCameraController);
 
-impl Default for CameraController {
+impl Default for PlayerCameraController {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CameraController {
+impl PlayerCameraController {
     pub fn new() -> Self {
-        CameraController {
+        Self {
             distance: 5.0,
             // 0.1 because graphics is cooked, need to fix edge case of axis aligned camera.
             euler: Vector2::new(30.0f32.to_radians(), 0.1f32.to_radians()),
@@ -40,19 +42,22 @@ impl CameraController {
         }
 
         let Some((camera_entity, (camera_transform, controller))) = ecs_world
-            .query::<(&mut Transform, &mut CameraController)>()
+            .query::<(&mut Transform, &mut PlayerCameraController)>()
             .into_iter()
             .next()
         else {
             return;
         };
 
-        let (player_entity, (player_transform, player_rb)) = ecs_world
+        let Some((player_entity, (player_transform, player_rb))) = ecs_world
             .query::<(&mut Transform, &mut RigidBody)>()
             .with::<(PlayerController,)>()
             .into_iter()
             .next()
-            .unwrap();
+        else {
+            log::error!("Can't find player entity for player camera controller.");
+            return;
+        };
 
         if window.is_cursor_locked() {
             let mouse_delta = input.mouse_delta() * 0.0005;

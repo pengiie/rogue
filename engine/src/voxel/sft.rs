@@ -221,6 +221,7 @@ impl VoxelModelImpl for VoxelModelSFT {
                         return Some(VoxelModelTrace {
                             local_position: global_grid_pos,
                             depth_t,
+                            local_normal: todo!(),
                         });
                     } else {
                         let child_offset = ((curr_node.child_mask & !curr_node.leaf_mask)

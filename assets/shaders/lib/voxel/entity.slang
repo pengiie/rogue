@@ -27,7 +27,13 @@ public struct EntityInfo {
       var model_test = trace_model(rotated_ray, entity_aabb, this.model_info_ptr);
       if (model_test.did_hit) {
         let world_normal = mul(transpose(entity_rotation), model_test.normal);
-        return RayEntityTest.hit(model_test.albedo, world_normal, model_test.ray_t.x);
+        RayEntityTest test;
+        test.did_hit = true;
+        test.albedo = model_test.albedo;
+        test.normal = mul(entity_rotation, model_test.normal);
+        test.face_normal = model_test.face_normal;
+        test.depth_t = model_test.ray_t;
+        return test;
       }
     }
     return RayEntityTest.miss();
@@ -39,6 +45,7 @@ public struct RayEntityTest {
   public bool did_hit;
   public float3 albedo;
   public float3 normal;
+  public float3 face_normal;
   public float depth_t;
 
   static RayEntityTest miss() {
