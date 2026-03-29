@@ -200,15 +200,19 @@ fn on_device_event(rb: &mut ResourceBank, event: &mut winit::event::DeviceEvent)
 }
 
 fn setup_systems(app: &mut App) {
-    // Update editor session related systems.
-    app.insert_system(
-        AppStage::Update,
-        EditorSession::update_selected_entity_and_raycast,
-    );
+    // Update editor session raycast which is re-used throughout the frame.
+    app.insert_system(AppStage::Update, EditorSession::update_raycast);
+    // Update editor camera controller and EditorSession::is_editor_camera_focused().
     app.insert_system(
         AppStage::Update,
         EditorSession::update_editor_camera_controller,
     );
+    // Update editor gizmo actions and rendering.
+    // Do this before updating the selected entity since the gizmo can consume clicks.
+    app.insert_system(AppStage::Update, EditorGizmo::update);
+    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
+    // Update editor session selected entity based on the raycast.
+    app.insert_system(AppStage::Update, EditorSession::update_selected_entity);
 
     // Update editor voxel editing for entities and terrain.
     app.insert_system(
@@ -240,13 +244,9 @@ fn setup_systems(app: &mut App) {
     // Insert game script systems which run conditionally on editor game state.
     app.insert_system(AppStage::Update, EditorGameSession::try_run_game_on_update);
     app.insert_system(
-        AppStage::Update,
+        AppStage::FixedUpdate,
         EditorGameSession::try_run_game_on_fixed_update,
     );
-
-    // Update editor gizmo actions and rendering.
-    app.insert_system(AppStage::Update, EditorGizmo::update);
-    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
 
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);

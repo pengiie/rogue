@@ -131,7 +131,7 @@ public struct SFT {
               return res;
             }
 
-            return RayModelTest.hit(float3(1.0, 0.0, 0.0), float3(0.0), distance_to_voxel);
+            return RayModelTest.hit(float4(1.0, 0.0, 0.0, 0.0), float3(0.0), distance_to_voxel);
           }
           let curr_node_size = this.quarter_side_length >> (curr_height * 2);
           curr_node_stack[curr_height] = curr_node_idx;

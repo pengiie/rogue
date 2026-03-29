@@ -1,4 +1,5 @@
 use super::transform::Transform;
+use crate::common::color::ColorSrgba;
 use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::obb::OBB;
 use crate::common::{color::Color, geometry::shape::Shape};
@@ -45,7 +46,7 @@ impl Collider for BoxCollider {
         &self,
         world_transform: &Transform,
         debug_renderer: &mut DebugRenderer,
-        coloring: ColliderDebugColoring,
+        coloring: ColorSrgba,
     ) {
         //debug_renderer.draw_obb(DebugOBB {
         //    obb: &world_transform.transform_obb(&self.obb),

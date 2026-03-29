@@ -4,8 +4,10 @@ use std::{
     time::Duration,
 };
 
+use nalgebra::Vector3;
 use rogue_engine::{
     asset::asset::{Assets, GameAssetPath},
+    common::geometry::ray::Ray,
     entity::ecs_world::{ECSWorld, Entity},
     event::{EventReader, Events},
     graphics::camera::{Camera, MainCamera},
@@ -15,7 +17,7 @@ use rogue_engine::{
     resource::{Res, ResMut},
     voxel::{
         rvox_asset::RVOXAsset,
-        voxel_registry::{VoxelModelId, VoxelModelRegistry},
+        voxel_registry::{self, VoxelModelId, VoxelModelRegistry},
     },
     window::{time::Time, window::Window},
     world::{
@@ -31,6 +33,7 @@ use crate::{
     editor_project_settings::{EditorProjectSettings, EditorProjectSettingsData},
     editor_settings::{UserEditorSettingsAsset, UserEditorSettingsAssetProxy},
     game_session::EditorGameSession,
+    gizmo::EditorGizmo,
     ui::EditorUI,
 };
 
@@ -44,10 +47,12 @@ pub enum EditorEvent {
 #[derive(Resource)]
 pub struct EditorSession {
     pub entity_raycast: Option<WorldEntityRaycastHit>,
+    pub editor_camera_ray: Ray,
     pub selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
 
     pub editor_camera: Entity,
+    pub editor_camera_focused: bool,
     editor_camera_controller: EditorCameraController,
     double_right_click_buffer: InputBuffer,
 
@@ -65,10 +70,12 @@ impl EditorSession {
 
         Self {
             entity_raycast: None,
+            editor_camera_ray: Ray::new(Vector3::zeros(), Vector3::zeros()),
             selected_entity: None,
             hovered_entity: None,
 
             editor_camera,
+            editor_camera_focused: true,
             editor_camera_controller: project_settings.map_or_else(
                 || EditorCameraController::new(),
                 |settings| EditorCameraController::from_project_settings(settings),
@@ -76,6 +83,10 @@ impl EditorSession {
             double_right_click_buffer: InputBuffer::new(2),
             editor_event_reader: EventReader::new(),
         }
+    }
+
+    pub fn is_editor_camera_focused(&self) -> bool {
+        self.editor_camera_focused
     }
 
     pub fn editor_camera(&self) -> Entity {
@@ -92,7 +103,13 @@ impl EditorSession {
         input: Res<Input>,
         time: Res<Time>,
         mut window: ResMut<Window>,
+        main_camera: Res<MainCamera>,
     ) {
+        session.editor_camera_focused = main_camera.camera() == Some(session.editor_camera());
+        if !session.editor_camera_focused {
+            return;
+        }
+
         let camera_transform = &mut ecs_world
             .get::<&mut Transform>(session.editor_camera)
             .unwrap();
@@ -110,10 +127,12 @@ impl EditorSession {
             && let Some(raycast) = session.entity_raycast()
             && let Ok(entity_transform) = ecs_world.get::<&Transform>(raycast.entity)
         {
+            let entity_world_transform =
+                ecs_world.get_world_transform(raycast.entity, &entity_transform);
             // On double right click, focus camera on raycast hit.
             session
                 .editor_camera_controller
-                .focus_on_position(entity_transform.position);
+                .focus_on_position(entity_world_transform.position);
         }
     }
 
@@ -121,7 +140,7 @@ impl EditorSession {
         &self.editor_camera_controller
     }
 
-    pub fn update_selected_entity_and_raycast(
+    pub fn update_raycast(
         mut session: ResMut<EditorSession>,
         ecs_world: Res<ECSWorld>,
         voxel_registry: Res<VoxelModelRegistry>,
@@ -152,11 +171,23 @@ impl EditorSession {
 
         session.entity_raycast =
             WorldEntities::raycast_voxel_entities(&ray, &ecs_world, &voxel_registry);
+        session.editor_camera_ray = ray;
+    }
 
+    pub fn update_selected_entity(
+        mut session: ResMut<EditorSession>,
+        ecs_world: Res<ECSWorld>,
+        voxel_registry: Res<VoxelModelRegistry>,
+        input: Res<Input>,
+        editor_ui: Res<EditorUI>,
+        window: Res<Window>,
+        gizmo: Res<EditorGizmo>,
+    ) {
         // Update selected entity.
-        if !input.is_mouse_button_pressed(mouse::Button::Left) {
+        if !input.is_mouse_button_pressed(mouse::Button::Left) || gizmo.is_hovering() {
             return;
         }
+
         if let Some(hit) = &session.entity_raycast {
             session.selected_entity = Some(hit.entity);
         } else {
@@ -175,7 +206,7 @@ impl EditorSession {
         mut session: ResMut<EditorSession>,
         ecs_world: Res<ECSWorld>,
         physics_world: Res<PhysicsWorld>,
-        voxel_registry: Res<VoxelModelRegistry>,
+        mut voxel_registry: ResMut<VoxelModelRegistry>,
         material_bank: Res<MaterialBank>,
         main_camera: Res<MainCamera>,
         region_map: Res<RegionMap>,
@@ -233,6 +264,7 @@ impl EditorSession {
                         .get_dyn_model(*voxel_model_id)
                         .create_rvox_asset();
                     let game_asset_path = voxel_registry.get_model_asset_path(*voxel_model_id).expect("Should not request to save voxel model if it doesn't have an associated asset path.");
+                    voxel_registry.update_static_asset_model(&game_asset_path, *voxel_model_id);
                     let asset_path = game_asset_path.as_file_asset_path(&project_dir);
                     Assets::save_asset_sync::<RVOXAsset>(asset_path, asset);
                 }

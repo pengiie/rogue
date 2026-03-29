@@ -65,8 +65,7 @@ public struct Material {
   public voxel::BakedVoxelMaterial into_bmat(int3 world_voxel_pos, float3 normal) {
     voxel::BakedVoxelMaterial bmat;
     let rgba = calculate_triplanar_color(world_voxel_pos, normalize(normal));
-    bmat.albedo = rgba.rgb;
-    bmat.alpha = rgba.a;
+    bmat.albedo = rgba;
     bmat.normal = normal;
     return bmat;
   }

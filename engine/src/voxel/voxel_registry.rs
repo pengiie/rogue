@@ -1,6 +1,7 @@
 use std::{
     any::TypeId,
     collections::{HashMap, HashSet},
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
     path::Path,
     ptr::NonNull,
@@ -16,10 +17,6 @@ use super::{
     sft_gpu::VoxelModelSFTGpu,
     thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
     voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl, VoxelModelImplMethods},
-};
-use crate::entity::{
-    RenderableVoxelEntity,
-    ecs_world::{ECSWorld, Entity},
 };
 use crate::event::{EventReader, Events};
 use crate::resource::{Res, ResMut};
@@ -37,6 +34,13 @@ use crate::{
         freelist::{FreeList, FreeListHandle},
     },
     voxel::rvox_asset::RVOXAsset,
+};
+use crate::{
+    entity::{
+        RenderableVoxelEntity,
+        ecs_world::{ECSWorld, Entity},
+    },
+    voxel::voxel::VoxelModelEdit,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -88,15 +92,8 @@ pub struct VoxelModelTypeInfo {
     model_type_info: TypeInfoCloneable,
 }
 
-// TODO: Follow pattern of collider registry and ecs where we get concrete type info and remove
-// VoxelModelType.
 #[derive(Resource)]
 pub struct VoxelModelRegistry {
-    /// Each archetype is (VoxelModel<T>, VoxelModelGpu<T::Gpu>).
-    /// The key is the (TypeId::of::<T>()) and the value is (Archetype, TypeId::of::<T::Gpu>())
-    //renderable_voxel_model_archtypes: HashMap<TypeId, (Archetype, TypeId)>,
-    ///// Each archetype is (VoxelModel<T>)
-    //standalone_voxel_model_archtypes: HashMap<TypeId, Archetype>,
     pub voxel_model_types: HashMap<TypeId, VoxelModelTypeInfo>,
     pub voxel_model_type_names: HashMap<String, TypeId>,
     pub voxel_model_data: HashMap<TypeId, DynVec>,
@@ -106,10 +103,8 @@ pub struct VoxelModelRegistry {
     /// Essentially allows for caching and reuse of model data between entities.
     pub static_asset_models: HashMap<GameAssetPath, VoxelModelId>,
     loading_static_model_handles: HashMap<GameAssetPath, AssetHandle>,
+    failed_loading_paths: HashSet<GameAssetPath>,
     to_load_static_asset_models: HashSet<GameAssetPath>,
-    ///// Non-terrain voxel models that need their normals updated.
-    //pub to_update_model_normals: Vec<VoxelModelId>,
-    //
 }
 
 impl VoxelModelRegistry {
@@ -122,6 +117,7 @@ impl VoxelModelRegistry {
 
             static_asset_models: HashMap::new(),
             loading_static_model_handles: HashMap::new(),
+            failed_loading_paths: HashSet::new(),
             to_load_static_asset_models: HashSet::new(),
         };
 
@@ -134,6 +130,19 @@ impl VoxelModelRegistry {
 
     pub fn get_asset_model_id(&self, asset_path: &GameAssetPath) -> Option<VoxelModelId> {
         self.static_asset_models.get(asset_path).cloned()
+    }
+
+    pub fn update_static_asset_model(
+        &mut self,
+        asset_path: &GameAssetPath,
+        reference_model: VoxelModelId,
+    ) {
+        if let Some(existing_model) = self.static_asset_models.get(asset_path) {
+            let reference_model_copy = self
+                .get_model::<VoxelModelSFTCompressed>(reference_model)
+                .clone();
+            *self.get_model_mut::<VoxelModelSFTCompressed>(*existing_model) = reference_model_copy;
+        }
     }
 
     pub fn get_model_asset_path(&self, voxel_model_id: VoxelModelId) -> Option<GameAssetPath> {
@@ -183,21 +192,6 @@ impl VoxelModelRegistry {
         );
     }
 
-    //pub fn set_voxel_model_asset_path(
-    //    &mut self,
-    //    voxel_model_id: VoxelModelId,
-    //    asset_path: Option<AssetPath>,
-    //) {
-    //    self.voxel_model_info
-    //        .get_mut(voxel_model_id.handle)
-    //        .unwrap()
-    //        .asset_path = asset_path;
-    //}
-
-    //pub fn peek_next_id(&self) -> VoxelModelId {
-    //    VoxelModelId::new(self.voxel_model_info.next_free_handle())
-    //}
-
     pub fn flush_out_events(
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut events: ResMut<Events>,
@@ -220,7 +214,9 @@ impl VoxelModelRegistry {
             !self.static_asset_models.contains_key(asset_path),
             "Should check if the asset model is loaded already."
         );
-        if self.loading_static_model_handles.contains_key(asset_path) {
+        if self.loading_static_model_handles.contains_key(asset_path)
+            || self.failed_loading_paths.contains(asset_path)
+        {
             return;
         }
         self.to_load_static_asset_models.insert(asset_path.clone());
@@ -306,12 +302,24 @@ impl VoxelModelRegistry {
                     log::debug!("Loaded static model {}.", asset_path.asset_path);
                 }
                 AssetStatus::NotFound => {
+                    voxel_registry
+                        .loading_static_model_handles
+                        .remove(asset_path);
+                    voxel_registry
+                        .failed_loading_paths
+                        .insert(asset_path.clone());
                     log::error!(
-                        "Tried loading renderable asset at {} but it is not found.",
+                        "Could not load renderable asset at {}, it doesn't exist.",
                         asset_path.asset_path
                     );
                 }
                 AssetStatus::Error(error) => {
+                    voxel_registry
+                        .loading_static_model_handles
+                        .remove(asset_path);
+                    voxel_registry
+                        .failed_loading_paths
+                        .insert(asset_path.clone());
                     log::error!(
                         "Error while loading renderable asset at {}: {}",
                         asset_path.asset_path,
@@ -427,148 +435,44 @@ impl VoxelModelRegistry {
         return unsafe { std::mem::transmute((data_ptr, vtable_ptr)) };
     }
 
-    //pub fn renderable_models_dyn_iter(&self) -> RenderableVoxelModelIter<'_> {
-    //    let archetype_iters = self
-    //        .renderable_voxel_model_archtypes
-    //        .iter()
-    //        .map(|(type_id, (archetype, gpu_type_id))| {
-    //            (
-    //                *self.type_vtables.get(type_id).unwrap(),
-    //                *self.type_vtables.get(gpu_type_id).unwrap(),
-    //                archetype.iter(),
-    //            )
-    //        })
-    //        .collect();
-    //    RenderableVoxelModelIter {
-    //        archetype_iters,
-    //        current_archetype_index: 0,
-    //    }
-    //}
-
-    //pub fn renderable_models_dyn_iter_mut(&mut self) -> RenderableVoxelModelIterMut<'_> {
-    //    let archetype_iters_mut = self
-    //        .renderable_voxel_model_archtypes
-    //        .iter_mut()
-    //        .map(|(type_id, (archetype, gpu_type_id))| {
-    //            (
-    //                *self.type_vtables.get(type_id).unwrap(),
-    //                *self.type_vtables.get(gpu_type_id).unwrap(),
-    //                archetype.iter_mut(),
-    //            )
-    //        })
-    //        .collect();
-    //    RenderableVoxelModelIterMut {
-    //        archetype_iters_mut,
-    //        current_archetype_index: 0,
-    //    }
-    //}
-}
-
-pub struct RenderableVoxelModelIter<'a> {
-    archetype_iters: Vec<(*mut (), *mut (), ArchetypeIter<'a>)>,
-    current_archetype_index: usize,
-}
-
-impl<'a> std::iter::Iterator for RenderableVoxelModelIter<'a> {
-    type Item = (
-        VoxelModelId,
-        (
-            &'a dyn VoxelModelImplMethods,
-            &'a dyn VoxelModelGpuImplMethods,
-        ),
-    );
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_archetype_index >= self.archetype_iters.len() {
-            return None;
+    pub fn get_dyn_model_mut_disjoint<'a, const N: usize>(
+        &'a mut self,
+        ids: [VoxelModelId; N],
+    ) -> [&'a mut dyn VoxelModelImplMethods; N] {
+        let mut unique_ids = HashSet::new();
+        for id in &ids {
+            let new_entry = unique_ids.insert(id);
+            assert!(
+                new_entry,
+                "Id {:?} is not unique and ids must be disjoint",
+                ids
+            );
         }
 
-        let (curr_model_vtable, curr_model_gpu_vtable, current_archetype) = self
-            .archetype_iters
-            .get_mut(self.current_archetype_index)
-            .unwrap();
-
-        let Some((global_id, ptrs)) = current_archetype.next().or_else(|| None) else {
-            self.current_archetype_index += 1;
-            return self.next();
-        };
-
-        let voxel_model_ref = {
-            let fat_ptr = (ptrs[0].1, *curr_model_vtable);
-            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelImplMethods;
-
-            // TODO: Write why this is safe.
-            unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
-        };
-
-        let voxel_model_gpu_ref = {
-            let fat_ptr = (ptrs[1].1, *curr_model_gpu_vtable);
-            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *const &dyn VoxelModelGpuImplMethods;
-
-            // TODO: Write why this is safe.
-            unsafe { dyn_ptr_ptr.as_ref().unwrap().deref() }
-        };
-
-        Some((
-            VoxelModelId {
-                handle: global_id.as_typed(),
-            },
-            (voxel_model_ref, voxel_model_gpu_ref),
-        ))
-    }
-}
-
-pub struct RenderableVoxelModelIterMut<'a> {
-    archetype_iters_mut: Vec<(*mut (), *mut (), ArchetypeIterMut<'a>)>,
-    current_archetype_index: usize,
-}
-
-impl<'a> std::iter::Iterator for RenderableVoxelModelIterMut<'a> {
-    type Item = (
-        VoxelModelId,
-        (
-            &'a mut dyn VoxelModelImplMethods,
-            &'a mut dyn VoxelModelGpuImplMethods,
-        ),
-    );
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current_archetype_index >= self.archetype_iters_mut.len() {
-            return None;
+        let mut dyn_refs = [const { MaybeUninit::uninit() }; N];
+        for i in 0..N {
+            let id = &ids[i];
+            let info = self
+                .voxel_model_info
+                .get(id.handle)
+                .expect("Given id doesn't exist.");
+            let data = self
+                .voxel_model_data
+                .get_mut(&info.model_type_id)
+                .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+            // Safety: We assert the ids are disjoint.
+            let data_ptr =
+                unsafe { data.get_mut_bytes(info.index as usize) }.as_mut_ptr() as *mut u8;
+            let vtable_ptr = self
+                .voxel_model_types
+                .get(&info.model_type_id)
+                .expect("Type should exist")
+                .model_impl_vtable;
+            // Safety: Dyn ref is just a fat pointer with ptr to data and ptr to the vtable.
+            dyn_refs[i] = unsafe { std::mem::transmute((data_ptr, vtable_ptr)) };
         }
 
-        let (curr_model_vtable, curr_model_gpu_vtable, current_archetype) = self
-            .archetype_iters_mut
-            .get_mut(self.current_archetype_index)
-            .unwrap();
-
-        let Some((global_id, ptrs)) = current_archetype.next().or_else(|| None) else {
-            self.current_archetype_index += 1;
-            return self.next();
-        };
-
-        let voxel_model_ref = {
-            let fat_ptr = (ptrs[0].1, *curr_model_vtable);
-            let dyn_ptr_ptr = std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelImplMethods;
-
-            // TODO: Write why this is safe.
-            unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }
-        };
-
-        let voxel_model_gpu_ref = {
-            let fat_ptr = (ptrs[1].1, *curr_model_gpu_vtable);
-            let mut dyn_ptr_ptr =
-                std::ptr::from_ref(&fat_ptr) as *mut &mut dyn VoxelModelGpuImplMethods;
-
-            // TODO: Write why this is safe.
-            unsafe { dyn_ptr_ptr.as_mut().unwrap().deref_mut() }
-        };
-
-        Some((
-            VoxelModelId {
-                handle: global_id.as_typed(),
-            },
-            (voxel_model_ref, voxel_model_gpu_ref),
-        ))
+        // Safety: We iterate and populdate each element 0..N.
+        return dyn_refs.map(|dyn_ref| unsafe { dyn_ref.assume_init() });
     }
 }

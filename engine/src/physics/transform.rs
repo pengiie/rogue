@@ -8,7 +8,7 @@ use crate::common::geometry::obb::OBB;
 use crate::common::geometry::ray::Ray;
 use crate::consts;
 /// Transform relative to the world-space or parent transform if one exists.
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[game_component(name = "Transform", constructible = false)]
 pub struct Transform {
     pub position: Vector3<f32>,
@@ -35,9 +35,9 @@ impl Transform {
 
     pub fn as_relative_transform(&self, parent_transform: &Transform) -> Self {
         // Rotate into the parent transforms reference frame.
-        let rot_position = parent_transform.rotation.inverse() * self.position;
-        let local_position =
-            (rot_position - parent_transform.position).component_mul(&parent_transform.scale);
+        let local_position = (parent_transform.rotation.inverse()
+            * (self.position - parent_transform.position))
+            .component_div(&parent_transform.scale);
         let local_rot = parent_transform.rotation.inverse() * self.rotation;
         let local_scale = self.scale.component_div(&parent_transform.scale);
         Self {

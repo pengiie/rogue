@@ -158,15 +158,6 @@ impl VoxelBakerGpu {
                         let model_ptr_gpu = voxel_registry_gpu
                             .get_model_gpu_ptr(&model_id)
                             .expect("Voxel model gpu ptr should exist if baking.");
-                        log::info!(
-                            "Baking model {:?} ptr {} with volume {} ({}x{}x{})",
-                            model_id,
-                            model_ptr_gpu,
-                            bake_volume,
-                            bake_request.size.x,
-                            bake_request.size.y,
-                            bake_request.size.z
-                        );
                         compute_pass.bind_uniforms(&mut |writer| {
                             writer.use_set_cache("u_frame", Renderer::SET_CACHE_SLOT_FRAME);
                             writer.write_uniform::<u32>("u_shader.model_ptr", model_ptr_gpu);

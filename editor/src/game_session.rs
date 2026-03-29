@@ -6,6 +6,7 @@ use rogue_engine::{
     },
     event::{EventReader, Events},
     graphics::camera::MainCamera,
+    input::Input,
     physics::physics_world::PhysicsWorld,
     resource::{Res, ResMut, ResourceBank},
     voxel::voxel_registry::VoxelModelRegistry,
@@ -82,7 +83,7 @@ impl EditorGameSession {
         match new_game_state {
             SessionGameState::Playing => {
                 if game_session.game_state == SessionGameState::Paused {
-                    game_session.resume_game(&mut physics_world);
+                    game_session.resume_game(&mut physics_world, &mut ecs_world);
                 } else {
                     game_session.start_game(
                         &mut ecs_world,
@@ -120,9 +121,10 @@ impl EditorGameSession {
         self.game_state != SessionGameState::Stopped
     }
 
-    pub fn resume_game(&mut self, physics_world: &mut PhysicsWorld) {
+    pub fn resume_game(&mut self, physics_world: &mut PhysicsWorld, ecs_world: &mut ECSWorld) {
         assert_eq!(self.game_state, SessionGameState::Paused);
         physics_world.do_dynamics = true;
+        PhysicsWorld::sync_transforms(ecs_world);
     }
 
     pub fn start_game(
@@ -142,6 +144,7 @@ impl EditorGameSession {
         main_camera.set_camera(self.game_camera.clone().unwrap(), "game_camera");
 
         physics_world.do_dynamics = true;
+        PhysicsWorld::sync_transforms(ecs_world);
     }
 
     pub fn pause_game(&mut self, physics_world: &mut PhysicsWorld) {
@@ -173,15 +176,38 @@ impl EditorGameSession {
             return;
         }
 
+        // Block all inputs to the game logic if we are not focused on the game.
+        let editor_camera_focused = rb
+            .get_resource::<EditorSession>()
+            .is_editor_camera_focused();
+        {
+            rb.get_resource_mut::<Input>().input_block = editor_camera_focused;
+        }
         rogue_game::on_update(rb);
+        {
+            rb.get_resource_mut::<Input>().input_block = false;
+        }
     }
 
     pub fn try_run_game_on_fixed_update(rb: &ResourceBank) {
         let game_state = rb.get_resource::<EditorGameSession>().game_state;
+        let editor_camera_focused = rb
+            .get_resource::<EditorSession>()
+            .is_editor_camera_focused();
         if game_state != SessionGameState::Playing {
             return;
         }
 
-        rogue_game::on_update(rb);
+        // Block all inputs to the game logic if we are not focused on the game.
+        let editor_camera_focused = rb
+            .get_resource::<EditorSession>()
+            .is_editor_camera_focused();
+        {
+            rb.get_resource_mut::<Input>().input_block = editor_camera_focused;
+        }
+        rogue_game::on_fixed_update(rb);
+        {
+            rb.get_resource_mut::<Input>().input_block = false;
+        }
     }
 }

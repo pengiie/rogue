@@ -37,7 +37,11 @@ void main(uint id: SV_DispatchThreadID) {
     return;
   }
 
-  let normal = calculate_normal(world_voxel_pos, chunk_voxel_length);
+  var normal = calculate_normal(world_voxel_pos, chunk_voxel_length);
+  // Dither since bands where the normals are very flat look bad.
+  // Each voxel gets its own unique dither.
+  random::init(world_voxel_pos);
+  normal = normalize(dither(normal, exp2(-8.0)));
   var bmat_data: voxel::BakedVoxelMaterial;
   if (mat_comp.needs_material_baking()) {
     let mat = MaterialBank.get_material(mat_comp.b & 0xFFFF);
@@ -52,18 +56,14 @@ void main(uint id: SV_DispatchThreadID) {
 float3 calculate_normal(int3 world_voxel_pos, int voxel_length) {
   float3 normal = float3(0.0, 0.0, 0.0);
   const int RADIUS = 2;
-  [unroll]
   for (int x = -RADIUS; x <= RADIUS; x++) {
-    [unroll]
     for (int y = -RADIUS; y <= RADIUS; y++) {
-      [unroll]
       for (int z = -RADIUS; z <= RADIUS; z++) {
         if (x == 0 && y == 0 && z == 0) {
           continue;
         }
         int3 offset = int3(x, y, z) * voxel_length;
         int3 sample_pos = world_voxel_pos + offset;
-        // TODO: for some reason the normals are cooked on some surfaces idk why.
         bool voxel_exists = voxel::Terrain.get().is_voxel_present(sample_pos);
         if (!voxel_exists) {
           normal += (float3) offset;

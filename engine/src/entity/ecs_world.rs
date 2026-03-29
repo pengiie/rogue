@@ -811,6 +811,20 @@ impl ECSWorld {
         return new_entity_id;
     }
 
+    pub fn has_parent(&mut self, child: Entity, parent: Entity) -> bool {
+        let parent_to_check = parent;
+        let mut curr_parent = self.get::<&EntityParent>(child);
+        while let Ok(parent) = curr_parent {
+            let parent = parent.parent();
+            if parent == parent_to_check {
+                return true;
+            }
+            curr_parent = self.get::<&EntityParent>(parent);
+        }
+
+        return false;
+    }
+
     // modify_transform should be true if you expect the child entity to stay in the same position
     // in world space, this will modify the child's transform to be positioned correctly relative to
     // the parent's transform.
@@ -821,7 +835,10 @@ impl ECSWorld {
             "Should not set entity parent as itself."
         );
         if let Some(new_parent) = parent {
-            let mut old_parent = self.get::<&mut EntityParent>(entity);
+            assert!(
+                !self.has_parent(new_parent, entity),
+                "Tried to set entity's parent to one of its children which is not allowed."
+            );
             let old_world_transform = (modify_transform)
                 .then(|| {
                     self.get::<&Transform>(entity)
@@ -829,6 +846,7 @@ impl ECSWorld {
                         .map(|transform| self.get_world_transform(entity, &transform))
                 })
                 .flatten();
+            let mut old_parent = self.get::<&mut EntityParent>(entity);
             if let Ok(ref mut parent_component) = old_parent {
                 let last_parent = parent_component.parent();
                 if last_parent == new_parent {
@@ -946,6 +964,25 @@ impl ECSWorld {
         let archetype = &mut self.archetypes[entity_info.archetype_ptr];
         archetype.remove(entity_info.index);
         self.entities.remove(entity);
+    }
+
+    /// Converts the world transform to the proper local transform according to this entities parent.
+    /// If this entity doesn't have a parent then local_transform == world_transform.
+    pub fn get_world_to_local_transform(
+        &self,
+        entity: Entity,
+        entity_world_transform: &Transform,
+    ) -> Transform {
+        let mut curr_transform = Transform::new();
+
+        if let Ok(parent) = self.get::<&EntityParent>(entity)
+            && let Ok(parent_transform) = self.get::<&Transform>(parent.parent())
+        {
+            let parent_world_transform =
+                self.get_world_transform(parent.parent(), &parent_transform);
+            return entity_world_transform.as_relative_transform(&parent_world_transform);
+        }
+        return entity_world_transform.clone();
     }
 
     pub fn get_world_transform(

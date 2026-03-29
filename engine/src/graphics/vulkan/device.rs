@@ -1146,7 +1146,7 @@ impl GraphicsBackendDevice for VulkanDevice {
             .create_info
             .image_extent(new_extent)
             .old_swapchain(swapchain.swapchain);
-        log::info!(
+        log::debug!(
             "Resizing swapchain with image format {:?}",
             new_swapchain_create_info.image_format
         );

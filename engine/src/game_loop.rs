@@ -35,13 +35,6 @@ pub fn game_loop(app: &App) {
     // Run any queued up asset tasks and update finished tasks.
     app.run_system(Assets::update);
 
-    // ------- APP-DEFINED UPDATE SYSTEMS ------
-    if let Some(systems) = app.systems(AppStage::Update) {
-        for system in systems {
-            system.run(app.resource_bank());
-        }
-    }
-
     // -------- PHYSICS ----------
     // Do fixed-timestep physics updates for stability.
     let physics_updates = app
@@ -60,6 +53,14 @@ pub fn game_loop(app: &App) {
         // Integrate velocities, mark collisions, and do collision resolution.
         app.run_system(PhysicsWorld::do_physics_update);
         app.run_system(PhysicsWorld::end_time_step);
+    }
+    app.run_system(PhysicsWorld::do_transform_interpolation);
+
+    // ------- APP-DEFINED UPDATE SYSTEMS ------
+    if let Some(systems) = app.systems(AppStage::Update) {
+        for system in systems {
+            system.run(app.resource_bank());
+        }
     }
 
     // ------- ENTITIES ----------

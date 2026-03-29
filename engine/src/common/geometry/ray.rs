@@ -27,6 +27,42 @@ impl Ray {
         self.origin = self.origin + self.dir * t;
     }
 
+    pub fn intersect_tri(
+        &self,
+        v0: Vector3<f32>,
+        v1: Vector3<f32>,
+        v2: Vector3<f32>,
+    ) -> Option<f32> {
+        // W scratchapixel
+        // https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/moller-trumbore-ray-triangle-intersection.html
+        let b = v1 - v0;
+        let c = v2 - v0;
+        let d = self.dir;
+        let p = d.cross(&c);
+        let det = p.dot(&b);
+        // Culls backfaces and handles parallel case.
+        if det < 0.00001 {
+            return None;
+        }
+
+        let origin = self.origin;
+        let a = origin - v0;
+
+        let q = a.cross(&b);
+        let inv_det = 1.0 / det;
+
+        let u = inv_det * p.dot(&a);
+        if (u < 0.0 || u > 1.0) {
+            return None;
+        };
+        let v = inv_det * q.dot(&d);
+        if (v < 0.0 || u + v > 1.0) {
+            return None;
+        };
+        let t = inv_det * q.dot(&d);
+        return Some(t);
+    }
+
     fn sdf_ring(
         pos: Vector3<f32>,
         center: Vector3<f32>,

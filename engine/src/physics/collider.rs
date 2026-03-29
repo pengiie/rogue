@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 
-use crate::common::color::Color;
+use crate::common::color::{Color, ColorSrgba};
 use crate::common::geometry::aabb::AABB;
 use crate::debug::debug_renderer::DebugRenderer;
 use crate::entity::ecs_world::Entity;
@@ -201,7 +201,7 @@ pub trait Collider: Clone + 'static {
         &self,
         world_transform: &Transform,
         debug_renderer: &mut DebugRenderer,
-        coloring: ColliderDebugColoring,
+        coloring: ColorSrgba,
     ) {
     }
     fn collider_component_ui(&mut self, ui: &mut egui::Ui) {
@@ -229,7 +229,7 @@ pub trait ColliderMethods: downcast::Any {
         &self,
         world_transform: &Transform,
         debug_renderer: &mut DebugRenderer,
-        coloring: ColliderDebugColoring,
+        color: ColorSrgba,
     );
     fn collider_component_ui(&mut self, ui: &mut egui::Ui);
 }
@@ -254,7 +254,7 @@ impl<T: Collider> ColliderMethods for T {
         &self,
         world_transform: &Transform,
         debug_renderer: &mut DebugRenderer,
-        coloring: ColliderDebugColoring,
+        coloring: ColorSrgba,
     ) {
         Collider::render_debug(self, world_transform, debug_renderer, coloring);
     }

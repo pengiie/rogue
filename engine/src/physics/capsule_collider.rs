@@ -1,9 +1,9 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::transform::Transform;
-use crate::common::color::Color;
+use crate::common::color::{Color, ColorSrgba};
 use crate::common::geometry::aabb::AABB;
-use crate::debug::debug_renderer::DebugRenderer;
+use crate::debug::debug_renderer::{DebugRenderer, DebugShapeFlags};
 use crate::physics::collider::{ColliderDebugColoring, ContactManifold};
 use crate::physics::collider_voxel_registry::VoxelColliderRegistry;
 use crate::physics::{box_collider::BoxCollider, collider::Collider};
@@ -23,7 +23,7 @@ impl CapsuleCollider {
             center: Vector3::zeros(),
             orientation: UnitQuaternion::identity(),
             radius: 1.0,
-            half_height: 2.0,
+            half_height: 0.5,
         }
     }
 
@@ -32,18 +32,6 @@ impl CapsuleCollider {
         let bottom = self.center + self.orientation * -up;
         let top = self.center + self.orientation * up;
         return (bottom, top);
-    }
-
-    pub fn render_debug(&self, world_transform: &Transform, debug_renderer: &mut DebugRenderer) {
-        //debug_renderer.draw_capsule(DebugCapsule {
-        //    center: self.center + world_transform.position,
-        //    orientation: self.orientation * world_transform.rotation,
-        //    radius: self.radius,
-        //    height: self.half_height,
-        //    color: Color::new_srgb(0.7, 0.1, 0.3),
-        //    alpha: 0.3,
-        //    flags: DebugFlags::SHADING,
-        //});
     }
 }
 
@@ -59,25 +47,48 @@ impl Collider for CapsuleCollider {
         return Some(AABB::new_two_point(min, max));
     }
 
+    fn collider_component_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::egui::util::{position_ui, rotation_ui};
+        position_ui(ui, &mut self.center);
+        rotation_ui(ui, &mut self.orientation);
+        ui.horizontal(|ui| {
+            ui.label("Radius:");
+            ui.add(
+                egui::DragValue::new(&mut self.radius)
+                    .suffix(" m")
+                    .speed(0.01)
+                    .fixed_decimals(2),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Height:");
+            let mut height = self.half_height * 2.0;
+            ui.add(
+                egui::DragValue::new(&mut height)
+                    .suffix(" m")
+                    .speed(0.01)
+                    .fixed_decimals(2),
+            );
+            self.half_height = height * 0.5;
+        });
+    }
+
     fn render_debug(
         &self,
         world_transform: &Transform,
         debug_renderer: &mut DebugRenderer,
-        coloring: ColliderDebugColoring,
+        color: ColorSrgba,
     ) {
-        //let (mut bottom, mut top) = self.bottom_top_points();
-        //let matrix = world_transform.to_transformation_matrix();
-        //bottom = matrix.transform_vector(&bottom);
-        //top = matrix.transform_vector(&top);
-
-        //debug_renderer.draw_line(DebugLine {
-        //    start: bottom,
-        //    end: top,
-        //    thickness: self.radius,
-        //    color: coloring.color(),
-        //    alpha: 0.8,
-        //    flags: DebugFlags::NONE,
-        //});
+        debug_renderer.draw_capsule(
+            nalgebra::Isometry::from_parts(
+                (world_transform.position + self.center).into(),
+                world_transform.rotation * self.orientation,
+            ),
+            self.radius,
+            self.half_height * 2.0,
+            color,
+            DebugShapeFlags::NONE,
+        );
     }
 
     fn serialize_collider(

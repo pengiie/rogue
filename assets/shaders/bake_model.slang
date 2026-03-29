@@ -34,7 +34,10 @@ void main(uint id: SV_DispatchThreadID) {
     return;
   }
 
-  let normal = calculate_normal((int3) local_voxel_pos, model_ptr);
+  random::init(uint3(local_voxel_pos));
+  var normal = calculate_normal((int3) local_voxel_pos, model_ptr);
+  // Dither since bands where the normals are very flat look bad.
+  normal = normalize(dither(normal, exp2(-7.0)));
   var bmat_data: voxel::BakedVoxelMaterial;
   if (mat_comp.needs_material_baking()) {
     let mat = MaterialBank.get_material(mat_comp.b & 0xFFFF);

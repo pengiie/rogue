@@ -36,6 +36,22 @@ impl Default for RigidBodyType {
     }
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    strum_macros::Display,
+    strum_macros::VariantArray,
+)]
+pub enum RigidBodyPositionInterpolation {
+    None,
+    Interpolate,
+}
+
 /// Serializable type for the RigidBody component.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -47,6 +63,7 @@ pub struct RigidBodyCreateInfo {
     // Friction coefficient 0.0-1.0.
     pub friction: f32,
     pub locked_rotational_axes: Vector3<bool>,
+    pub interpolation: RigidBodyPositionInterpolation,
 }
 
 impl Default for RigidBodyCreateInfo {
@@ -57,6 +74,7 @@ impl Default for RigidBodyCreateInfo {
             restitution: 0.5,
             friction: 0.7,
             locked_rotational_axes: Vector3::new(false, false, false),
+            interpolation: RigidBodyPositionInterpolation::None,
         }
     }
 }
@@ -81,6 +99,11 @@ pub struct RigidBody {
     /// Used for deriving velocities from transform changes.
     last_position: Vector3<f32>,
     last_rotation: UnitQuaternion<f32>,
+    /// Authoritative position/rotation for the transform the rigid body is attached to.
+    position: Vector3<f32>,
+    rotation: UnitQuaternion<f32>,
+    needs_transform_init: bool,
+    pub interpolation: RigidBodyPositionInterpolation,
 
     pub velocity: Vector3<f32>,
     // Axis angle with length representing ccw-speed in radians per second.
@@ -115,6 +138,11 @@ impl RigidBody {
         Self {
             last_position: Vector3::zeros(),
             last_rotation: UnitQuaternion::identity(),
+            position: Vector3::zeros(),
+            rotation: UnitQuaternion::identity(),
+            needs_transform_init: true,
+            interpolation: create_info.interpolation,
+
             velocity: Vector3::zeros(),
             angular_velocity: Vector3::zeros(),
             force: Vector3::zeros(),
@@ -139,7 +167,37 @@ impl RigidBody {
             restitution: 0.5,
             friction: 0.7,
             locked_rotational_axes: Vector3::new(false, false, false),
+            interpolation: RigidBodyPositionInterpolation::None,
         })
+    }
+
+    pub fn sync_transform(&mut self, transform: &Transform) {
+        self.position = transform.position;
+        self.rotation = transform.rotation;
+        self.last_position = transform.position;
+        self.last_rotation = transform.rotation;
+    }
+
+    pub fn try_init_transform(&mut self, transform: &Transform) {
+        if !self.needs_transform_init {
+            return;
+        }
+        self.sync_transform(transform);
+        self.needs_transform_init = false;
+    }
+
+    /// Applies the rigid body's position and rotation to the transform depending on interpolation.
+    pub fn apply_to_transform(&self, transform: &mut Transform, t: f32) {
+        match self.interpolation {
+            RigidBodyPositionInterpolation::None => {
+                transform.position = self.position;
+                transform.rotation = self.rotation;
+            }
+            RigidBodyPositionInterpolation::Interpolate => {
+                transform.position = self.last_position.lerp(&self.position, t);
+                transform.rotation = self.last_rotation.nlerp(&self.rotation, t);
+            }
+        }
     }
 
     pub fn kinetic_energy(&self) -> f32 {
@@ -153,6 +211,7 @@ impl RigidBody {
             restitution: self.restitution,
             friction: self.friction,
             locked_rotational_axes: self.locked_rotational_axes,
+            interpolation: self.interpolation,
         }
     }
 
@@ -246,20 +305,20 @@ impl RigidBody {
         }
     }
 
-    pub fn integrate_velocities(&mut self, timestep: Duration, transform: &mut Transform) {
-        transform.position += self.velocity * timestep.as_secs_f32();
+    pub fn integrate_velocities(&mut self, timestep: Duration) {
+        self.position += self.velocity * timestep.as_secs_f32();
 
         // Apply angular velocity.
         let delta_angular_velocity = self.angular_velocity * timestep.as_secs_f32();
         if delta_angular_velocity.norm_squared() != 0.0 {
             // Order of quaternion multiplication matters here.
-            transform.rotation =
-                UnitQuaternion::from_scaled_axis(delta_angular_velocity) * transform.rotation;
+            self.rotation =
+                UnitQuaternion::from_scaled_axis(delta_angular_velocity) * self.rotation;
         }
     }
 
     /// Calculate velocity from any forces applied.
-    pub fn integrate_forces(&mut self, timestep: Duration, transform: &mut Transform) {
+    pub fn integrate_forces(&mut self, timestep: Duration) {
         let forces = self.impulse_force + self.force * timestep.as_secs_f32();
         self.impulse_force = Vector3::zeros();
         self.force = Vector3::zeros();
@@ -276,21 +335,24 @@ impl RigidBody {
         });
     }
 
-    pub fn recalculate_world_inertia_tensor(&mut self, transform: &mut Transform) {
-        let rot_matrix = transform.rotation.to_rotation_matrix();
+    pub fn recalculate_world_inertia_tensor(&mut self) {
+        let rot_matrix = self.rotation.to_rotation_matrix();
         self.inv_inertia_world = rot_matrix * self.inv_inertia * rot_matrix.matrix().transpose();
     }
 
     // Calculate velocity from the change in position over the timestep.
-    pub fn derive_forces(&mut self, timestep: Duration, transform: &mut Transform) {
-        let delta_position = transform.position - self.last_position;
+    pub fn derive_forces(&mut self, timestep: Duration) {
+        let delta_position = self.position - self.last_position;
         self.velocity = delta_position / timestep.as_secs_f32();
 
-        let delta_rotation = transform.rotation * self.last_rotation.inverse();
+        let delta_rotation = self.rotation * self.last_rotation.inverse();
         let axis_angle = delta_rotation.scaled_axis();
         self.angular_velocity = axis_angle / timestep.as_secs_f32();
+    }
 
-        self.last_position = transform.position;
-        self.last_rotation = transform.rotation;
+    /// Sets the last position and rotation to the current ones.
+    pub fn update_last_position_rotation(&mut self) {
+        self.last_position = self.position;
+        self.last_rotation = self.rotation;
     }
 }

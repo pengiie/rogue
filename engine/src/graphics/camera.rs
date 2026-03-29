@@ -71,8 +71,8 @@ impl Camera {
         let mut mat = Matrix4::<f32>::identity();
         mat.m11 = 1.0 / (aspect_ratio);
         mat.m22 = 1.0;
-        mat.m33 = -self.far_plane / (self.far_plane - self.near_plane);
-        mat.m43 = -1.0;
+        mat.m33 = self.far_plane / (self.far_plane - self.near_plane);
+        mat.m43 = 1.0;
         mat.m34 = (-self.far_plane * self.near_plane) / (self.far_plane - self.near_plane);
         mat.m44 = 0.0;
         mat
@@ -89,7 +89,7 @@ impl Camera {
     pub fn create_ray(&self, transform: &Transform, uv: Vector2<f32>, aspect_ratio: f32) -> Ray {
         let ndc = Vector2::new(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
         let scaled_ndc = Vector2::new(ndc.x * aspect_ratio, ndc.y) * (self.fov / 2.0).tan();
-        let dir = Vector3::new(scaled_ndc.x, scaled_ndc.y, -1.0).normalize();
+        let dir = Vector3::new(scaled_ndc.x, scaled_ndc.y, 1.0).normalize();
         Ray::new(
             transform.position,
             transform.rotation.transform_vector(&dir),

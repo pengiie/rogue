@@ -30,7 +30,7 @@ public struct EntityInfo {
         RayEntityTest test;
         test.did_hit = true;
         test.albedo = model_test.albedo;
-        test.normal = mul(entity_rotation, model_test.normal);
+        test.normal = mul(transpose(entity_rotation), model_test.normal);
         test.face_normal = model_test.face_normal;
         test.depth_t = model_test.ray_t;
         return test;
@@ -43,16 +43,16 @@ public struct EntityInfo {
 
 public struct RayEntityTest {
   public bool did_hit;
-  public float3 albedo;
+  public float4 albedo;
   public float3 normal;
   public float3 face_normal;
   public float depth_t;
 
   static RayEntityTest miss() {
-    return RayEntityTest(false, float3(0.0), 0.0);
+    return RayEntityTest(false, float4(0.0), 0.0);
   }
 
-  static RayEntityTest hit(float3 albedo, float3 normal, float depth_t) {
+  static RayEntityTest hit(float4 albedo, float3 normal, float depth_t) {
     return RayEntityTest(true, albedo, normal, depth_t);
   }
 }

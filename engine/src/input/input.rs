@@ -4,6 +4,7 @@ use rogue_macros::Resource;
 
 use crate::common::geometry::ray::Ray;
 use crate::consts;
+use crate::input::gamepad;
 use crate::physics::transform::Transform;
 use crate::resource::Res;
 use crate::resource::ResMut;
@@ -25,6 +26,23 @@ pub struct Input {
     mouse: Mouse,
     gamepad: Gamepad,
     keybinds: Keybinds,
+    pub input_block: bool,
+}
+
+macro_rules! return_if_input_block {
+    ($self:ident) => {
+        if $self.input_block {
+            return false;
+        }
+    };
+}
+
+macro_rules! return_if_input_block_vec2 {
+    ($self:ident) => {
+        if $self.input_block {
+            return Vector2::new(0.0, 0.0);
+        }
+    };
 }
 
 impl Input {
@@ -48,6 +66,7 @@ impl Input {
             mouse: Mouse::new(),
             gamepad: Gamepad::new(),
             keybinds,
+            input_block: false,
         }
     }
 
@@ -81,6 +100,7 @@ impl Input {
 
     // General Input
     pub fn movement_axes(&self) -> Vector2<f32> {
+        return_if_input_block_vec2!(self);
         if self.gamepad.left_axis().x.abs() >= self.gamepad.deadzone
             || self.gamepad.left_axis().y.abs() >= self.gamepad.deadzone
         {
@@ -105,6 +125,7 @@ impl Input {
     }
 
     pub fn is_action_pressed(&self, action: &str) -> bool {
+        return_if_input_block!(self);
         let key = *self
             .keybinds
             .pressed_key_mappings
@@ -114,6 +135,7 @@ impl Input {
     }
 
     pub fn did_action(&self, action: &str) -> bool {
+        return_if_input_block!(self);
         let key = *self
             .keybinds
             .pressed_key_mappings
@@ -122,12 +144,28 @@ impl Input {
         return self.is_key_pressed(key);
     }
 
-    pub fn is_controller_camera(&self) -> bool {
-        return self.gamepad.right_axis().x.abs() >= self.gamepad.deadzone
-            || self.gamepad.right_axis().y.abs() >= self.gamepad.deadzone;
+    pub fn is_controller_button_pressed(&self, button: gamepad::Button) -> bool {
+        return_if_input_block!(self);
+        return self.gamepad.is_button_pressed(button);
     }
 
+    pub fn is_controller_button_down(&self, button: gamepad::Button) -> bool {
+        return_if_input_block!(self);
+        return self.gamepad.is_button_down(button);
+    }
+
+    pub fn is_controller_button_released(&self, button: gamepad::Button) -> bool {
+        return_if_input_block!(self);
+        return self.gamepad.is_button_released(button);
+    }
+
+    pub fn is_controller_camera(&self) -> bool {
+        return_if_input_block!(self);
+        self.gamepad.right_axis().x.abs() >= self.gamepad.deadzone
+            || self.gamepad.right_axis().y.abs() >= self.gamepad.deadzone
+    }
     pub fn camera_axes(&self) -> Vector2<f32> {
+        return_if_input_block_vec2!(self);
         if self.is_controller_camera() {
             return *self.gamepad.right_axis();
         }
@@ -137,6 +175,7 @@ impl Input {
 
     // Keyboard functions
     pub fn is_key_pressed(&self, key: keyboard::Key) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_pressed(key)
     }
 
@@ -145,6 +184,7 @@ impl Input {
         key: keyboard::Key,
         modifiers: &[keyboard::Modifier],
     ) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_pressed_with_modifiers(key, modifiers)
     }
 
@@ -153,6 +193,7 @@ impl Input {
         key: keyboard::Key,
         modifiers: &[keyboard::Modifier],
     ) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_down_with_modifiers(key, modifiers)
     }
 
@@ -161,41 +202,50 @@ impl Input {
         key: keyboard::Key,
         modifiers: &[keyboard::Modifier],
     ) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_released_with_modifiers(key, modifiers)
     }
 
     pub fn is_key_down(&self, key: keyboard::Key) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_down(key)
     }
 
     /// Returns true if the key is being viewed as held by the OS.
     /// Mainly used for text input.
     pub fn is_key_repeat(&self, key: keyboard::Key) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_repeat(key)
     }
 
     pub fn is_key_released(&self, key: keyboard::Key) -> bool {
+        return_if_input_block!(self);
         self.keyboard.is_key_released(key)
     }
 
     // Mouse functions
     pub fn is_mouse_button_pressed(&self, button: mouse::Button) -> bool {
+        return_if_input_block!(self);
         self.mouse.is_mouse_button_pressed(button)
     }
 
     pub fn is_mouse_button_down(&self, button: mouse::Button) -> bool {
+        return_if_input_block!(self);
         self.mouse.is_mouse_button_down(button)
     }
 
     pub fn is_mouse_button_released(&self, button: mouse::Button) -> bool {
+        return_if_input_block!(self);
         self.mouse.is_mouse_button_released(button)
     }
 
     pub fn mouse_position(&self) -> Vector2<f32> {
+        return_if_input_block_vec2!(self);
         self.mouse.mouse_position()
     }
 
     pub fn mouse_delta(&self) -> Vector2<f32> {
+        return_if_input_block_vec2!(self);
         self.mouse.mouse_delta()
     }
 

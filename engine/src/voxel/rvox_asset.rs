@@ -15,6 +15,9 @@ use crate::{
 pub struct RVOXAsset {
     pub sft_compressed: VoxelModelSFTCompressed,
 }
+impl RVOXAsset {
+    const VERSION: u32 = 1;
+}
 
 impl AssetLoader for RVOXAsset {
     fn load(
@@ -31,10 +34,18 @@ impl AssetLoader for RVOXAsset {
             return Err(anyhow::anyhow!("Invalid RVOX header").into());
         }
 
-        let length = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let node_data_len = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
+        let mut cursor = 4;
+        let version = u32::from_le_bytes(buf[cursor..(cursor + 4)].try_into().unwrap());
+        if version != Self::VERSION {
+            return Err(anyhow::anyhow!("Unknown version {}", version).into());
+        }
+        cursor += 4;
+        let length = u32::from_le_bytes(buf[cursor..(cursor + 4)].try_into().unwrap());
+        cursor += 4;
+        let node_data_len =
+            u32::from_le_bytes(buf[cursor..(cursor + 4)].try_into().unwrap()) as usize;
+        cursor += 4;
         let mut node_data = Vec::with_capacity(node_data_len);
-        let mut cursor = 12;
         for i in 0..node_data_len {
             let child_ptr = u32::from_le_bytes(buf[cursor..(cursor + 4)].try_into().unwrap());
             cursor += 4;
@@ -102,6 +113,7 @@ impl AssetSaver for RVOXAsset {
     {
         let sft = &data.sft_compressed;
         let mut bytes = vec![b'R', b'V', b'O', b'X'];
+        bytes.extend_from_slice(&Self::VERSION.to_le_bytes());
         // Write side length.
         bytes.extend_from_slice(&sft.side_length.to_le_bytes());
 

@@ -39,25 +39,23 @@ public uint2 octahedral_normal_encode(float3 normal, uint bits_per_component) {
   normal /= (abs(normal.x) + abs(normal.y) + abs(normal.z));
   normal.xy = normal.z >= 0.0 ? normal.xy : octahedral_wrap(normal.xy);
   normal.xy = normal.xy * 0.5 + 0.5;
-  return (uint2) (normal.xy * 255.0);
+  return (uint2) (normal.xy * (float) ((1 << bits_per_component) - 1));
 }
 
 public float3 octahedral_normal_decode(uint2 compressed, uint bits_per_component) {
   var c = (float2) compressed;
-  //c /= (float) ((1 << bits_per_component) - 1);
-  c /= 255.0;
+  c /= (float) ((1 << bits_per_component) - 1);
   c = c * 2.0 - 1.0;
   
   float3 n = float3(c.x, c.y, 1.0 - abs(c.x) - abs(c.y));
   float t = max(-n.z, 0.0);
-  n.xy += select(n.xy > 0.0, -t, t);
+  n.xy += select(n.xy >= 0.0, -t, t);
   return normalize(n);
 }
 
 public struct BakedVoxelMaterial {
   // In srgb.
-  public float3 albedo = float3(0.0);
-  public float alpha = 1.0;
+  public float4 albedo = float4(0.0, 0.0, 0.0, 1.0);
   public float3 normal = float3(0.0);
 
   public CompressedVoxelMaterial encode() {
@@ -65,7 +63,7 @@ public struct BakedVoxelMaterial {
     let r = (uint) (this.albedo.r * 255.0);
     let g = (uint) (this.albedo.g * 255.0);
     let b = (uint) (this.albedo.b * 255.0);
-    let a = (uint) (this.alpha * 255.0);
+    let a = (uint) (this.albedo.a * 255.0);
     comp.b = (r << 24) | (g << 16) | (b << 8) | a;
     let normal_oct = octahedral_normal_encode(this.normal, /*bits_per_component*/8);
     comp.a = ((normal_oct.x & 0xFF) << 8) | (normal_oct.y & 0xFF);
@@ -75,12 +73,12 @@ public struct BakedVoxelMaterial {
   public static BakedVoxelMaterial decode(CompressedVoxelMaterial comp) {
     BakedVoxelMaterial mat;
     let rgba = comp.b;
-    mat.albedo = float3(
+    mat.albedo = float4(
       ((rgba >> 24) & 0xFF) / 255.0,
       ((rgba >> 16) & 0xFF) / 255.0,
       ((rgba >> 8) & 0xFF) / 255.0,
+      (rgba & 0xFF) / 255.0
     );
-    mat.alpha = (rgba & 0xFF) / 255.0;
     let normal_oct = uint2((comp.a >> 8) & 0xFF, comp.a & 0xFF);
     mat.normal = octahedral_normal_decode(normal_oct, /*bits_per_component*/8);
     return mat;

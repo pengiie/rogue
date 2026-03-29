@@ -70,7 +70,7 @@ impl EditorCameraController {
                         + transform.rotation.transform_vector(&Vector3::new(
                             0.0,
                             0.0,
-                            -self.distance,
+                            self.distance,
                         ));
                     window.set_cursor_lock(false);
                     window.set_cursor_position(window.inner_size_vec2().cast::<i32>() / 2);
@@ -86,9 +86,9 @@ impl EditorCameraController {
 
     fn update_fps(&mut self, transform: &mut Transform, input: &Input, time: &Time) {
         let mouse_delta = input.mouse_delta() * Self::SENS;
-        self.euler.x = (self.euler.x + mouse_delta.y)
+        self.euler.x = (self.euler.x - mouse_delta.y)
             .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
-        self.euler.y -= mouse_delta.x;
+        self.euler.y += mouse_delta.x;
 
         transform.rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.euler.y)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.euler.x);
@@ -97,7 +97,7 @@ impl EditorCameraController {
         let movement_axes = input.movement_axes();
         let y_rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.euler.y);
         let mut translation =
-            y_rotation.transform_vector(&Vector3::new(movement_axes.x, 0.0, -movement_axes.y));
+            y_rotation.transform_vector(&Vector3::new(movement_axes.x, 0.0, movement_axes.y));
         if input.is_key_down(Key::Space) {
             translation.y = 1.0;
         } else if input.is_key_down(Key::LShift) {
@@ -121,9 +121,9 @@ impl EditorCameraController {
 
         if input.is_mouse_button_down(mouse::Button::Right) {
             let delta = input.mouse_delta() * Self::SENS * 0.8;
-            self.euler.x = (self.euler.x + delta.y)
+            self.euler.x = (self.euler.x - delta.y)
                 .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
-            self.euler.y -= delta.x;
+            self.euler.y += delta.x;
         }
 
         let mut scroll_delta = input.mouse().scroll_delta() * 0.05;
@@ -131,7 +131,7 @@ impl EditorCameraController {
 
         let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.euler.y)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.euler.x);
-        let pos = self.rotation_anchor + self.distance * (rot.transform_vector(&Vector3::z()));
+        let pos = self.rotation_anchor + self.distance * (rot.transform_vector(&-Vector3::z()));
         transform.position = pos;
         transform.rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.euler.y)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.euler.x);

@@ -6,23 +6,23 @@ public const static uint INVALID_PTR = 0xFFFFFFFF;
 
 public struct RayModelTest {
   public bool did_hit;
-  public float3 albedo;
+  public float4 albedo;
   // Normal in the reference frame of the ray and aabb. 
   public float3 normal;
   public float3 face_normal;
   public float ray_t;
 
   static RayModelTest miss() {
-    return RayModelTest(false, float3(0.0), 0.0);
+    return RayModelTest(false, float4(0.0), 0.0);
   }
 
-  static RayModelTest hit(float3 color, float3 normal, float depth_t) {
+  static RayModelTest hit(float4 color, float3 normal, float depth_t) {
     return RayModelTest(true, color, normal, depth_t);
   }
 
   static RayModelTest hit() {
     var s = RayModelTest(true);
-    s.albedo = float3(1.0);
+    s.albedo = float4(1.0);
     return s;
   }
 }

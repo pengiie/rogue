@@ -8,8 +8,10 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::world::{region::RegionTree, region_asset::WorldRegionAsset};
-use crate::{asset::asset::GameAssetPath, resource::ResMut};
+use crate::{
+    asset::asset::GameAssetPath, common::geometry::ray::RayDDA, resource::ResMut,
+    voxel::voxel_registry::VoxelModelRegistry,
+};
 use crate::{
     asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
     world::region::WorldRegion,
@@ -20,6 +22,10 @@ use crate::{
     event::Events,
     voxel::{sft_compressed::VoxelModelSFTCompressed, voxel_registry::VoxelModelId},
     world::region::WorldRegionNode,
+};
+use crate::{
+    voxel::voxel::VoxelModelTrace,
+    world::{region::RegionTree, region_asset::WorldRegionAsset},
 };
 
 #[derive(Clone, Debug)]
@@ -404,6 +410,11 @@ impl Sub<ChunkPos> for Vector3<i32> {
     }
 }
 
+pub struct TerrainRaycastHit {
+    pub world_voxel_pos: Vector3<i32>,
+    pub model_trace: VoxelModelTrace,
+}
+
 #[derive(Resource)]
 pub struct RegionMap {
     /// Only contains regions that have been attempted
@@ -441,8 +452,42 @@ impl RegionMap {
     }
 
     /// Returns the world voxel that was hit.
-    pub fn raycast_terrain(&self, ray: Ray) -> Option<Vector3<i32>> {
-        todo!()
+    pub fn raycast_terrain(
+        &self,
+        voxel_registry: &VoxelModelRegistry,
+        ray: &Ray,
+        max_t: f32,
+    ) -> Option<TerrainRaycastHit> {
+        // DDA the region grid. Only really important when we are on a region boundry since max_t
+        // is less than a region in most cases.
+        let region_pos = ray
+            .origin
+            .map(|x| x.div_euclid(consts::voxel::TERRAIN_REGION_METER_LENGTH));
+        let mut curr_grid = region_pos.map(|x| x.floor() as i32);
+        let unit_grid = ray.dir.map(|x| x.signum() as i32);
+        let next_point = curr_grid.cast::<f32>() + (unit_grid.cast::<f32>() * 0.5).add_scalar(0.5);
+        let mut curr_t = ray
+            .inv_dir
+            .component_mul(&(next_point - region_pos))
+            .map(|x| if x.is_infinite() { 1000000.00 } else { x });
+        let unit_t = ray
+            .inv_dir
+            .map(|x| if x.is_infinite() { 0.0 } else { x.abs() });
+        while (curr_t.min() * consts::voxel::TERRAIN_REGION_METER_LENGTH < max_t) {
+            if let Some(region) = self.get_region(&RegionPos::new_vec(curr_grid)) {
+                if let Some(res) = region.raycast_region(voxel_registry, ray, max_t) {
+                    return Some(res);
+                }
+            }
+
+            // Step.
+            let min_t = curr_t.min();
+            let mask = curr_t.map(|x| if x == min_t { 1 } else { 0 });
+            curr_grid += mask.component_mul(&unit_grid);
+            curr_t += mask.cast::<f32>().component_mul(&unit_t);
+        }
+
+        return None;
     }
 
     pub fn get_region(&self, region_pos: &RegionPos) -> Option<&WorldRegion> {
@@ -735,7 +780,7 @@ impl RegionMap {
             if make_empty_region {
                 region_map
                     .regions
-                    .insert(*region_pos, WorldRegion::new_empty());
+                    .insert(*region_pos, WorldRegion::new_empty(*region_pos));
             }
             finished_loading.insert(*region_pos);
         }

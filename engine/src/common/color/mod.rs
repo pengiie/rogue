@@ -14,6 +14,16 @@ impl ColorSrgba {
         }
     }
 
+    pub fn mix_white(self, white: f32) -> ColorSrgba {
+        Self {
+            rgb: Color::<ColorSpaceSrgb> {
+                xyz: self.rgb.xyz.map(|x| (x + white).clamp(0.0, 1.0)),
+                _marker: std::marker::PhantomData,
+            },
+            alpha: self.alpha,
+        }
+    }
+
     pub fn new_srgb_hex(hex: impl ToString, alpha: f32) -> Self {
         Self {
             rgb: Color::new_srgb_hex(hex),

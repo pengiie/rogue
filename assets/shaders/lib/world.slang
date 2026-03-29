@@ -36,7 +36,7 @@ public struct Sky {
       return this.moon_color();
     }
 
-    let dithered_dir = dither(ray.dir);
+    let dithered_dir = dither(ray.dir, exp2(-8.0));
     var c = color::srgb_to_lsrgb(lerp(dark_blue, light_blue, smoothstep_saturate((dithered_dir.y + 0.3) / 0.5)));
     if (sun_dir.y < 0.0) {
       c *= 1.0 - saturate(abs(sun_dir.y) / 0.2) * 0.8;
@@ -69,7 +69,7 @@ public struct Camera {
     var scaled_ndc = float2(ndc.x * aspect_ratio, ndc.y) * tan(this.fov * 0.5);
 
     var ray_origin = float3(this.transform._m03, this.transform._m13, this.transform._m23);
-    let ray_dir = normalize(mul(this.rotation, float3(scaled_ndc.xy, -1.0)));
+    let ray_dir = normalize(mul(this.rotation, float3(scaled_ndc.xy, 1.0)));
 
     return Ray(ray_origin, ray_dir);
   }

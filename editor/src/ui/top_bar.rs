@@ -1,7 +1,12 @@
-use rogue_engine::world::renderable::rt_pass::{ShadingMode, WorldRTPass};
+use rogue_engine::{
+    entity::RenderableVoxelEntity,
+    voxel::voxel::VoxelModelEdit,
+    world::renderable::rt_pass::{ShadingMode, WorldRTPass},
+};
 use strum::VariantArray;
 
 use crate::{
+    editing::voxel_editing::EditorVoxelEditingTarget,
     game_session::EditorGameSessionEvent,
     session::EditorEvent,
     ui::{
@@ -63,8 +68,41 @@ impl TopBarPane {
                     ui.close_menu();
                 }
             });
-            ui.menu_button("Help", |ui| {
-                ui.label("Good luck :)");
+            ui.add_enabled_ui(ctx.voxel_editing.is_enabled(), |ui| {
+                ui.menu_button("Editing", |ui| match ctx.voxel_editing.edit_target {
+                    Some(EditorVoxelEditingTarget::Entity(entity)) => {
+                        if let Some(selection) = ctx
+                            .voxel_editing
+                            .entity_state
+                            .get(&entity)
+                            .and_then(|state| state.selection.clone())
+                        {
+                            let renderable = ctx
+                                .ecs_world
+                                .get::<&RenderableVoxelEntity>(entity)
+                                .expect("Target editing entity should have a renderable.");
+                            assert!(renderable.is_dynamic());
+                            if ui.button("Fill").clicked() {
+                                let edit = VoxelModelEdit {
+                                    region: selection,
+                                    mask: rogue_engine::voxel::voxel::VoxelModelEditMask::new(),
+                                    operator:
+                                        rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(
+                                            Some(ctx.voxel_editing.current_voxel_material()),
+                                        ),
+                                };
+                                ctx.voxel_editing.apply_edit(
+                                    ctx.voxel_registry,
+                                    ctx.events,
+                                    edit,
+                                    renderable.voxel_model_id().unwrap(),
+                                    true,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                })
             });
 
             if let Some(project_dir) = &ctx.assets.project_dir() {

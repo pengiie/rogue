@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Translation3, UnitQuaternion, Vector3, Vector4};
+use nalgebra::{Matrix4, Point3, Translation3, UnitQuaternion, Vector3, Vector4};
 use rogue_macros::Resource;
 
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     },
     common::{
         color::{Color, ColorSpaceSrgb, ColorSrgba},
-        geometry::obb::OBB,
+        geometry::{obb::OBB, ray::Ray},
     },
     graphics::{
         backend::{
@@ -26,6 +26,7 @@ use crate::{
         },
         renderer::Renderer,
     },
+    physics::transform::Transform,
     resource::ResMut,
 };
 
@@ -35,8 +36,14 @@ pub struct DebugRendererGraphConstants {
     pub raster_pipeline_info: FrameGraphRasterInfo<'static>,
 }
 
+#[derive(bytemuck::Pod, Clone, Copy, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct DebugMeshVertex {
+    position: Vector3<f32>,
+    normal: Vector3<f32>,
+}
 pub struct DebugMesh {
-    vertices: Vec<f32>,
+    vertices: Vec<DebugMeshVertex>,
     indices: Vec<u32>,
 }
 
@@ -45,6 +52,21 @@ pub enum DebugShapeType {
     Arrow,
     Sphere,
     Cube,
+    Capsule {
+        // f32s quantized by 1000 for 0.0001 increments
+        height: u32,
+        radius: u32,
+    },
+}
+
+impl DebugShapeType {
+    fn encode_f32(x: f32) -> u32 {
+        (x * 1000.0).floor() as u32
+    }
+
+    fn decode_f32(x: u32) -> f32 {
+        (x as f32 / 1000.0)
+    }
 }
 
 pub struct DebugShape {
@@ -180,10 +202,10 @@ impl DebugRenderer {
         }
 
         let vertices = positions
-            .iter()
-            .zip(normals.iter())
-            .flat_map(|(pos, normal)| [pos.x, pos.y, pos.z, normal.x, normal.y, normal.z])
-            .collect::<Vec<f32>>();
+            .into_iter()
+            .zip(normals.into_iter())
+            .map(|(position, normal)| DebugMeshVertex { position, normal })
+            .collect::<Vec<DebugMeshVertex>>();
         self.meshes
             .insert(shape_type, DebugMesh { vertices, indices });
     }
@@ -220,6 +242,33 @@ impl DebugRenderer {
         self.draw_cube(isometry, scale, color, flags);
     }
 
+    pub fn draw_capsule(
+        &mut self,
+        isometry: nalgebra::Isometry3<f32>,
+        radius: f32,
+        height: f32,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
+        assert!(
+            height >= 0.0,
+            "Height must be non-negative, if 0.0, use a sphere."
+        );
+
+        let transform = isometry.to_homogeneous();
+        self.shapes
+            .entry(DebugShapeType::Capsule {
+                height: DebugShapeType::encode_f32(height),
+                radius: DebugShapeType::encode_f32(radius),
+            })
+            .or_default()
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
+    }
+
     pub fn draw_cube(
         &mut self,
         isometry: nalgebra::Isometry3<f32>,
@@ -239,14 +288,7 @@ impl DebugRenderer {
             });
     }
 
-    pub fn draw_arrow(
-        &mut self,
-        start: Vector3<f32>,
-        end: Vector3<f32>,
-        scale: f32,
-        color: ColorSrgba,
-        flags: DebugShapeFlags,
-    ) {
+    fn arrow_transform(start: Vector3<f32>, end: Vector3<f32>, scale: f32) -> Matrix4<f32> {
         let diff = end - start;
         let isometry = if diff != Vector3::y() {
             nalgebra::Isometry3::<f32>::face_towards(
@@ -261,7 +303,48 @@ impl DebugRenderer {
             )
         };
         let scale = nalgebra::Scale3::new(scale, scale, diff.norm());
-        let transform = isometry.to_homogeneous() * scale.to_homogeneous();
+        isometry.to_homogeneous() * scale.to_homogeneous()
+    }
+
+    pub fn raycast_arrow(
+        &self,
+        ray: &Ray,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        scale: f32,
+    ) -> Option</*ray_t*/ f32> {
+        let transform = Self::arrow_transform(start, end, scale);
+        let arrow_mesh = self.meshes.get(&DebugShapeType::Arrow).unwrap();
+        let indices = &arrow_mesh.indices;
+        let vertices = &arrow_mesh.vertices;
+        let tri_count = indices.len() / 3;
+        for i in 0..tri_count {
+            let v0 = vertices[indices[i * 3] as usize].position;
+            let v1 = vertices[indices[i * 3 + 1] as usize].position;
+            let v2 = vertices[indices[i * 3 + 2] as usize].position;
+            let v0 = transform * Vector4::new(v0.x, v0.y, v0.z, 1.0);
+            let v1 = transform * Vector4::new(v1.x, v1.y, v1.z, 1.0);
+            let v2 = transform * Vector4::new(v2.x, v2.y, v2.z, 1.0);
+            // Shouldn't need to divide by w since its always 1.
+            let v0 = Vector3::new(v0.x, v0.y, v0.z);
+            let v1 = Vector3::new(v1.x, v1.y, v1.z);
+            let v2 = Vector3::new(v2.x, v2.y, v2.z);
+            if let Some(t) = ray.intersect_tri(v0, v1, v2) {
+                return Some(t);
+            }
+        }
+        return None;
+    }
+
+    pub fn draw_arrow(
+        &mut self,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        scale: f32,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
+        let transform = Self::arrow_transform(start, end, scale);
         self.shapes
             .entry(DebugShapeType::Arrow)
             .or_default()
@@ -374,7 +457,8 @@ impl DebugRenderer {
         color: ColorSrgba,
         flags: DebugShapeFlags,
     ) {
-        let transform = nalgebra::Matrix4::new_scaling(radius).append_translation(&center);
+        let mut transform = nalgebra::Matrix4::new_scaling(radius).append_translation(&center);
+        transform.m44 = 1.0;
         self.shapes
             .entry(DebugShapeType::Sphere)
             .or_default()
@@ -385,7 +469,106 @@ impl DebugRenderer {
             });
     }
 
-    fn init_mesh_buffers(&mut self, device_resource: &mut DeviceResource) {
+    fn create_capsule_mesh(height: f32, radius: f32) -> DebugMesh {
+        const RADIUS_SUBDIVISION: u32 = 16;
+        const CAP_SUBDIVISION: u32 = 8;
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let half_height = height * 0.5;
+
+        // Cyliner vertices and indices.
+        for y_step in 0..=1 {
+            let y = -half_height + (y_step as f32 / 1.0) * height;
+            for i in 0..=RADIUS_SUBDIVISION {
+                let theta = i as f32 / RADIUS_SUBDIVISION as f32 * std::f32::consts::PI * 2.0;
+                let x = radius * theta.cos();
+                let z = radius * theta.sin();
+                vertices.push(DebugMeshVertex {
+                    position: Vector3::new(x, y, z),
+                    normal: Vector3::new(x, 0.0, z).normalize(),
+                });
+            }
+        }
+        for y_step in 0..1 {
+            for i in 0..RADIUS_SUBDIVISION {
+                // Start from bottom up so looking from outside in.:
+                // C --- D
+                // | \   |
+                // |   \ |
+                // A --- B
+                let a = y_step * (RADIUS_SUBDIVISION + 1) + i;
+                let b = a + 1;
+                let c = (y_step + 1) * (RADIUS_SUBDIVISION + 1) + i;
+                let d = c + 1;
+
+                indices.extend_from_slice(&[a as u32, c as u32, b as u32]);
+                indices.extend_from_slice(&[c as u32, d as u32, b as u32]);
+            }
+        }
+
+        // Top hemisphere of capsule.
+        let top_offset = vertices.len() as u32;
+        for y_step in 0..=CAP_SUBDIVISION {
+            let phi = y_step as f32 / CAP_SUBDIVISION as f32 * std::f32::consts::FRAC_PI_2;
+            let local_y = radius * phi.sin();
+            let y = half_height + local_y;
+            let r = radius * phi.cos();
+            for i in 0..=RADIUS_SUBDIVISION {
+                let theta = i as f32 / RADIUS_SUBDIVISION as f32 * 2.0 * std::f32::consts::PI;
+                let x = r * theta.cos();
+                let z = r * theta.sin();
+                vertices.push(DebugMeshVertex {
+                    position: Vector3::new(x, y, z),
+                    normal: Vector3::new(x, local_y, z).normalize(),
+                });
+            }
+        }
+        for y_step in 0..CAP_SUBDIVISION {
+            for i in 0..RADIUS_SUBDIVISION {
+                // Same quad as cyliner indices.
+                let a = top_offset + y_step * (RADIUS_SUBDIVISION + 1) + i;
+                let b = a + 1;
+                let c = top_offset + (y_step + 1) * (RADIUS_SUBDIVISION + 1) + i;
+                let d = c + 1;
+                indices.extend_from_slice(&[a as u32, c as u32, b as u32]);
+                indices.extend_from_slice(&[c as u32, d as u32, b as u32]);
+            }
+        }
+
+        // Bottom hemisphere of capsule, reverse order of y_step so we stay bottom up to
+        // keep the indices winding order the same.
+        let bottom_offset = vertices.len() as u32;
+        for y_step in 0..=CAP_SUBDIVISION {
+            let phi = y_step as f32 / CAP_SUBDIVISION as f32 * std::f32::consts::FRAC_PI_2;
+            let local_y = -radius * phi.sin();
+            let y = -half_height + local_y;
+            let r = radius * phi.cos();
+            for i in 0..=RADIUS_SUBDIVISION {
+                let theta = i as f32 / RADIUS_SUBDIVISION as f32 * 2.0 * std::f32::consts::PI;
+                let x = r * theta.cos();
+                let z = r * theta.sin();
+                vertices.push(DebugMeshVertex {
+                    position: Vector3::new(x, y, z),
+                    normal: Vector3::new(x, local_y, z).normalize(),
+                });
+            }
+        }
+        for y_step in 0..CAP_SUBDIVISION {
+            for i in 0..RADIUS_SUBDIVISION {
+                // Same quad as cyliner indices.
+                let a = bottom_offset + y_step * (RADIUS_SUBDIVISION + 1) + i;
+                let b = a + 1;
+                let c = bottom_offset + (y_step + 1) * (RADIUS_SUBDIVISION + 1) + i;
+                let d = c + 1;
+                indices.extend_from_slice(&[a as u32, b as u32, c as u32]);
+                indices.extend_from_slice(&[c as u32, b as u32, d as u32]);
+            }
+        }
+
+        DebugMesh { vertices, indices }
+    }
+
+    fn write_mesh_buffers(&mut self, device_resource: &mut DeviceResource) {
         let total_vertex_count = self
             .meshes
             .values()
@@ -472,6 +655,7 @@ impl DebugRenderer {
         mut debug_renderer: ResMut<Self>,
         mut device_resource: ResMut<DeviceResource>,
     ) {
+        let debug_renderer = &mut *debug_renderer;
         let req_bytes = 16
             + Self::MAX_DRAW_COUNT as usize * std::mem::size_of::<ash::vk::DrawIndirectCommand>();
         device_resource.create_or_reallocate_buffer(
@@ -482,12 +666,24 @@ impl DebugRenderer {
             },
         );
 
-        if debug_renderer.vertices_buffer.is_none() {
-            assert!(
-                debug_renderer.indices_buffer.is_none()
-                    && debug_renderer.mesh_info_buffer.is_none()
+        // Capsules require custom meshes so check which ones we need to generate.
+        let mut needs_mesh_write = debug_renderer.vertices_buffer.is_none();
+        for (capsule_type, _) in debug_renderer.shapes.iter() {
+            let DebugShapeType::Capsule { height, radius } = capsule_type else {
+                continue;
+            };
+            if debug_renderer.meshes.contains_key(capsule_type) {
+                continue;
+            }
+            let mesh = Self::create_capsule_mesh(
+                DebugShapeType::decode_f32(*height),
+                DebugShapeType::decode_f32(*radius),
             );
-            debug_renderer.init_mesh_buffers(&mut device_resource);
+            debug_renderer.meshes.insert(*capsule_type, mesh);
+            needs_mesh_write |= true;
+        }
+        if needs_mesh_write {
+            debug_renderer.write_mesh_buffers(&mut device_resource);
         }
 
         #[repr(C)]

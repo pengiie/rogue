@@ -24,4 +24,6 @@ pub fn on_update(rb: &ResourceBank) {
     rb.run_system(PlayerController::on_update);
 }
 
-pub fn on_fixed_update(rb: &ResourceBank) {}
+pub fn on_fixed_update(rb: &ResourceBank) {
+    rb.run_system(PlayerController::on_fixed_update);
+}

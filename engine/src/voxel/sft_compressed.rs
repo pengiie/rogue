@@ -107,16 +107,6 @@ impl VoxelModelSFTCompressed {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.node_data = vec![SFTNodeCompressed::new_empty()];
-        for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
-            *attachment_lookup_data = vec![SFTAttachmentLookupNodeCompressed::new_empty()];
-        }
-        for attachment_raw_data in self.attachment_raw_data.values_mut() {
-            attachment_raw_data.clear();
-        }
-    }
-
     pub fn is_empty(&self) -> bool {
         self.node_data[0].child_mask == 0
     }
@@ -136,55 +126,6 @@ impl VoxelModelSFTCompressed {
             return x;
         }
         return x << 1;
-    }
-
-    pub fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
-        assert!(self.in_bounds_local(position.cast::<i32>()));
-        let height = self.tree_height() - 1;
-
-        let mut curr_node_index = 0;
-        let mut curr_child_pos = position.map(|x| (x >> ((height) * 2)) & 3);
-        let mut curr_child_index = morton::morton_encode(curr_child_pos);
-        for i in 0..height {
-            let curr_node = self.node_data[curr_node_index].clone();
-            let child_ptr = curr_node.child_ptr;
-            let is_present = (curr_node.child_mask & (1 << curr_child_index)) > 0;
-
-            if !is_present {
-                return None;
-            }
-            let child_offset = (curr_node.child_mask & ((1 << curr_child_index) - 1)).count_ones();
-            curr_node_index = (curr_node.child_ptr + child_offset) as usize;
-            curr_child_pos = position.map(|x| (x >> ((height - i - 1) * 2)) & 3);
-            curr_child_index = morton::morton_encode(curr_child_pos);
-        }
-
-        let curr_node = &self.node_data[curr_node_index];
-        let child_bit = 1 << curr_child_index;
-        if (curr_node.leaf_mask & child_bit) == 0 {
-            return None;
-        }
-
-        let bmat_lookup_node = &self
-            .attachment_lookup_data
-            .get(Attachment::BMAT_ID)
-            .unwrap()[curr_node_index];
-        let bmat_attachment_data = self.attachment_raw_data.get(Attachment::BMAT_ID).unwrap();
-        let attachment_exists = bmat_lookup_node.attachment_mask & child_bit > 0;
-        if !attachment_exists {
-            return None;
-        }
-        let attachment_offset =
-            (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones() as usize;
-        let data_ptr = bmat_lookup_node.data_ptr() as usize;
-        // Stored little endian in terms of u32s
-        let a = bmat_attachment_data
-            [data_ptr + attachment_offset * Attachment::BMAT.size() as usize]
-            as u64;
-        let b = bmat_attachment_data
-            [data_ptr + attachment_offset * Attachment::BMAT.size() as usize + 1]
-            as u64;
-        return Some(VoxelMaterialData::decode((b << 32) | a));
     }
 
     pub fn set_voxel(&mut self, position: Vector3<u32>, material: Option<&VoxelMaterialData>) {
@@ -376,10 +317,73 @@ impl VoxelModelSFTCompressed {
     pub fn tree_height(&self) -> u32 {
         self.side_length.trailing_zeros() / 2
     }
+
+    pub fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
+        assert!(self.in_bounds_local(position.cast::<i32>()));
+        let height = self.tree_height() - 1;
+
+        let mut curr_node_index = 0;
+        let mut curr_child_pos = position.map(|x| (x >> ((height) * 2)) & 3);
+        let mut curr_child_index = morton::morton_encode(curr_child_pos);
+        for i in 0..height {
+            let curr_node = self.node_data[curr_node_index].clone();
+            let child_ptr = curr_node.child_ptr;
+            let is_present = (curr_node.child_mask & (1 << curr_child_index)) > 0;
+
+            if !is_present {
+                return None;
+            }
+            let child_offset = (curr_node.child_mask & ((1 << curr_child_index) - 1)).count_ones();
+            curr_node_index = (curr_node.child_ptr + child_offset) as usize;
+            curr_child_pos = position.map(|x| (x >> ((height - i - 1) * 2)) & 3);
+            curr_child_index = morton::morton_encode(curr_child_pos);
+        }
+
+        let curr_node = &self.node_data[curr_node_index];
+        let child_bit = 1 << curr_child_index;
+        if (curr_node.leaf_mask & child_bit) == 0 {
+            return None;
+        }
+
+        let bmat_lookup_node = &self
+            .attachment_lookup_data
+            .get(Attachment::BMAT_ID)
+            .unwrap()[curr_node_index];
+        let bmat_attachment_data = self.attachment_raw_data.get(Attachment::BMAT_ID).unwrap();
+        let attachment_exists = bmat_lookup_node.attachment_mask & child_bit > 0;
+        if !attachment_exists {
+            return None;
+        }
+        let attachment_offset =
+            (bmat_lookup_node.attachment_mask & (child_bit - 1)).count_ones() as usize;
+        let data_ptr = bmat_lookup_node.data_ptr() as usize;
+        // Stored little endian in terms of u32s
+        let a = bmat_attachment_data
+            [data_ptr + attachment_offset * Attachment::BMAT.size() as usize]
+            as u64;
+        let b = bmat_attachment_data
+            [data_ptr + attachment_offset * Attachment::BMAT.size() as usize + 1]
+            as u64;
+        return Some(VoxelMaterialData::decode((b << 32) | a));
+    }
 }
 
 impl VoxelModelImpl for VoxelModelSFTCompressed {
     const NAME: &'static str = "SFTCompressed";
+
+    fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
+        Self::get_voxel(self, position)
+    }
+
+    fn clear(&mut self) {
+        self.node_data = vec![SFTNodeCompressed::new_empty()];
+        for attachment_lookup_data in self.attachment_lookup_data.values_mut() {
+            *attachment_lookup_data = vec![SFTAttachmentLookupNodeCompressed::new_empty()];
+        }
+        for attachment_raw_data in self.attachment_raw_data.values_mut() {
+            attachment_raw_data.clear();
+        }
+    }
 
     fn resize_model(&mut self, new_side_length: Vector3<u32>) {
         assert!(
@@ -417,10 +421,10 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
 
     fn trace(
         &self,
-        ray: &crate::common::geometry::ray::Ray,
+        in_ray: &crate::common::geometry::ray::Ray,
         aabb: &crate::common::geometry::aabb::AABB,
     ) -> Option<super::voxel::VoxelModelTrace> {
-        let mut ray = ray.clone();
+        let mut ray = in_ray.clone();
         // Early exit if the ray doesn't intersect the bounding box of this model.
         let Some(model_t) = ray.intersect_aabb(aabb) else {
             return None;
@@ -490,7 +494,7 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
                     if is_leaf {
                         let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
                         let world_pos_hit = aabb.min + curr_ray.origin.component_mul(&t_scaling);
-                        let depth_t = ray.origin.metric_distance(&world_pos_hit);
+                        let depth_t = in_ray.origin.metric_distance(&world_pos_hit);
                         let normal = last_mask.component_mul(&ray.dir.map(|x| -x.signum() as i32));
                         return Some(VoxelModelTrace {
                             local_position: global_grid_pos,
@@ -573,7 +577,17 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
                 for y in min.y..=max.y {
                     for z in min.z..=max.z {
                         let voxel_pos = Vector3::new(x, y, z);
-                        let prev_mat = self.get_voxel(voxel_pos);
+                        let prev_mat = if let Some(mask_model) = &edit.mask.mask_model {
+                            let sample_pos =
+                                voxel_pos.cast::<i32>() - mask_model.offset.cast::<i32>();
+                            if mask_model.model.in_bounds(sample_pos) {
+                                mask_model.model.get_voxel(sample_pos.map(|x| x as u32))
+                            } else {
+                                None
+                            }
+                        } else {
+                            self.get_voxel(voxel_pos)
+                        };
                         let weight = calculate_mask_weight(prev_mat, voxel_pos);
                         if weight == 0.0 {
                             continue;

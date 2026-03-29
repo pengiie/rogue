@@ -12,10 +12,6 @@ use super::{
     rigid_body::{ForceType, RigidBody},
     transform::Transform,
 };
-use crate::common::{
-    dyn_vec::{DynVecCloneable, TypeInfo},
-    freelist::FreeList,
-};
 use crate::entity::{
     EntityChildren, EntityParent,
     ecs_world::{ECSWorld, Entity},
@@ -36,9 +32,15 @@ use crate::{
     },
     debug::debug_renderer::DebugRenderer,
 };
+use crate::{
+    common::{
+        dyn_vec::{DynVecCloneable, TypeInfo},
+        freelist::FreeList,
+    },
+    physics::rigid_body::RigidBodyPositionInterpolation,
+};
 
 pub enum PhysicsTimestep {
-    Max(Duration),
     Fixed(Duration),
 }
 
@@ -143,9 +145,6 @@ impl PhysicsWorld {
         self.update_time = Instant::now();
         let dur = self.update_time - self.last_update_instant;
         match self.settings.timestep {
-            PhysicsTimestep::Max(max_duration) => {
-                (dur.as_secs_f32() / max_duration.as_secs_f32()).ceil() as u32
-            }
             PhysicsTimestep::Fixed(fixed_duration) => {
                 let updates = (dur.as_secs_f32() / fixed_duration.as_secs_f32()).floor() as u32;
                 updates
@@ -182,7 +181,7 @@ impl PhysicsWorld {
                 }
 
                 let collider = physics_world.colliders.get_collider_dyn(collider_id);
-                collider.render_debug(&world_transform, &mut debug_renderer, coloring);
+                //collider.render_debug(&world_transform, &mut debug_renderer, color);
             }
         }
 
@@ -229,9 +228,6 @@ impl PhysicsWorld {
 
     pub fn start_time_step(mut physics_world: ResMut<PhysicsWorld>) {
         physics_world.curr_timestep = match physics_world.settings.timestep {
-            PhysicsTimestep::Max(duration) => {
-                (physics_world.update_time - physics_world.last_update_instant).min(duration)
-            }
             PhysicsTimestep::Fixed(duration) => duration,
         };
     }
@@ -260,6 +256,40 @@ impl PhysicsWorld {
         None
     }
 
+    /// Runs every frame.
+    pub fn do_transform_interpolation(
+        mut physics_world: ResMut<PhysicsWorld>,
+        mut ecs_world: ResMut<ECSWorld>,
+    ) {
+        if !physics_world.do_dynamics {
+            return;
+        }
+        let timestep = physics_world.last_time_step();
+        let last_timestep = physics_world.time_since_last_physics_update();
+        let t = last_timestep.as_secs_f32() / timestep.as_secs_f32();
+        for (entity, (transform, rigid_body)) in ecs_world
+            .query_mut::<(&mut Transform, &mut RigidBody)>()
+            .into_iter()
+        {
+            if matches!(
+                rigid_body.rigid_body_type,
+                RigidBodyType::Static | RigidBodyType::KinematicPositionBased
+            ) {
+                continue;
+            }
+            rigid_body.apply_to_transform(transform, t);
+        }
+    }
+
+    pub fn sync_transforms(ecs_world: &mut ECSWorld) {
+        for (entity, (transform, rigid_body)) in ecs_world
+            .query_mut::<(&mut Transform, &mut RigidBody)>()
+            .into_iter()
+        {
+            rigid_body.sync_transform(&transform);
+        }
+    }
+
     pub fn do_physics_update(
         mut physics_world: ResMut<PhysicsWorld>,
         mut ecs_world: ResMut<ECSWorld>,
@@ -274,10 +304,17 @@ impl PhysicsWorld {
                 .query_mut::<(&mut Transform, &mut RigidBody)>()
                 .into_iter()
             {
+                if rigid_body.rigid_body_type == RigidBodyType::Static {
+                    return;
+                }
+
+                // Initialize position/rotation of the rigid body if we haven't already.
+                rigid_body.try_init_transform(transform);
+
                 match rigid_body.rigid_body_type {
                     RigidBodyType::Static => {}
                     RigidBodyType::Kinematic => {
-                        rigid_body.integrate_forces(timestep, transform);
+                        rigid_body.integrate_forces(timestep);
                     }
                     RigidBodyType::Dynamic => {
                         // Apply gravity.
@@ -286,12 +323,14 @@ impl PhysicsWorld {
                             rigid_body.mass() * physics_world.settings.gravity,
                         );
 
-                        rigid_body.integrate_forces(timestep, transform);
+                        rigid_body.integrate_forces(timestep);
                     }
                     RigidBodyType::KinematicPositionBased => {
-                        rigid_body.derive_forces(timestep, transform);
+                        rigid_body.derive_forces(timestep);
                     }
                 }
+
+                rigid_body.update_last_position_rotation();
             }
         }
 
@@ -721,10 +760,10 @@ impl PhysicsWorld {
                 match rigid_body.rigid_body_type {
                     RigidBodyType::Static | RigidBodyType::KinematicPositionBased => {}
                     RigidBodyType::Kinematic => {
-                        rigid_body.integrate_velocities(timestep, transform);
+                        rigid_body.integrate_velocities(timestep);
                     }
                     RigidBodyType::Dynamic => {
-                        rigid_body.integrate_velocities(timestep, transform);
+                        rigid_body.integrate_velocities(timestep);
                     }
                 }
             }

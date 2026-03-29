@@ -7,6 +7,7 @@ use rogue_engine::{
         component::{GameComponent, RawComponentRef},
         ecs_world::{ECSWorld, EntityCommandEvent},
     },
+    event::Events,
     graphics::camera::Camera,
     material::MaterialId,
     physics::{
@@ -16,14 +17,14 @@ use rogue_engine::{
         collider_registry::ColliderId,
         physics_world::PhysicsWorld,
         plane_collider::PlaneCollider,
-        rigid_body::{RigidBody, RigidBodyType},
+        rigid_body::{RigidBody, RigidBodyPositionInterpolation, RigidBodyType},
         transform::Transform,
     },
     voxel::{
         attachment::Attachment,
         sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelModelEdit, VoxelModelImplMethods},
-        voxel_registry::VoxelModelRegistry,
+        voxel::{VoxelModelEdit, VoxelModelEditRegion, VoxelModelImplMethods},
+        voxel_registry::{VoxelModelId, VoxelModelRegistry},
     },
 };
 use std::{
@@ -33,6 +34,7 @@ use std::{
 };
 
 use crate::{
+    editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
     session::{EditorEvent, EditorSession},
     ui::{
         EditorCommand, EditorCommands, EditorDialog, EditorUIContext, FilePickerType,
@@ -49,6 +51,8 @@ pub struct ShowComponentContext<'a> {
     session: &'a mut EditorSession,
     commands: &'a mut EditorCommands,
     assets: &'a mut Assets,
+    events: &'a mut Events,
+    voxel_editing: &'a mut EditorVoxelEditing,
 }
 
 type ShowComponentFn<T> = fn(&mut T, &mut egui::Ui, &mut ShowComponentContext);
@@ -146,7 +150,7 @@ impl EntityPropertiesShowFns {
             } else {
                 "None".to_owned()
             };
-            ui.menu_button(text, |ui| {
+            let menu_response = ui.menu_button(text, |ui| {
                 // Open new model dialog within the editor.
                 if ui.button("Create new").clicked() {
                     ctx.commands.push(create_voxel_model_dialog(
@@ -162,9 +166,17 @@ impl EntityPropertiesShowFns {
                     ui.close_menu();
                 }
 
+                let can_save = renderable.model_asset_path().is_some() && renderable.is_dynamic() && renderable.voxel_model_id().is_some();
+                if ui.add_enabled(can_save,
+                        egui::Button::new("Save")).clicked() {
+                            ctx.events
+                                .push(EditorEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
+                            ui.close_menu();
+                }
+
                 if ui
                     .add_enabled(
-                        renderable.model_asset_path().is_some() && renderable.is_dynamic(),
+                        can_save,
                         egui::Button::new("Save as"),
                     )
                     .clicked() &&
@@ -211,15 +223,26 @@ impl EntityPropertiesShowFns {
                     ui.close_menu();
                 }
 
-                let can_resize = renderable.is_dynamic() && renderable.voxel_model_id().is_some();
-                if ui.add_enabled(can_resize, egui::Button::new("Resize")).clicked() {
+                let can_edit = renderable.is_dynamic() && renderable.voxel_model_id().is_some();
+                if ui.add_enabled(can_edit, egui::Button::new("Resize")).clicked() {
                     ctx.commands.push(resize_voxel_model_dialog_cmd(ResizeVoxelModelDialogCreateInfo {
                         target_model: renderable.voxel_model_id().unwrap(),
                         associated_entity: selected_entity,
                     }));
                     ui.close_menu();
                 }
+
+                if ui.add_enabled(can_edit, egui::Button::new("Select All")).clicked() {
+                    let side_length = ctx.voxel_registry.get_dyn_model(renderable.voxel_model_id().unwrap()).length();
+                    ctx.voxel_editing.edit_target = Some(EditorVoxelEditingTarget::Entity(selected_entity));
+                    ctx.voxel_editing.entity_state.entry(selected_entity).or_default().selection = Some(VoxelModelEditRegion::Rect { min: Vector3::zeros(), max: side_length - Vector3::new(1,1,1) });
+                    ui.close_menu();
+                }
             });
+            if let Some(new_asset_path) = menu_response.response.dnd_release_payload::<GameAssetPath>() {
+                // Set id to null since entity models are loaded automatically.
+                renderable.set_model(Some((*new_asset_path).clone()), VoxelModelId::null());
+            }
         });
 
         ui.horizontal(|ui| {
@@ -271,6 +294,17 @@ impl EntityPropertiesShowFns {
                             val,
                             format!("{:?}", val),
                         );
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label("Interpolation");
+            egui::ComboBox::from_id_salt("rigid_body_interpolation")
+                .selected_text(rigid_body.interpolation.to_string())
+                .show_ui(ui, |ui| {
+                    use strum::VariantArray;
+                    for val in RigidBodyPositionInterpolation::VARIANTS {
+                        ui.selectable_value(&mut rigid_body.interpolation, *val, val.to_string());
                     }
                 });
         });
@@ -520,6 +554,8 @@ impl EntityPropertiesPane {
             commands: ctx.commands,
             session: ctx.session,
             assets: ctx.assets,
+            events: ctx.events,
+            voxel_editing: ctx.voxel_editing,
         };
 
         // Components we are rendering manually.

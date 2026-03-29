@@ -31,15 +31,17 @@ void main(uint3 id: SV_DispatchThreadID) {
     return;
   }
 
-  var alpha = 1.0;
   let current_depth = u_shader.backbuffer_depth.Load(int3(coord.xy, 0));
+  let fn = abs(entity_test.face_normal);
+  let l = max3(1.0 * fn.x, 0.99 * fn.y, 0.98 * fn.z);
+  let albedo = entity_test.albedo.rgb * l;
   const float BACKBUFFER_DEPTH_BIAS = 0.001;
   if (entity_test.depth_t > current_depth - BACKBUFFER_DEPTH_BIAS) {
-    alpha = 1.0;
+    //albedo.a = 1.0;
   }
 
   let current_frag = u_shader.backbuffer.Load(coord.xy);
-  var out_color = lerp(current_frag.rgb, entity_test.albedo, alpha);
+  var out_color = lerp(current_frag.rgb, albedo, entity_test.albedo.a);
   if (abs(entity_test.depth_t - current_depth) < 0.0025) {
   }
 

@@ -27,19 +27,18 @@ impl AssetPropertiesPane {
             ui.label(egui::RichText::new(title).size(20.0));
         });
         if let Some(selected_asset) = &ctx.ui_state.selected_asset {
-            let file_path = selected_asset
-                .strip_prefix(ctx.assets.project_assets_dir().unwrap())
-                .unwrap();
+            let file_path = selected_asset.as_relative_path();
             ui.label(format!("Selected asset: /{}", file_path.display()));
         }
     }
 
     pub fn show_properties(ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
-        let selected_asset = ctx.ui_state.selected_asset.clone().unwrap();
-        let selected_asset = AssetPath::from_project_dir_path(
-            ctx.assets.project_dir().as_ref().unwrap(),
-            &selected_asset,
-        );
+        let Some(selected_asset) = ctx.ui_state.selected_asset.clone() else {
+            ui.label("No asset selected.");
+            return;
+        };
+        let selected_asset =
+            selected_asset.as_file_asset_path(ctx.assets.project_dir().as_ref().unwrap());
         let ext = ctx.ui_state.selected_asset_extension();
         match ext.as_deref() {
             Some("rmat") => {

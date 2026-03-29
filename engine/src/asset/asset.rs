@@ -848,6 +848,10 @@ impl GameAssetPath {
         }
     }
 
+    pub fn extension(&self) -> &str {
+        self.asset_path.split("::").last().unwrap()
+    }
+
     pub fn from_relative_path(path: &Path) -> Self {
         let mut s = String::new();
         let last_i = path.components().count() - 1;

@@ -4,6 +4,7 @@ use nalgebra::{Isometry3, Vector3};
 use rogue_engine::{
     common::color::{Color, ColorSpaceSrgb, ColorSrgba},
     consts,
+    debug::debug_renderer::{DebugRenderer, DebugShapeFlags},
     entity::{
         RenderableVoxelEntity,
         ecs_world::{ECSWorld, Entity},
@@ -127,6 +128,12 @@ pub struct EditorVoxelEditing {
 
 pub struct EditorVoxelEditingEntityState {
     pub selection: Option<VoxelModelEditRegion>,
+}
+
+impl Default for EditorVoxelEditingEntityState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditorVoxelEditingEntityState {
@@ -266,6 +273,7 @@ impl EditorVoxelEditing {
     pub fn update_entity_selection(
         mut editing: ResMut<EditorVoxelEditing>,
         editor_session: Res<EditorSession>,
+        mut debug_renderer: ResMut<DebugRenderer>,
         input: Res<Input>,
         ecs_world: Res<ECSWorld>,
         mut voxel_registry: ResMut<VoxelModelRegistry>,
@@ -288,13 +296,15 @@ impl EditorVoxelEditing {
             .entry(*entity)
             .or_insert_with(|| EditorVoxelEditingEntityState::new());
 
+        // Delete selection.
         if input.is_key_pressed(Key::Delete)
+            && renderable.is_dynamic()
             && let Some(region) = &entity_state.selection
         {
             // Delete/erase the contents of the selection.
             let edit = VoxelModelEdit {
                 region: region.clone(),
-                mask: VoxelModelEditMask { layers: Vec::new() },
+                mask: VoxelModelEditMask::new(),
                 operator: VoxelModelEditOperator::Replace(None),
             };
 
@@ -316,8 +326,9 @@ impl EditorVoxelEditing {
         let tool = editing.tools.get(&editing.selected_tool_type).unwrap();
         match tool {
             EditorEditingTool::Selection => {
-                if let Some(raycast_hit) = &editor_session.entity_raycast {
-                    assert_eq!(*entity, raycast_hit.entity);
+                if let Some(raycast_hit) = &editor_session.entity_raycast
+                    && raycast_hit.entity == *entity
+                {
                     let hit_pos = raycast_hit.model_trace.local_position;
                     if input.is_mouse_button_pressed(mouse::Button::Left) {
                         editing.in_progress_selection = Some(InProgressSelection::Rect {
@@ -361,7 +372,11 @@ impl EditorVoxelEditing {
         editing.show_preview = false;
         editing.preview_model_updated = false;
 
-        if !editing.enabled {
+        if !editing.enabled
+            || !rb
+                .get_resource::<EditorSession>()
+                .is_editor_camera_focused()
+        {
             return;
         }
         drop(editing);
@@ -376,7 +391,11 @@ impl EditorVoxelEditing {
     pub fn update_editing_target(
         mut editing: ResMut<EditorVoxelEditing>,
         editor_session: Res<EditorSession>,
+        input: Res<Input>,
     ) {
+        if !input.is_mouse_button_pressed(mouse::Button::Left) {
+            return;
+        }
         if let Some(raycast_hit) = &editor_session.entity_raycast {
             editing.edit_target = Some(EditorVoxelEditingTarget::Entity(raycast_hit.entity));
         }
@@ -397,7 +416,9 @@ impl EditorVoxelEditing {
         let Some(raycast_hit) = &editor_session.entity_raycast else {
             return;
         };
-        assert_eq!(*entity, raycast_hit.entity);
+        if raycast_hit.entity != *entity {
+            return;
+        }
 
         // Selected entity should have a renderable and voxel model if we are editing.
         let Some((transform, renderable)) = ecs_world
@@ -406,9 +427,13 @@ impl EditorVoxelEditing {
         else {
             return;
         };
+        let world_transform = ecs_world.get_world_transform(*entity, transform);
         let Some(entity_model_id) = renderable.voxel_model_id() else {
             return;
         };
+        if !renderable.is_dynamic() {
+            return;
+        }
         let mut hit_pos = raycast_hit.model_trace.local_position.cast::<i32>();
         let entity_model_side_length = voxel_registry.get_dyn_model_mut(entity_model_id).length();
 
@@ -426,35 +451,39 @@ impl EditorVoxelEditing {
                 editing.preview_model =
                     Some(voxel_registry.register_voxel_model(sft_compressed_model, None));
             }
-            let mut preview_model = voxel_registry
-                .get_model_mut::<VoxelModelSFTCompressed>(editing.preview_model.unwrap());
+            let [mut preview_model, entity_model] = voxel_registry
+                .get_dyn_model_mut_disjoint([editing.preview_model.unwrap(), entity_model_id]);
             preview_model.clear();
 
             let preview_model_side_length = preview_model.length();
             let center_pos = preview_model_side_length.map(|c| c / 2);
-            if let Some(edit) = editing.create_voxel_entity_edit(
+            if let Some(mut edit) = editing.create_preview_model_edit(
                 center_pos,
-                Vector3::zeros(),
+                Vector3::new(0, 0, 0),
                 preview_model_side_length,
             ) {
+                edit.mask.mask_model = Some(rogue_engine::voxel::voxel::VoxelModelEditMaskModel {
+                    model: entity_model,
+                    offset: center_pos - raycast_hit.model_trace.local_position,
+                });
                 preview_model.set_voxel_range_impl(&edit);
                 editing.preview_model_updated = true;
             }
 
             if let Some(preview_model_id) = editing.preview_model {
                 editing.show_preview = true;
-                let model_side_length = voxel_registry.get_dyn_model(preview_model_id).length();
                 let mut preview_transform = Transform::new();
                 if matches!(tool, EditorEditingTool::Pencil { .. }) {
                     hit_pos = hit_pos.zip_map(&raycast_hit.model_trace.local_normal, |c, n| c + n);
                 }
-                let edit_preview_offset = transform.rotation
-                    * ((hit_pos.cast::<f32>() - entity_model_side_length.cast::<f32>() * 0.5)
-                        .component_mul(&transform.scale)
-                        * consts::voxel::VOXEL_METER_LENGTH);
-                preview_transform.position = transform.position + edit_preview_offset;
-                preview_transform.rotation = transform.rotation;
-                preview_transform.scale = transform.scale;
+                let edit_preview_offset = ((hit_pos.cast::<f32>()
+                    - entity_model_side_length.cast::<f32>() * 0.5)
+                    .component_mul(&world_transform.scale)
+                    * consts::voxel::VOXEL_METER_LENGTH);
+                let edit_preview_offset_rot = world_transform.rotation * edit_preview_offset;
+                preview_transform.position = world_transform.position + edit_preview_offset_rot;
+                preview_transform.rotation = world_transform.rotation;
+                preview_transform.scale = world_transform.scale;
                 editing.preview_model_transform = preview_transform;
             }
         }
@@ -478,28 +507,115 @@ impl EditorVoxelEditing {
                 entity_model_side_length,
             )
         {
-            editing
-                .history
-                .undo_buffer
-                .push_back(EditorVoxelEditingHistoryItem::ModelEdit {
-                    model_id: entity_model_id,
-                    saved_model_state: voxel_registry
-                        .get_model::<VoxelModelSFTCompressed>(entity_model_id)
-                        .clone(),
-                });
-            voxel_registry
-                .get_dyn_model_mut(entity_model_id)
-                .set_voxel_range_impl(&edit);
-            events.push(VoxelModelEvent::UpdatedModel(entity_model_id))
+            let save_history = input.is_mouse_button_pressed(mouse::Button::Left);
+            editing.apply_edit(
+                &mut voxel_registry,
+                &mut events,
+                edit,
+                entity_model_id,
+                save_history,
+            );
         }
     }
 
-    pub fn create_voxel_entity_edit(
+    pub fn apply_edit<'a>(
+        &mut self,
+        voxel_registry: &'a mut VoxelModelRegistry,
+        events: &mut Events,
+        edit: VoxelModelEdit<'a>,
+        model_id: VoxelModelId,
+        save_history: bool,
+    ) {
+        if save_history {
+            self.history
+                .undo_buffer
+                .push_back(EditorVoxelEditingHistoryItem::ModelEdit {
+                    model_id,
+                    saved_model_state: voxel_registry
+                        .get_model::<VoxelModelSFTCompressed>(model_id)
+                        .clone(),
+                });
+        }
+        voxel_registry
+            .get_dyn_model_mut(model_id)
+            .set_voxel_range_impl(&edit);
+        events.push(VoxelModelEvent::UpdatedModel(model_id))
+    }
+
+    pub fn create_preview_model_edit(
         &self,
         mut hit_pos: Vector3<u32>,
         hit_normal: Vector3<i32>,
         model_length: Vector3<u32>,
     ) -> Option<VoxelModelEdit> {
+        let entity_state = self
+            .entity_state
+            .get(&self.edit_target.as_ref().unwrap().target_entity())
+            .unwrap();
+
+        let mut mask = VoxelModelEditMask::new();
+        let mut total_region = entity_state.selection.clone();
+        let tool = self.tools.get(&self.selected_tool_type).unwrap();
+        match tool {
+            EditorEditingTool::Pencil { brush_size }
+            | EditorEditingTool::Paint { brush_size }
+            | EditorEditingTool::Eraser { brush_size } => {
+                if tool.should_offset() {
+                    hit_pos = hit_pos.zip_map(&hit_normal, |c, n| c.saturating_add_signed(n));
+                }
+                let br = brush_size / 2;
+                let min = if brush_size % 2 == 0 {
+                    hit_pos.map(|x| x.saturating_sub(br.saturating_sub(1)))
+                } else {
+                    hit_pos.map(|x| x.saturating_sub(br))
+                };
+                let max = (hit_pos + Vector3::new(br, br, br))
+                    .zip_map(&model_length, |c, max| c.min(max - 1));
+                total_region = total_region.map_or_else(
+                    || Some(VoxelModelEditRegion::Rect { min, max }),
+                    |existing_region| Some(existing_region.with_intersect_rect(min, max)),
+                );
+                mask.layers.push(VoxelModelEditMaskLayer::Sphere {
+                    center: hit_pos.cast::<i32>(),
+                    diameter: *brush_size,
+                });
+                if matches!(tool, EditorEditingTool::Paint { .. }) {
+                    mask.layers.push(VoxelModelEditMaskLayer::Presence);
+                }
+            }
+            _ => {
+                return None;
+            }
+        }
+
+        let operator = match tool {
+            EditorEditingTool::Pencil { .. } => {
+                VoxelModelEditOperator::Replace(Some(self.current_voxel_material()))
+            }
+            EditorEditingTool::Paint { .. } => {
+                VoxelModelEditOperator::Replace(Some(self.current_voxel_material()))
+            }
+            EditorEditingTool::Eraser { .. } => {
+                VoxelModelEditOperator::Replace(Some(VoxelMaterialData::Baked {
+                    color: Color::new_srgba_hex("#FF7777", 0.05),
+                }))
+            }
+            _ => unreachable!(),
+        };
+
+        return total_region.map(|region| VoxelModelEdit {
+            region,
+            mask,
+            operator,
+        });
+    }
+
+    pub fn create_voxel_entity_edit<'a>(
+        &self,
+        mut hit_pos: Vector3<u32>,
+        hit_normal: Vector3<i32>,
+        model_length: Vector3<u32>,
+    ) -> Option<VoxelModelEdit<'a>> {
         let tool = self.tools.get(&self.selected_tool_type).unwrap();
         let entity_state = self
             .entity_state
@@ -509,10 +625,13 @@ impl EditorVoxelEditing {
         let mut total_region = entity_state.selection.clone();
         let mut mask = VoxelModelEditMask {
             layers: self.masks.clone(),
+            mask_model: None,
         };
 
         match tool {
-            EditorEditingTool::Pencil { brush_size } | EditorEditingTool::Paint { brush_size } => {
+            EditorEditingTool::Pencil { brush_size }
+            | EditorEditingTool::Paint { brush_size }
+            | EditorEditingTool::Eraser { brush_size } => {
                 if tool.should_offset() {
                     hit_pos = hit_pos.zip_map(&hit_normal, |c, n| c.saturating_add_signed(n))
                 }
@@ -535,25 +654,6 @@ impl EditorVoxelEditing {
                 if matches!(tool, EditorEditingTool::Paint { .. }) {
                     mask.layers.push(VoxelModelEditMaskLayer::Presence);
                 }
-            }
-            EditorEditingTool::Eraser { brush_size } => {
-                let br = brush_size / 2;
-                let min = if brush_size % 2 == 0 {
-                    hit_pos.map(|x| x.saturating_sub(br.saturating_sub(1)))
-                } else {
-                    hit_pos.map(|x| x.saturating_sub(br))
-                };
-                let max = (hit_pos + Vector3::new(br, br, br))
-                    .zip_map(&model_length, |c, max| c.min(max - 1));
-                let region = VoxelModelEditRegion::Rect { min, max };
-                total_region = total_region.map_or_else(
-                    || Some(VoxelModelEditRegion::Rect { min, max }),
-                    |existing_region| Some(existing_region.with_intersect_rect(min, max)),
-                );
-                mask.layers.push(VoxelModelEditMaskLayer::Sphere {
-                    center: hit_pos.cast::<i32>(),
-                    diameter: *brush_size,
-                });
             }
             _ => {
                 return None;
@@ -578,7 +678,7 @@ impl EditorVoxelEditing {
         });
     }
 
-    fn current_voxel_material(&self) -> VoxelMaterialData {
+    pub fn current_voxel_material(&self) -> VoxelMaterialData {
         match self.editing_material {
             EditorEditingMaterial::Color => VoxelMaterialData::Baked { color: self.color },
             EditorEditingMaterial::Material => VoxelMaterialData::Unbaked(self.material.index()),

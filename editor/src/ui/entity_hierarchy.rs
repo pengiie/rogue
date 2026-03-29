@@ -30,6 +30,31 @@ impl EditorUIPane for EntityHierarchyUI {
 }
 
 impl EntityHierarchyUI {
+    fn add_menu(ui: &mut egui::Ui, parent_entity: Option<Entity>, ctx: &mut EditorUIContext<'_>) {
+        ui.menu_button("Add", |ui| {
+            if ui.button("Empty").clicked() {
+                let transform = if parent_entity.is_some() {
+                    Transform::new()
+                } else {
+                    Transform::with_translation(Translation3::from(
+                        ctx.session.editor_camera_controller().rotation_anchor,
+                    ))
+                };
+                let entity = ctx
+                    .ecs_world
+                    .spawn((GameEntity::new("new_entity"), transform));
+                if let Some(parent) = parent_entity {
+                    ctx.events.push(EntityCommandEvent::SetParent {
+                        parent: Some(parent),
+                        child: entity,
+                        modify_transform: false,
+                    });
+                }
+                ui.close_menu();
+            }
+        });
+    }
+
     fn section_header(ui: &mut egui::Ui, ctx: &mut EditorUIContext<'_>) {
         ui.horizontal(|ui| {
             let label = ui.add(egui::Label::new(
@@ -45,16 +70,7 @@ impl EntityHierarchyUI {
                 });
             }
 
-            ui.menu_button("Add", |ui| {
-                if ui.button("Empty").clicked() {
-                    ctx.ecs_world.spawn((
-                        GameEntity::new("new_entity"),
-                        Transform::with_translation(Translation3::from(
-                            ctx.session.editor_camera_controller().rotation_anchor,
-                        )),
-                    ));
-                }
-            });
+            Self::add_menu(ui, None, ctx);
         });
     }
 
@@ -127,11 +143,14 @@ impl EntityHierarchyUI {
         if let Some(new_child) = label.dnd_release_payload::<EntityPayload>()
             && *new_child != entity_id
         {
-            ctx.events.push(EntityCommandEvent::SetParent {
-                parent: Some(entity_id),
-                child: *new_child,
-                modify_transform: true,
-            });
+            // Check that we don't create a parent cycle.
+            if !ctx.ecs_world.has_parent(entity_id, *new_child) {
+                ctx.events.push(EntityCommandEvent::SetParent {
+                    parent: Some(entity_id),
+                    child: *new_child,
+                    modify_transform: true,
+                });
+            }
         }
 
         ui.data_mut(|w| w.insert_temp(label_hover_id, label.hovered()));
@@ -146,6 +165,8 @@ impl EntityHierarchyUI {
         }
 
         label.context_menu(|ui| {
+            Self::add_menu(ui, Some(entity_id), ctx);
+
             if ui.button("Copy").clicked() {
                 log::error!("TODOOOOOOOOOOOO Enityt copying is not implement yet!!!!!");
                 ui.close_menu();

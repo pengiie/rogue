@@ -182,9 +182,9 @@ public RayAABBTest ray_aabb_test(Ray ray, AABB aabb) {
   return RayAABBTest(hit, t_min, t_max, bound_t_enter, t_exit);
 }
 
-public float3 dither(float3 v) {
+public float3 dither(float3 v, float offset) {
   let n = random::rand_f32() + random::rand_f32() - 1.0;  // triangular noise
-  return v + n * exp2(-8.0);
+  return v + n * offset;
 }
 
 namespace morton {

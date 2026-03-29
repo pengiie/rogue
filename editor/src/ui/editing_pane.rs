@@ -1,5 +1,6 @@
 use rogue_engine::{
     common::color::{Color, ColorSpaceSrgb},
+    entity::{GameEntity, RenderableVoxelEntity},
     voxel::voxel::VoxelModelEditRegion,
 };
 use strum::VariantArray;
@@ -53,6 +54,33 @@ impl EditingPane {
             ui.label("Editing Enabled:");
             ui.checkbox(&mut ctx.voxel_editing.enabled, "");
         });
+        ui.separator();
+
+        match ctx.voxel_editing.edit_target {
+            Some(crate::editing::voxel_editing::EditorVoxelEditingTarget::Entity(entity)) => {
+                let (game_entity, renderable) = ctx
+                    .ecs_world
+                    .query_one::<(&GameEntity, &RenderableVoxelEntity)>(entity)
+                    .get()
+                    .unwrap();
+                ui.label(format!("Current editing entity: {}", game_entity.name));
+                ui.label(if renderable.is_dynamic() {
+                    "Entity renderable is dynamic, can read/write."
+                } else {
+                    "Entity renderable is NOT dynamic, can only read."
+                });
+            }
+            Some(crate::editing::voxel_editing::EditorVoxelEditingTarget::Terrain) => {
+                ui.label("Currently editing terrain.");
+            }
+            None => {
+                if ctx.voxel_editing.enabled {
+                    ui.label("No editing target");
+                } else {
+                    ui.label("No editing target, editing is disabled.");
+                }
+            }
+        }
 
         ui.separator();
         ui.label("Current Material:");

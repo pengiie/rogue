@@ -32,13 +32,24 @@ use crate::{
     voxel::rvox_asset::RVOXAsset,
 };
 
-pub struct VoxelModelEditMask {
-    pub layers: Vec<VoxelModelEditMaskLayer>,
+pub struct VoxelModelEditMaskModel<'a> {
+    pub model: &'a dyn VoxelModelImplMethods,
+    // Where the mask is relative to this models min corner.
+    pub offset: Vector3<u32>,
 }
 
-impl VoxelModelEditMask {
+pub struct VoxelModelEditMask<'a> {
+    pub layers: Vec<VoxelModelEditMaskLayer>,
+    /// None if the model uses itself as the mask.
+    pub mask_model: Option<VoxelModelEditMaskModel<'a>>,
+}
+
+impl VoxelModelEditMask<'_> {
     pub fn new() -> Self {
-        Self { layers: Vec::new() }
+        Self {
+            layers: Vec::new(),
+            mask_model: None,
+        }
     }
 }
 
@@ -77,9 +88,9 @@ impl VoxelModelEditRegion {
     }
 }
 
-pub struct VoxelModelEdit {
+pub struct VoxelModelEdit<'a> {
     pub region: VoxelModelEditRegion,
-    pub mask: VoxelModelEditMask,
+    pub mask: VoxelModelEditMask<'a>,
     pub operator: VoxelModelEditOperator,
 }
 
@@ -155,6 +166,14 @@ pub trait VoxelModelImpl: Clone + VoxelModelImplMethods {
 
     fn length(&self) -> Vector3<u32>;
 
+    fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
+        unimplemented!();
+    }
+
+    fn clear(&mut self) {
+        unimplemented!()
+    }
+
     fn create_rvox_asset(&self) -> RVOXAsset {
         unimplemented!()
     }
@@ -183,6 +202,20 @@ pub trait VoxelModelImplMethods: Send + Sync + Any {
         self.length().map(|x| x as u64).product()
     }
 
+    fn in_bounds(&self, position: Vector3<i32>) -> bool {
+        let length = self.length();
+        return position.x >= 0
+            && position.y >= 0
+            && position.z >= 0
+            && (position.x as u32) < length.x
+            && (position.y as u32) < length.y
+            && (position.z as u32) < length.z;
+    }
+
+    fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData>;
+
+    fn clear(&mut self);
+
     fn create_rvox_asset(&self) -> RVOXAsset;
 
     fn material_palette(&self) -> MaterialPalette;
@@ -193,6 +226,14 @@ pub trait VoxelModelImplMethods: Send + Sync + Any {
 impl<T: VoxelModelImpl> VoxelModelImplMethods for T {
     fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace> {
         VoxelModelImpl::trace(self, ray, aabb)
+    }
+
+    fn get_voxel(&self, position: Vector3<u32>) -> Option<VoxelMaterialData> {
+        VoxelModelImpl::get_voxel(self, position)
+    }
+
+    fn clear(&mut self) {
+        VoxelModelImpl::clear(self)
     }
 
     fn set_voxel_range_impl(&mut self, range: &VoxelModelEdit) {

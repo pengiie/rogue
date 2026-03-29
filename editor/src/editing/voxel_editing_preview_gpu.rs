@@ -25,7 +25,10 @@ use rogue_engine::{
 };
 use rogue_macros::Resource;
 
-use crate::editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget};
+use crate::{
+    editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
+    session::EditorSession,
+};
 
 struct EditorVoxelPreviewPassGraphConstants {
     pass_name: &'static str,
@@ -91,8 +94,9 @@ impl EditorVoxelEditingPreviewGpu {
         mut debug_renderer: ResMut<DebugRenderer>,
         ecs_world: Res<ECSWorld>,
         time: Res<Time>,
+        editor_session: Res<EditorSession>,
     ) {
-        if !voxel_editing.enabled {
+        if !voxel_editing.enabled || !editor_session.is_editor_camera_focused() {
             return;
         }
 
