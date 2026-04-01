@@ -15,16 +15,12 @@ use super::{
     sft_compressed::VoxelModelSFTCompressed,
     sft_compressed_gpu::VoxelModelSFTCompressedGpu,
     sft_gpu::VoxelModelSFTGpu,
-    thc::{VoxelModelTHC, VoxelModelTHCCompressed, VoxelModelTHCCompressedGpu, VoxelModelTHCGpu},
     voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl, VoxelModelImplMethods},
 };
 use crate::event::{EventReader, Events};
 use crate::resource::{Res, ResMut};
 use crate::{
-    asset::{
-        asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
-        repr::voxel::any::VoxelModelAsset,
-    },
+    asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
     common::vtable,
 };
 use crate::{

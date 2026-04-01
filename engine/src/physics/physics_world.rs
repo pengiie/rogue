@@ -211,11 +211,6 @@ impl PhysicsWorld {
                 //});
             }
         }
-
-        // Render impulse lines.
-        //for line in &physics_world.draw_impulse_lines {
-        //    debug_renderer.draw_line(line.clone());
-        //}
     }
 
     pub fn validate_colliders_exist(&self, ecs_world: &mut ECSWorld) {
@@ -512,35 +507,10 @@ impl PhysicsWorld {
                     let delta_normal_impulse = contact_point.normal_impulse - last_impulse;
                     let impulse_along_normal = delta_normal_impulse * normal;
 
-                    //physics_world.draw_impulse_lines.push(DebugLine {
-                    //    start: contact_point.position,
-                    //    end: contact_point.position + impulse_along_normal * 10.0,
-                    //    thickness: 0.15,
-                    //    color: Color::new_srgb_hex("#33DC57"),
-                    //    alpha: 0.75,
-                    //    flags: DebugFlags::XRAY,
-                    //});
-
                     let angular_velocity_delta_a =
                         rb_a.inv_inertia() * -center_to_point_a.cross(&impulse_along_normal);
                     let angular_velocity_delta_b =
                         rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal);
-                    //physics_world.draw_impulse_lines.push(DebugLine {
-                    //    start: contact_point.position,
-                    //    end: contact_point.position + angular_velocity_delta_a * 10.0,
-                    //    thickness: 0.1,
-                    //    color: Color::new_srgb_hex("#A357DC"),
-                    //    alpha: 0.75,
-                    //    flags: DebugFlags::XRAY,
-                    //});
-                    //physics_world.draw_impulse_lines.push(DebugLine {
-                    //    start: contact_point.position,
-                    //    end: contact_point.position + angular_velocity_delta_b * 10.0,
-                    //    thickness: 0.1,
-                    //    color: Color::new_srgb_hex("#A357DC"),
-                    //    alpha: 0.75,
-                    //    flags: DebugFlags::XRAY,
-                    //});
 
                     rb_a.velocity -= impulse_along_normal * rb_a.inv_mass();
                     rb_a.set_angular_velocity(
@@ -552,13 +522,6 @@ impl PhysicsWorld {
                         rb_b.angular_velocity
                             + rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_normal),
                     );
-
-                    //// Resulting v_rel after normal impulse applied.
-                    //let v_rel_post = (rb_b.velocity()
-                    //    + rb_b.angular_linear_velocity(center_to_point_b)
-                    //    - rb_a.velocity
-                    //    - rb_a.angular_linear_velocity(center_to_point_a))
-                    //.dot(&normal);
 
                     //// Calculate frictional impulse.
                     let v_rel = rb_b.velocity() + rb_b.angular_linear_velocity(center_to_point_b)
@@ -600,31 +563,6 @@ impl PhysicsWorld {
                         rb_b.angular_velocity
                             + rb_b.inv_inertia() * center_to_point_b.cross(&impulse_along_tangent),
                     );
-
-                    // Draw friction impulse line
-                    //physics_world.draw_impulse_lines.push(DebugLine {
-                    //    start: contact_point.position,
-                    //    end: contact_point.position + impulse_along_tangent * 10000.0,
-                    //    thickness: 0.15,
-                    //    color: Color::new_srgb_hex("#FFAA00"),
-                    //    alpha: 0.75,
-                    //    flags: DebugFlags::XRAY,
-                    //});
-
-                    //// Resulting v_rel after tangent impulse applied.
-                    //let v_rel_post = (rb_b.velocity()
-                    //    + rb_b.angular_linear_velocity(center_to_point_b)
-                    //    - rb_a.velocity
-                    //    - rb_a.angular_linear_velocity(center_to_point_a))
-                    //.dot(&normal);
-
-                    //log::debug!(
-                    //    "Iteration {}, {:?} v {:?}, relative_veloctiy {:?}",
-                    //    i,
-                    //    contact_pair.entity_a,
-                    //    contact_pair.entity_b,
-                    //    v_rel_post
-                    //);
                 }
             }
         }
@@ -682,33 +620,6 @@ impl PhysicsWorld {
                                 * -center_to_point_a.cross(&impulse_along_normal)
                                 * timestep.as_secs_f32(),
                         );
-                        //physics_world.draw_impulse_lines.push(DebugLine {
-                        //    start: world_transform_a.position,
-                        //    end: contact_point.position,
-                        //    thickness: 0.05,
-                        //    color: Color::new_srgb_hex("#CCCCFF"),
-                        //    alpha: 0.5,
-                        //    flags: DebugFlags::XRAY,
-                        //});
-                        //physics_world.draw_impulse_lines.push(DebugLine {
-                        //    start: contact_point.position,
-                        //    end: contact_point.position - impulse_along_normal * 1000.0,
-                        //    thickness: 0.15,
-                        //    color: Color::new_srgb_hex("#EC1133"),
-                        //    alpha: 0.75,
-                        //    flags: DebugFlags::XRAY,
-                        //});
-                        //physics_world.draw_impulse_lines.push(DebugLine {
-                        //    start: contact_point.position,
-                        //    end: contact_point.position
-                        //        + (rb_a.inv_inertia()
-                        //            * -center_to_point_a.cross(&impulse_along_normal))
-                        //            * 1000.0,
-                        //    thickness: 0.1,
-                        //    color: Color::new_srgb_hex("#C0FF00"),
-                        //    alpha: 0.75,
-                        //    flags: DebugFlags::XRAY,
-                        //});
                     }
 
                     if !rb_b.is_static() {
@@ -719,34 +630,6 @@ impl PhysicsWorld {
                                 * center_to_point_b.cross(&impulse_along_normal)
                                 * timestep.as_secs_f32(),
                         );
-                        // Draw center to contact point line
-                        // physics_world.draw_impulse_lines.push(DebugLine {
-                        //     start: world_transform_b.position,
-                        //     end: contact_point.position,
-                        //     thickness: 0.05,
-                        //     color: Color::new_srgb_hex("#CCCCFF"),
-                        //     alpha: 0.5,
-                        //     flags: DebugFlags::XRAY,
-                        // });
-                        // physics_world.draw_impulse_lines.push(DebugLine {
-                        //     start: contact_point.position,
-                        //     end: contact_point.position + impulse_along_normal * 1000.0,
-                        //     thickness: 0.15,
-                        //     color: Color::new_srgb_hex("#EC1133"),
-                        //     alpha: 0.75,
-                        //     flags: DebugFlags::XRAY,
-                        // });
-                        // physics_world.draw_impulse_lines.push(DebugLine {
-                        //     start: contact_point.position,
-                        //     end: contact_point.position
-                        //         + (rb_b.inv_inertia()
-                        //             * center_to_point_b.cross(&impulse_along_normal))
-                        //             * 1000.0,
-                        //     thickness: 0.1,
-                        //     color: Color::new_srgb_hex("#C0FF00"),
-                        //     alpha: 0.75,
-                        //     flags: DebugFlags::XRAY,
-                        // });
                     }
                 }
             }

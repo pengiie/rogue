@@ -160,8 +160,10 @@ impl EntityHierarchyUI {
 
         if label.interact(egui::Sense::click()).clicked() {
             ctx.session.selected_entity = Some(entity_id);
-            ctx.commands
-                .push(EditorCommand::open_ui(EntityPropertiesPane::ID));
+            if !ctx.voxel_editing.enabled {
+                ctx.commands
+                    .push(EditorCommand::open_ui(EntityPropertiesPane::ID));
+            }
         }
 
         label.context_menu(|ui| {

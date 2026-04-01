@@ -6,7 +6,7 @@ use rogue_engine::{
 use strum::VariantArray;
 
 use crate::{
-    editing::voxel_editing::{EditorEditingTool, EditorEditingToolType},
+    editing::voxel_editing::{EditorEditingTool, EditorEditingToolType, EditorVoxelEditingTarget},
     ui::pane::EditorUIPane,
 };
 
@@ -81,6 +81,19 @@ impl EditingPane {
                 }
             }
         }
+        ui.horizontal(|ui| {
+            ui.label("Target lock:");
+            ui.checkbox(&mut ctx.voxel_editing.target_lock, "");
+        });
+        if matches!(
+            ctx.voxel_editing.edit_target,
+            Some(EditorVoxelEditingTarget::Entity(_)),
+        ) {
+            ui.horizontal(|ui| {
+                ui.label("Show bounds:");
+                ui.checkbox(&mut ctx.voxel_editing.draw_entity_bounds, "");
+            });
+        }
 
         ui.separator();
         ui.label("Current Material:");
@@ -113,8 +126,25 @@ impl EditingPane {
             .get_mut(&ctx.voxel_editing.selected_tool_type)
             .unwrap();
         match tool {
-            EditorEditingTool::Pencil { brush_size } => {
+            EditorEditingTool::Pencil {
+                brush_size,
+                air_place,
+            } => {
                 brush_size_ui(ui, brush_size);
+                if ctx
+                    .voxel_editing
+                    .edit_target
+                    .as_ref()
+                    .and_then(|target| target.is_entity().then_some(()))
+                    .is_some()
+                {
+                    ui.add_enabled_ui(ctx.voxel_editing.target_lock, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Air place:");
+                            ui.checkbox(air_place, "");
+                        })
+                    });
+                }
             }
             EditorEditingTool::Paint { brush_size } => {
                 brush_size_ui(ui, brush_size);

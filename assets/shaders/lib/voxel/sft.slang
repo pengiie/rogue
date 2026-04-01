@@ -4,6 +4,7 @@ namespace voxel {
 
 // Size in uints.
 static const uint SFT_NODE_SIZE = 5;
+static const float RAY_EPSILON = 0.000001;
 
 public struct SFTVoxelAddr {
   // Node index per node (5 uints).
@@ -156,7 +157,7 @@ public struct SFT {
       let mask = curr_t == next_t;
       last_mask = mask;
       curr_local_grid += int3(mask) * unit_grid; 
-      curr_ray.advance(next_t + 0.0001);
+      curr_ray.advance(next_t + RAY_EPSILON);
     }
 
     return RayModelTest.miss();

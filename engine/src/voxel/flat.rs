@@ -14,15 +14,14 @@ use nalgebra::Vector3;
 
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap, AttachmentMap},
-    thc::VoxelModelTHCCompressed,
     voxel::{
         VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl,
         VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
-use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::ray::Ray;
+use crate::common::geometry::{aabb::AABB, ray::RayAABBHitInfo};
 use crate::graphics::{
     device::{DeviceResource, GfxDevice},
     gpu_allocator::{Allocation, GpuBufferAllocator},
@@ -637,7 +636,10 @@ impl VoxelModelImpl for VoxelModelFlat {
 
     fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace> {
         let mut ray = ray.clone();
-        let Some(model_t) = ray.intersect_aabb(aabb) else {
+        let Some(RayAABBHitInfo {
+            t_enter: model_t, ..
+        }) = ray.intersect_aabb(aabb)
+        else {
             return None;
         };
         ray.advance(model_t);
@@ -1038,65 +1040,5 @@ impl VoxelModelGpuImplMethods for VoxelModelFlatGpu {
 
     fn deallocate(&mut self, allocator: &mut VoxelDataAllocator) {
         todo!()
-    }
-}
-
-impl From<&VoxelModelTHCCompressed> for VoxelModelFlat {
-    fn from(thc: &VoxelModelTHCCompressed) -> Self {
-        let mut flat = VoxelModelFlat::new_empty(Vector3::new(
-            thc.side_length,
-            thc.side_length,
-            thc.side_length,
-        ));
-        for (_, attachment) in thc.attachment_map.iter() {
-            flat.initialize_attachment_buffers(attachment);
-        }
-
-        let mut to_process = vec![(/*curr_node*/ 0usize, /*traversal*/ 0u64)];
-        while let Some((node_idx, traversal)) = to_process.pop() {
-            let node_data = &thc.node_data[node_idx];
-            if node_data.is_leaf_node() {
-                for child in 0u64..64 {
-                    if !node_data.has_child(child as u32) {
-                        continue;
-                    }
-
-                    let voxel_morton = (traversal << 6) | child;
-                    let local_pos = morton_decode(voxel_morton);
-                    let mut voxel = flat.get_voxel_mut(local_pos);
-                    for (attachment_id, attachment) in thc.attachment_map.iter() {
-                        let lookup_data = thc.attachment_lookup_data.get(attachment_id).unwrap();
-                        let lookup_node = &lookup_data[node_idx];
-                        if !lookup_node.has_child(child as u32) {
-                            continue;
-                        }
-
-                        let raw_data = thc.attachment_raw_data.get(attachment_id).unwrap();
-                        let child_offset =
-                            (lookup_node.attachment_mask & ((1 << child) - 1)).count_ones();
-                        let src_offset =
-                            ((lookup_node.data_ptr + child_offset) * attachment.size()) as usize;
-                        voxel.set_attachment_id(
-                            attachment_id,
-                            &raw_data[src_offset..(src_offset + attachment.size() as usize)],
-                        );
-                    }
-                }
-            } else {
-                for child in 0u64..64 {
-                    if !node_data.has_child(child as u32) {
-                        continue;
-                    }
-
-                    let child_offset = (node_data.child_mask & ((1 << child) - 1)).count_ones();
-                    to_process.push((
-                        (node_data.child_ptr() + child_offset) as usize,
-                        (traversal << 6) | child,
-                    ));
-                }
-            }
-        }
-
-        return flat;
     }
 }

@@ -7,18 +7,16 @@ use super::{
     flat::VoxelModelFlat,
     sft_compressed::VoxelModelSFTCompressed,
     sft_gpu::VoxelModelSFTGpu,
-    thc::VoxelModelTHCCompressed,
     voxel::{
         VoxelModelEdit, VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl,
         VoxelModelImplMethods, VoxelModelTrace,
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
-use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::ray::Ray;
+use crate::common::geometry::{aabb::AABB, ray::RayAABBHitInfo};
 use crate::graphics::device::GfxDevice;
 use crate::voxel::attachment::BuiltInMaterial;
-use crate::voxel::thc::VoxelModelTHC;
 use crate::{
     common::morton::{self, morton_encode, morton_traversal_thc, next_power_of_4},
     consts,
@@ -157,7 +155,10 @@ impl VoxelModelImpl for VoxelModelSFT {
     fn trace(&self, ray: &Ray, aabb: &AABB) -> Option<VoxelModelTrace> {
         let original_pos = ray.origin;
         let mut ray = ray.clone();
-        let Some(model_t) = ray.intersect_aabb(aabb) else {
+        let Some(RayAABBHitInfo {
+            t_enter: model_t, ..
+        }) = ray.intersect_aabb(aabb)
+        else {
             return None;
         };
         ray.advance(model_t);
@@ -444,19 +445,5 @@ impl From<&VoxelModelSFTCompressed> for VoxelModelSFT {
 impl From<&VoxelModelFlat> for VoxelModelSFT {
     fn from(flat: &VoxelModelFlat) -> Self {
         VoxelModelSFT::from(&VoxelModelSFTCompressed::from(flat))
-    }
-}
-
-impl From<&VoxelModelTHC> for VoxelModelSFT {
-    fn from(thc: &VoxelModelTHC) -> Self {
-        VoxelModelSFT::from(&VoxelModelSFTCompressed::from(
-            &VoxelModelTHCCompressed::from(thc),
-        ))
-    }
-}
-
-impl From<&VoxelModelTHCCompressed> for VoxelModelSFT {
-    fn from(thc_compressed: &VoxelModelTHCCompressed) -> Self {
-        VoxelModelSFT::from(&VoxelModelSFTCompressed::from(thc_compressed))
     }
 }

@@ -42,8 +42,6 @@ pub mod util {
             let mut edit = original.clone();
             // nalgebra uses positive rotation for clockwise but intuitively
             // counter-clockwise makes more sense since math.
-            edit.x *= -1.0;
-            edit.z *= -1.0;
             ui.add(
                 egui::DragValue::new(&mut edit.x)
                     .suffix("°")
@@ -64,17 +62,16 @@ pub mod util {
                     .speed(0.05)
                     .fixed_decimals(2),
             );
-            edit.x *= -1.0;
-            edit.z *= -1.0;
             let diff = edit - original;
             if diff.x != 0.0 {
-                *rotation = UnitQuaternion::from_euler_angles(edit.x.to_radians(), pitch, yaw);
-            }
-            if diff.y != 0.0 {
-                *rotation = UnitQuaternion::from_euler_angles(roll, edit.y.to_radians(), yaw);
-            }
-            if diff.z != 0.0 {
-                *rotation = UnitQuaternion::from_euler_angles(roll, pitch, edit.z.to_radians());
+                *rotation *=
+                    UnitQuaternion::from_axis_angle(&Vector3::x_axis(), diff.x.to_radians());
+            } else if diff.y != 0.0 {
+                *rotation *=
+                    UnitQuaternion::from_axis_angle(&Vector3::y_axis(), diff.y.to_radians());
+            } else if diff.z != 0.0 {
+                *rotation *=
+                    UnitQuaternion::from_axis_angle(&Vector3::z_axis(), diff.z.to_radians());
             }
         });
     }

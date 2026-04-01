@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::common::freelist::FreeListHandle;
 use crate::common::geometry::aabb::AABB;
-use crate::common::geometry::ray::Ray;
+use crate::common::geometry::ray::{Ray, RayAABBHitInfo};
 use crate::common::morton;
 use crate::consts;
 use crate::voxel::voxel_registry::{VoxelModelId, VoxelModelRegistry};
@@ -57,7 +57,10 @@ impl WorldRegion {
         let max = min.map(|x| x + consts::voxel::TERRAIN_REGION_METER_LENGTH);
         let aabb = &AABB::new_two_point(min, max);
         // Early exit if the ray doesn't intersect the bounding box of this model.
-        let Some(model_t) = ray.intersect_aabb(aabb) else {
+        let Some(RayAABBHitInfo {
+            t_enter: model_t, ..
+        }) = ray.intersect_aabb(aabb)
+        else {
             return None;
         };
         ray.advance(model_t);
@@ -88,13 +91,16 @@ impl WorldRegion {
         // Don't include the leaf layer in the height.
         let mut stack = vec![&self.tree.nodes[0]];
         let mut i = 0;
+        let mut was_last_leaf = false;
         while self.in_bounds_local(curr_ray.origin.map(|x| x.floor() as i32))
             && (curr_ray.origin.metric_distance(&dda_pos)
                 * consts::voxel::TERRAIN_CHUNK_METER_LENGTH)
                 < max_t
         {
+            assert!(i < 10000, "Shouldn't ever iterate over 10k times.");
             i += 1;
-            let should_pop = curr_local_grid.x < 0
+            let should_pop = was_last_leaf
+                || curr_local_grid.x < 0
                 || curr_local_grid.y < 0
                 || curr_local_grid.z < 0
                 || curr_local_grid.x > 3
@@ -160,6 +166,7 @@ impl WorldRegion {
                     let curr_t = curr_ray.intersect_point(next_point.cast::<f32>());
                     let next_t = curr_t.min();
                     curr_ray.advance(next_t + 0.00001);
+                    was_last_leaf = true;
                     continue;
                 }
             }

@@ -25,7 +25,11 @@ use winit::event::{DeviceEvent, ElementState};
 
 use crate::{
     editing::{
-        voxel_editing::EditorVoxelEditing, voxel_editing_preview_gpu::EditorVoxelEditingPreviewGpu,
+        voxel_editing::EditorVoxelEditing, voxel_editing_edit_tools::EditorVoxelEditingEditTools,
+        voxel_editing_preview::EditorVoxelEditingPreview,
+        voxel_editing_preview_gpu::EditorVoxelEditingPreviewGpu,
+        voxel_editing_selection::EditorVoxelEditingSelections,
+        voxel_editing_selections_gpu::EditorVoxelEditingSelectionsGpu,
     },
     editor_input::EditorInput,
     editor_project_settings::EditorProjectSettings,
@@ -114,7 +118,11 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     rb.insert(world_generator);
 
     rb.insert(EditorVoxelEditing::new());
+    rb.insert(EditorVoxelEditingSelections::new());
+    rb.insert(EditorVoxelEditingEditTools::new());
+    rb.insert(EditorVoxelEditingPreview::new());
     rb.insert(EditorVoxelEditingPreviewGpu::new());
+
     rb.insert(EditorGizmo::new());
 
     rb.insert(EditorInput::new());
@@ -201,33 +209,25 @@ fn on_device_event(rb: &mut ResourceBank, event: &mut winit::event::DeviceEvent)
 
 fn setup_systems(app: &mut App) {
     // Update editor session raycast which is re-used throughout the frame.
-    app.insert_system(AppStage::Update, EditorSession::update_raycast);
+    app.insert_system(AppStage::Update, EditorSession::update_raycasts);
     // Update editor camera controller and EditorSession::is_editor_camera_focused().
     app.insert_system(
         AppStage::Update,
         EditorSession::update_editor_camera_controller,
     );
+
     // Update editor gizmo actions and rendering.
     // Do this before updating the selected entity since the gizmo can consume clicks.
     app.insert_system(AppStage::Update, EditorGizmo::update);
     app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
+
     // Update editor session selected entity based on the raycast.
     app.insert_system(AppStage::Update, EditorSession::update_selected_entity);
 
-    // Update editor voxel editing for entities and terrain.
+    // Update editor voxel editing systems for entities and terrain.
     app.insert_system(
         AppStage::Update,
-        EditorVoxelEditing::update_voxel_editing_systems,
-    );
-    // Ensure the preview model exists on the gpu voxel registry.
-    app.insert_system(
-        AppStage::Update,
-        EditorVoxelEditingPreviewGpu::update_preview_gpu,
-    );
-    // Render the selections.
-    app.insert_system(
-        AppStage::Update,
-        EditorVoxelEditingPreviewGpu::update_selections_preview_gpu,
+        EditorVoxelEditing::on_update_voxel_editing_systems,
     );
 
     // Update the voxel-based world generator.

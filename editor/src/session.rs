@@ -21,7 +21,7 @@ use rogue_engine::{
     },
     window::{time::Time, window::Window},
     world::{
-        region_map::RegionMap,
+        region_map::{RegionMap, TerrainRaycastHit},
         world_entities::{WorldEntities, WorldEntityRaycastHit},
     },
 };
@@ -38,17 +38,23 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum EditorEvent {
+pub enum EditorCommandEvent {
     SaveEditorSettings,
     SaveProject,
     SaveVoxelModel(VoxelModelId),
 }
 
+pub enum EditorEvent {
+    SelectedEntity(Option<Entity>),
+}
+
 #[derive(Resource)]
 pub struct EditorSession {
     pub entity_raycast: Option<WorldEntityRaycastHit>,
+    pub terrain_raycast: Option<TerrainRaycastHit>,
     pub editor_camera_ray: Ray,
     pub selected_entity: Option<Entity>,
+    pub last_selected_entity: Option<Entity>,
     pub hovered_entity: Option<Entity>,
 
     pub editor_camera: Entity,
@@ -56,7 +62,7 @@ pub struct EditorSession {
     editor_camera_controller: EditorCameraController,
     double_right_click_buffer: InputBuffer,
 
-    editor_event_reader: EventReader<EditorEvent>,
+    editor_event_reader: EventReader<EditorCommandEvent>,
 }
 
 impl EditorSession {
@@ -70,8 +76,10 @@ impl EditorSession {
 
         Self {
             entity_raycast: None,
+            terrain_raycast: None,
             editor_camera_ray: Ray::new(Vector3::zeros(), Vector3::zeros()),
             selected_entity: None,
+            last_selected_entity: None,
             hovered_entity: None,
 
             editor_camera,
@@ -140,15 +148,16 @@ impl EditorSession {
         &self.editor_camera_controller
     }
 
-    pub fn update_raycast(
+    pub fn update_raycasts(
         mut session: ResMut<EditorSession>,
         ecs_world: Res<ECSWorld>,
         voxel_registry: Res<VoxelModelRegistry>,
         input: Res<Input>,
         editor_ui: Res<EditorUI>,
         window: Res<Window>,
+        region_map: Res<RegionMap>,
     ) {
-        // Update entity raycast.
+        // Update entity and terrain raycast.
         let Some((editor_camera_transform, editor_camera)) = ecs_world
             .query_one::<(&Transform, &Camera)>(session.editor_camera)
             .get()
@@ -171,6 +180,7 @@ impl EditorSession {
 
         session.entity_raycast =
             WorldEntities::raycast_voxel_entities(&ray, &ecs_world, &voxel_registry);
+        session.terrain_raycast = region_map.raycast_terrain(&voxel_registry, &ray, 1000.0);
         session.editor_camera_ray = ray;
     }
 
@@ -182,16 +192,21 @@ impl EditorSession {
         editor_ui: Res<EditorUI>,
         window: Res<Window>,
         gizmo: Res<EditorGizmo>,
+        mut events: ResMut<Events>,
     ) {
         // Update selected entity.
-        if !input.is_mouse_button_pressed(mouse::Button::Left) || gizmo.is_hovering() {
-            return;
+        if input.is_mouse_button_pressed(mouse::Button::Left) && !gizmo.is_hovering() {
+            if let Some(hit) = &session.entity_raycast {
+                session.selected_entity = Some(hit.entity);
+            } else {
+                session.selected_entity = None;
+            }
         }
 
-        if let Some(hit) = &session.entity_raycast {
-            session.selected_entity = Some(hit.entity);
-        } else {
-            session.selected_entity = None;
+        // Send out event if selected entity changed at any point.
+        if session.selected_entity != session.last_selected_entity {
+            session.last_selected_entity = session.selected_entity;
+            events.push(EditorEvent::SelectedEntity(session.selected_entity));
         }
     }
 
@@ -221,7 +236,7 @@ impl EditorSession {
 
         for event in unique_events {
             match event {
-                EditorEvent::SaveEditorSettings => {
+                EditorCommandEvent::SaveEditorSettings => {
                     log::info!("Saving editor settings");
                     if let Some(project_dir) = assets.project_dir() {
                         project_settings.projects.insert(
@@ -242,7 +257,7 @@ impl EditorSession {
                     };
                     editor_settings.save_settings();
                 }
-                EditorEvent::SaveProject => {
+                EditorCommandEvent::SaveProject => {
                     log::info!("Saving project");
                     assets.save_project(
                         rogue_engine::asset::repr::project::ProjectSerializeContext {
@@ -256,7 +271,7 @@ impl EditorSession {
                         },
                     );
                 }
-                EditorEvent::SaveVoxelModel(voxel_model_id) => {
+                EditorCommandEvent::SaveVoxelModel(voxel_model_id) => {
                     let Some(project_dir) = assets.project_dir() else {
                         return;
                     };

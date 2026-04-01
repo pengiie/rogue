@@ -62,14 +62,14 @@ impl Collider for CapsuleCollider {
         });
         ui.horizontal(|ui| {
             ui.label("Height:");
-            let mut height = self.half_height * 2.0;
+            let mut height = (self.half_height + self.radius) * 2.0;
             ui.add(
                 egui::DragValue::new(&mut height)
                     .suffix(" m")
                     .speed(0.01)
                     .fixed_decimals(2),
             );
-            self.half_height = height * 0.5;
+            self.half_height = (height - (2.0 * self.radius)) * 0.5;
         });
     }
 

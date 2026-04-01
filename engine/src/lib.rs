@@ -1,5 +1,6 @@
 #![allow(warnings)]
 
+pub mod animation;
 pub mod app;
 pub mod asset;
 pub mod audio;

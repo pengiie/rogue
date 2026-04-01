@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::{
     EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity, scripting::ScriptableEntity,
 };
+use crate::animation::animator::Animator;
 use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
 use crate::asset::repr::project::ProjectSceneDeserializeContext;
 use crate::common::dyn_vec::TypeInfo;
@@ -96,6 +97,7 @@ impl ECSWorld {
         ecs.register_game_component::<Camera>();
         ecs.register_game_component::<RigidBody>();
         ecs.register_game_component::<EntityColliders>();
+        ecs.register_game_component::<Animator>();
 
         ecs
     }

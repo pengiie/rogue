@@ -1,4 +1,3 @@
-pub mod animate;
 pub mod archetype;
 pub mod bitset;
 pub mod color;

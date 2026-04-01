@@ -11,7 +11,7 @@ use rogue_engine::{
 };
 
 use crate::{
-    session::EditorEvent,
+    session::EditorCommandEvent,
     ui::{EditorCommand, EditorDialog, EditorUIContext, FilePickerType},
 };
 
@@ -125,7 +125,8 @@ fn create_voxel_model_dialog_show_fn(
                     }
                     ctx.commands
                         .push(EditorCommand::CloseDialog(DIALOG_ID.to_owned()));
-                    ctx.events.push(EditorEvent::SaveVoxelModel(model_id));
+                    ctx.events
+                        .push(EditorCommandEvent::SaveVoxelModel(model_id));
                 }),
                 extensions: vec!["rvox".to_owned()],
                 preset_file_path: None,

@@ -1,7 +1,14 @@
 use log::debug;
-use nalgebra::{Vector2, Vector3};
+use nalgebra::{UnitQuaternion, Vector2, Vector3};
 
-use crate::common::geometry::aabb::AABB;
+use crate::common::geometry::{aabb::AABB, obb::OBB};
+
+pub struct RayAABBHitInfo {
+    pub t_enter: f32,
+    pub t_exit: f32,
+    pub t_min: Vector3<f32>,
+    pub t_max: Vector3<f32>,
+}
 
 #[derive(Clone, Debug)]
 pub struct Ray {
@@ -25,6 +32,31 @@ impl Ray {
 
     pub fn advance(&mut self, t: f32) {
         self.origin = self.origin + self.dir * t;
+    }
+
+    pub fn intersect_plane(&self, origin: Vector3<f32>, normal: Vector3<f32>) -> Option<f32> {
+        let denom = self.dir.dot(&normal);
+        if denom.abs() < 0.00001 {
+            // Ray dir is perpendicular to normal so parallel to plane.
+            return None;
+        }
+        let t = (origin - self.origin).dot(&normal) / denom;
+        Some(t)
+    }
+
+    pub fn intersect_plane_segment(
+        &self,
+        position: Vector3<f32>,
+        rotation: UnitQuaternion<f32>,
+        scale: Vector2<f32>,
+    ) -> Option<f32> {
+        let normal = rotation.transform_vector(&Vector3::y());
+        let t = (position - self.origin).dot(&normal) / self.dir.dot(&normal);
+        if t < 0.0 {
+            return None;
+        }
+        let hit_point = self.origin + t * self.dir;
+        return Some(t);
     }
 
     pub fn intersect_tri(
@@ -138,7 +170,7 @@ impl Ray {
     }
 
     /// Returns the t-value to advance to the AABB, only in the positive direction.
-    pub fn intersect_aabb(&self, aabb: &AABB) -> Option<f32> {
+    pub fn intersect_aabb(&self, aabb: &AABB) -> Option<RayAABBHitInfo> {
         let t0 = self.intersect_point(aabb.min);
         let t1 = self.intersect_point(aabb.max);
         let t_min = t0.zip_map(&t1, |x, y| x.min(y));
@@ -147,7 +179,22 @@ impl Ray {
         let t_enter = t_min.max().max(0.0);
         let t_exit = t_max.min();
 
-        return (t_exit > t_enter).then_some(t_enter);
+        return (t_exit > t_enter).then_some(RayAABBHitInfo {
+            t_enter,
+            t_exit,
+            t_min,
+            t_max,
+        });
+    }
+
+    /// Returns the t-value to advance to the AABB, only in the positive direction.
+    pub fn intersect_obb(&self, obb: &OBB) -> Option<RayAABBHitInfo> {
+        let center = obb.aabb.center();
+        let inv_rot = obb.rotation.inverse();
+        let rotated_ray_pos = inv_rot.transform_vector(&(self.origin - center)) + center;
+        let rotated_ray_dir = inv_rot.transform_vector(&self.dir);
+        let rotated_ray = Ray::new(rotated_ray_pos, rotated_ray_dir);
+        return rotated_ray.intersect_aabb(&obb.aabb);
     }
 }
 

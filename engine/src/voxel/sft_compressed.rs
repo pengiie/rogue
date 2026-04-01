@@ -8,19 +8,18 @@ use super::{
     sft::VoxelModelSFT,
     sft_compressed_gpu::VoxelModelSFTCompressedGpu,
     sft_gpu::VoxelModelSFTGpu,
-    thc::VoxelModelTHCCompressed,
     voxel::{VoxelModelImpl, VoxelModelImplMethods},
 };
+use crate::{common::geometry::ray::Ray, voxel::voxel::VoxelModelEditRegion};
+use crate::{common::morton, consts};
 use crate::{
-    common::color::Color,
+    common::{color::Color, geometry::ray::RayAABBHitInfo},
     voxel::{
         attachment::{AttachmentMap, BuiltInMaterial},
         rvox_asset::RVOXAsset,
         voxel::{VoxelMaterialData, VoxelModelTrace},
     },
 };
-use crate::{common::geometry::ray::Ray, voxel::voxel::VoxelModelEditRegion};
-use crate::{common::morton, consts};
 
 #[derive(Copy, Clone)]
 pub struct SFTNodeCompressed {
@@ -426,7 +425,10 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
     ) -> Option<super::voxel::VoxelModelTrace> {
         let mut ray = in_ray.clone();
         // Early exit if the ray doesn't intersect the bounding box of this model.
-        let Some(model_t) = ray.intersect_aabb(aabb) else {
+        let Some(RayAABBHitInfo {
+            t_enter: model_t, ..
+        }) = ray.intersect_aabb(aabb)
+        else {
             return None;
         };
         ray.advance(model_t);
@@ -710,51 +712,6 @@ impl From<&VoxelModelSFT> for VoxelModelSFTCompressed {
         }
 
         return compressed;
-    }
-}
-
-impl From<&VoxelModelTHCCompressed> for VoxelModelSFTCompressed {
-    fn from(thc: &VoxelModelTHCCompressed) -> Self {
-        let mut node_data = thc
-            .node_data
-            .iter()
-            .map(|node| {
-                let leaf_mask = if node.is_leaf_node() {
-                    node.child_mask
-                } else {
-                    0
-                };
-
-                SFTNodeCompressed {
-                    child_ptr: node.child_ptr(),
-                    child_mask: node.child_mask,
-                    leaf_mask,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let mut attachment_lookup_data = AttachmentMap::new();
-        for (attachment_id, thc_lookup_data) in thc.attachment_lookup_data.iter() {
-            let sft_lookup_data = thc_lookup_data
-                .iter()
-                .map(|node| SFTAttachmentLookupNodeCompressed {
-                    data_ptr: node.data_ptr(),
-                    attachment_mask: node.attachment_mask,
-                })
-                .collect();
-            attachment_lookup_data.insert(attachment_id, sft_lookup_data);
-        }
-        let attachment_raw_data = thc.attachment_raw_data.clone();
-
-        return VoxelModelSFTCompressed {
-            side_length: thc.side_length,
-            attachment_map: thc.attachment_map.clone(),
-
-            node_data,
-            attachment_lookup_data,
-            attachment_raw_data,
-            update_tracker: 0,
-        };
     }
 }
 

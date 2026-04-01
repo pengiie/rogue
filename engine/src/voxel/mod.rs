@@ -11,7 +11,7 @@ pub mod sft;
 pub mod sft_compressed;
 pub mod sft_compressed_gpu;
 pub mod sft_gpu;
-pub mod thc;
+//pub mod thc;
 pub mod voxel;
 pub mod voxel_allocator;
 pub mod voxel_palette;

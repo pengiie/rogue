@@ -35,7 +35,7 @@ use std::{
 
 use crate::{
     editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
-    session::{EditorEvent, EditorSession},
+    session::{EditorCommandEvent, EditorSession},
     ui::{
         EditorCommand, EditorCommands, EditorDialog, EditorUIContext, FilePickerType,
         create_voxel_model_dialog::{CreateVoxelModelDialogCreateInfo, create_voxel_model_dialog},
@@ -170,7 +170,7 @@ impl EntityPropertiesShowFns {
                 if ui.add_enabled(can_save,
                         egui::Button::new("Save")).clicked() {
                             ctx.events
-                                .push(EditorEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
+                                .push(EditorCommandEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
                             ui.close_menu();
                 }
 
@@ -215,7 +215,7 @@ impl EntityPropertiesShowFns {
                             }
 
                             ctx.events
-                                .push(EditorEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
+                                .push(EditorCommandEvent::SaveVoxelModel(renderable.voxel_model_id().unwrap()));
                         }),
                         extensions: vec!["rvox".to_owned()],
                         preset_file_path: Some(path.path().to_path_buf()),
@@ -232,10 +232,9 @@ impl EntityPropertiesShowFns {
                     ui.close_menu();
                 }
 
-                if ui.add_enabled(can_edit, egui::Button::new("Select All")).clicked() {
+                if ui.add_enabled(can_edit, egui::Button::new("Set editing target")).clicked() {
                     let side_length = ctx.voxel_registry.get_dyn_model(renderable.voxel_model_id().unwrap()).length();
                     ctx.voxel_editing.edit_target = Some(EditorVoxelEditingTarget::Entity(selected_entity));
-                    ctx.voxel_editing.entity_state.entry(selected_entity).or_default().selection = Some(VoxelModelEditRegion::Rect { min: Vector3::zeros(), max: side_length - Vector3::new(1,1,1) });
                     ui.close_menu();
                 }
             });

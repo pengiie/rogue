@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use nalgebra::{Matrix4, Point3, Translation3, UnitQuaternion, Vector3, Vector4};
+use nalgebra::{
+    Isometry, Isometry3, Matrix4, Point3, Translation3, UnitQuaternion, Vector2, Vector3, Vector4,
+};
 use rogue_macros::Resource;
 
 use crate::{
@@ -52,10 +54,15 @@ pub enum DebugShapeType {
     Arrow,
     Sphere,
     Cube,
+    Plane,
     Capsule {
         // f32s quantized by 1000 for 0.0001 increments
         height: u32,
         radius: u32,
+    },
+    Ring {
+        radius: u32,
+        thickness: u32,
     },
 }
 
@@ -84,6 +91,8 @@ bitflags::bitflags! {
     }
 }
 
+/// Used to draw basic primitives, all commands should be sent in AppStage::OnUpdate since the
+/// DebugRenderer flushes all requests before rendering.
 #[derive(Resource)]
 pub struct DebugRenderer {
     meshes: HashMap<DebugShapeType, DebugMesh>,
@@ -99,6 +108,7 @@ pub struct DebugRenderer {
     shape_mesh_offests: HashMap<DebugShapeType, /*byte_offset*/ u32>,
     shape_mesh_vertex_offset: HashMap<DebugShapeType, /*byte_offset*/ u32>,
     shape_mesh_index_offset: HashMap<DebugShapeType, /*byte_offset*/ u32>,
+    last_written_mesh_count: usize,
 
     shapes: HashMap<DebugShapeType, Vec<DebugShape>>,
     graph_framebuffer: Option<FrameGraphResource<Image>>,
@@ -150,11 +160,77 @@ impl DebugRenderer {
             instances_buffer: None,
             shape_mesh_vertex_offset: HashMap::new(),
             shape_mesh_index_offset: HashMap::new(),
+            last_written_mesh_count: 0,
         };
         s.register_mesh(DebugShapeType::Arrow, "models::arrow::glb");
         s.register_mesh(DebugShapeType::Sphere, "models::sphere::glb");
         s.register_mesh(DebugShapeType::Cube, "models::cube::glb");
+        s.register_plane_mesh();
+
         s
+    }
+
+    fn register_plane_mesh(&mut self) {
+        // We just generate the plane cause its so tiny.
+        let mesh = DebugMesh {
+            vertices: vec![
+                DebugMeshVertex {
+                    position: Vector3::new(-0.5, 0.0, -0.5),
+                    normal: Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(0.5, 0.0, -0.5),
+                    normal: Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(-0.5, 0.0, 0.5),
+                    normal: Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(0.5, 0.0, 0.5),
+                    normal: Vector3::y(),
+                },
+                // Double-sided btw
+                DebugMeshVertex {
+                    position: Vector3::new(-0.5, 0.0, -0.5),
+                    normal: -Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(0.5, 0.0, -0.5),
+                    normal: -Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(-0.5, 0.0, 0.5),
+                    normal: -Vector3::y(),
+                },
+                DebugMeshVertex {
+                    position: Vector3::new(0.5, 0.0, 0.5),
+                    normal: -Vector3::y(),
+                },
+            ],
+            indices: vec![0, 1, 2, 2, 1, 3, 4, 6, 5, 5, 6, 7],
+        };
+        self.meshes.insert(DebugShapeType::Plane, mesh);
+    }
+
+    pub fn raycast_ring(
+        &mut self,
+        ray: &Ray,
+        position: Vector3<f32>,
+        rotation: UnitQuaternion<f32>,
+        radius: f32,
+        thickness: f32,
+    ) -> Option<f32> {
+        let transform =
+            Isometry::from_parts(Translation3::from(position), rotation).to_homogeneous();
+        let ring_mesh = self
+            .meshes
+            .entry(DebugShapeType::Ring {
+                radius: DebugShapeType::encode_f32(radius),
+                thickness: DebugShapeType::encode_f32(thickness),
+            })
+            .or_insert_with(|| Self::create_ring_mesh(radius, thickness));
+        return Self::raycast_mesh(ray, &transform, &ring_mesh.vertices, &ring_mesh.indices);
     }
 
     pub fn register_mesh(&mut self, shape_type: DebugShapeType, asset_path: impl AsRef<str>) {
@@ -231,13 +307,14 @@ impl DebugRenderer {
     }
 
     pub fn draw_obb_filled(&mut self, obb: &OBB, color: ColorSrgba, flags: DebugShapeFlags) {
-        let (min, _) = obb.rotated_min_max();
+        let (min, max) = obb.rotated_min_max();
         let side_length = obb.aabb.side_length();
-        let center = min + side_length * 0.5;
-        let isometry = nalgebra::Isometry3::from_parts(
-            Translation3::from(center),
-            UnitQuaternion::face_towards(&obb.forward(), &obb.up()),
-        );
+        let center = (min + max) * 0.5;
+        let mut isometry = Isometry3::identity();
+        isometry.append_translation_mut(&Translation3::from(center));
+        // Don't use rotation_anchor since min and max already include the necessary translation
+        // from that.
+        isometry.append_rotation_wrt_point_mut(&obb.rotation, &Point3::from(center));
         let scale = Vector3::new(side_length.x, side_length.y, side_length.z) * 0.5;
         self.draw_cube(isometry, scale, color, flags);
     }
@@ -261,6 +338,35 @@ impl DebugRenderer {
                 height: DebugShapeType::encode_f32(height),
                 radius: DebugShapeType::encode_f32(radius),
             })
+            .or_default()
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
+    }
+
+    /// rotation is rotation from Vector3::y().
+    /// scale is total width and height of the plane.
+    pub fn draw_plane(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: UnitQuaternion<f32>,
+        scale: Vector2<f32>,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
+        assert!(
+            scale.x >= 0.0 && scale.y >= 0.0,
+            "Plane scale must be non-negative."
+        );
+
+        let rotation = rotation.to_homogeneous();
+        let translation = nalgebra::Translation3::from(position).to_homogeneous();
+        let scale = nalgebra::Scale3::new(scale.x, 0.0, scale.y).to_homogeneous();
+        let transform = translation * rotation * scale;
+        self.shapes
+            .entry(DebugShapeType::Plane)
             .or_default()
             .push(DebugShape {
                 transform,
@@ -306,17 +412,12 @@ impl DebugRenderer {
         isometry.to_homogeneous() * scale.to_homogeneous()
     }
 
-    pub fn raycast_arrow(
-        &self,
+    fn raycast_mesh(
         ray: &Ray,
-        start: Vector3<f32>,
-        end: Vector3<f32>,
-        scale: f32,
-    ) -> Option</*ray_t*/ f32> {
-        let transform = Self::arrow_transform(start, end, scale);
-        let arrow_mesh = self.meshes.get(&DebugShapeType::Arrow).unwrap();
-        let indices = &arrow_mesh.indices;
-        let vertices = &arrow_mesh.vertices;
+        transform: &Matrix4<f32>,
+        vertices: &[DebugMeshVertex],
+        indices: &[u32],
+    ) -> Option<f32> {
         let tri_count = indices.len() / 3;
         for i in 0..tri_count {
             let v0 = vertices[indices[i * 3] as usize].position;
@@ -334,6 +435,43 @@ impl DebugRenderer {
             }
         }
         return None;
+    }
+
+    pub fn raycast_arrow(
+        &self,
+        ray: &Ray,
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        scale: f32,
+    ) -> Option</*ray_t*/ f32> {
+        let transform = Self::arrow_transform(start, end, scale);
+        let arrow_mesh = self.meshes.get(&DebugShapeType::Arrow).unwrap();
+        return Self::raycast_mesh(ray, &transform, &arrow_mesh.vertices, &arrow_mesh.indices);
+    }
+
+    pub fn draw_ring(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: UnitQuaternion<f32>,
+        radius: f32,
+        thickness: f32,
+        color: ColorSrgba,
+        flags: DebugShapeFlags,
+    ) {
+        assert!(radius - thickness > 0.0);
+        let transform =
+            Isometry::from_parts(Translation3::from(position), rotation).to_homogeneous();
+        self.shapes
+            .entry(DebugShapeType::Ring {
+                radius: DebugShapeType::encode_f32(radius),
+                thickness: DebugShapeType::encode_f32(thickness),
+            })
+            .or_default()
+            .push(DebugShape {
+                transform,
+                color,
+                flags,
+            });
     }
 
     pub fn draw_arrow(
@@ -469,6 +607,46 @@ impl DebugRenderer {
             });
     }
 
+    fn create_ring_mesh(radius: f32, thickness: f32) -> DebugMesh {
+        // Subdivisions around the ring.
+        const RADIUS_SUBDIVISION: u32 = 32;
+        // Subdivisions of one arc slice of the ring.
+        const RING_RADIAL_SUBDIVISIONS: u32 = 16;
+        let mut r_inner = radius - thickness;
+        let mut r_outer = radius + thickness;
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for i in 0..=RADIUS_SUBDIVISION {
+            let theta = i as f32 / RADIUS_SUBDIVISION as f32 * std::f32::consts::PI * 2.0;
+            for j in 0..=RING_RADIAL_SUBDIVISIONS {
+                let phi = j as f32 / RING_RADIAL_SUBDIVISIONS as f32 * std::f32::consts::PI * 2.0;
+                let phi_lx = thickness * phi.cos();
+                let x = (radius + phi_lx) * theta.cos();
+                let y = thickness * phi.sin();
+                let z = (radius + phi_lx) * theta.sin();
+                vertices.push(DebugMeshVertex {
+                    position: Vector3::new(x, y, z),
+                    normal: Vector3::new(x, 0.0, z).normalize(),
+                });
+            }
+        }
+
+        for i in 0..RADIUS_SUBDIVISION {
+            let rad_offset = i * RING_RADIAL_SUBDIVISIONS;
+            for j in 0..RING_RADIAL_SUBDIVISIONS {
+                let a = i * (RING_RADIAL_SUBDIVISIONS + 1) + j;
+                let b = a + 1;
+                let c = (i + 1) * (RING_RADIAL_SUBDIVISIONS + 1) + j;
+                let d = c + 1;
+
+                indices.extend_from_slice(&[a as u32, c as u32, b as u32]);
+                indices.extend_from_slice(&[c as u32, d as u32, b as u32]);
+            }
+        }
+
+        DebugMesh { vertices, indices }
+    }
+
     fn create_capsule_mesh(height: f32, radius: f32) -> DebugMesh {
         const RADIUS_SUBDIVISION: u32 = 16;
         const CAP_SUBDIVISION: u32 = 8;
@@ -569,6 +747,7 @@ impl DebugRenderer {
     }
 
     fn write_mesh_buffers(&mut self, device_resource: &mut DeviceResource) {
+        self.last_written_mesh_count = self.meshes.len();
         let total_vertex_count = self
             .meshes
             .values()
@@ -667,19 +846,29 @@ impl DebugRenderer {
         );
 
         // Capsules require custom meshes so check which ones we need to generate.
-        let mut needs_mesh_write = debug_renderer.vertices_buffer.is_none();
-        for (capsule_type, _) in debug_renderer.shapes.iter() {
-            let DebugShapeType::Capsule { height, radius } = capsule_type else {
-                continue;
-            };
-            if debug_renderer.meshes.contains_key(capsule_type) {
+        let mut needs_mesh_write = debug_renderer.vertices_buffer.is_none()
+            || debug_renderer.last_written_mesh_count != debug_renderer.meshes.len();
+        for (shape_type, _) in debug_renderer.shapes.iter() {
+            if debug_renderer.meshes.contains_key(shape_type) {
                 continue;
             }
-            let mesh = Self::create_capsule_mesh(
-                DebugShapeType::decode_f32(*height),
-                DebugShapeType::decode_f32(*radius),
-            );
-            debug_renderer.meshes.insert(*capsule_type, mesh);
+            match shape_type {
+                DebugShapeType::Capsule { height, radius } => {
+                    let mesh = Self::create_capsule_mesh(
+                        DebugShapeType::decode_f32(*height),
+                        DebugShapeType::decode_f32(*radius),
+                    );
+                    debug_renderer.meshes.insert(*shape_type, mesh);
+                }
+                DebugShapeType::Ring { radius, thickness } => {
+                    let mesh = Self::create_ring_mesh(
+                        DebugShapeType::decode_f32(*radius),
+                        DebugShapeType::decode_f32(*thickness),
+                    );
+                    debug_renderer.meshes.insert(*shape_type, mesh);
+                }
+                _ => unreachable!(),
+            }
             needs_mesh_write |= true;
         }
         if needs_mesh_write {

@@ -3,16 +3,20 @@ use rogue_engine::{
     app::App, entity::ecs_world::ECSWorld, resource::ResourceBank, system::SystemErased,
 };
 
-use crate::player::{
-    player_camera_controller::PlayerCameraController, player_controller::PlayerController,
+use crate::{
+    player::{
+        player_camera_controller::PlayerCameraController, player_controller::PlayerController,
+    },
+    weapon::WeaponComponent,
 };
 
-mod init;
 pub mod player;
+pub mod weapon;
 
 pub fn register_game_types(ecs_world: &mut ECSWorld) {
     ecs_world.register_game_component::<PlayerCameraController>();
     ecs_world.register_game_component::<PlayerController>();
+    ecs_world.register_game_component::<WeaponComponent>();
 }
 
 pub fn add_init_resources(app: &mut App) {}

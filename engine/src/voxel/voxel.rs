@@ -34,7 +34,8 @@ use crate::{
 
 pub struct VoxelModelEditMaskModel<'a> {
     pub model: &'a dyn VoxelModelImplMethods,
-    // Where the mask is relative to this models min corner.
+    /// Where the mask is relative to this models min corner.
+    /// Basically -offset is to the current voxel position applied when sampling voxels from the mask model.
     pub offset: Vector3<u32>,
 }
 
@@ -73,6 +74,19 @@ pub enum VoxelModelEditRegion {
 }
 
 impl VoxelModelEditRegion {
+    pub fn saturate_rect(min: Vector3<i32>, max: Vector3<i32>, model_length: Vector3<u32>) -> Self {
+        let min = min.zip_map(&model_length, |x, y| x.clamp(0, y as i32 - 1) as u32);
+        let max = max.zip_map(&model_length, |x, y| x.clamp(0, y as i32 - 1) as u32);
+        Self::Rect { min, max }
+    }
+
+    pub fn min(&self) -> Vector3<u32> {
+        match self {
+            VoxelModelEditRegion::Rect { min, max } => *min,
+            VoxelModelEditRegion::Intersect(voxel_model_edit_regions) => todo!("idk"),
+        }
+    }
+
     pub fn with_intersect_rect(mut self, min: Vector3<u32>, max: Vector3<u32>) -> Self {
         match &mut self {
             VoxelModelEditRegion::Rect {

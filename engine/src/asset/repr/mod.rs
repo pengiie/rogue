@@ -4,8 +4,6 @@ pub mod game_entity;
 pub mod image;
 pub mod project;
 pub mod settings;
-pub mod voxel;
-pub mod world;
 
 pub struct TextAsset {
     pub contents: String,
