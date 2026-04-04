@@ -1,10 +1,10 @@
 use serde::{de::DeserializeSeed, ser::SerializeStruct};
 
+use crate::entity::component::{GameComponent, GameComponentSerializeContext};
 use crate::physics::{
     collider::ColliderDeserializeFnPtr,
     collider_registry::{ColliderId, ColliderRegistry},
 };
-use crate::entity::component::{GameComponent, GameComponentSerializeContext};
 
 #[derive(Clone)]
 pub struct EntityColliders {
@@ -189,13 +189,14 @@ impl<'de> serde::de::Visitor<'de> for &'_ mut ColliderStructDeserializeVisitor<'
                         .get(&name)
                         .map(|type_info| type_info.clone());
                     if type_info.is_none() {
-                        return Err(serde::de::Error::custom(
-format!("Tried to deserialize collider with Collider::NAME `{}` but it is not registered in the ColliderRegistry, cant get type info.", name)
-                        ));
+                        return Err(serde::de::Error::custom(format!(
+                            "Tried to deserialize collider with Collider::NAME `{}` but it is not registered in the ColliderRegistry, cant get type info.",
+                            name
+                        )));
                     }
                 }
                 ColliderStructField::Data => {
-                    let Some(type_info) = type_info else {
+                    let Some(type_info) = &type_info else {
                         return Err(serde::de::Error::custom(
                             "Expect `name` to come before `data`.",
                         ));

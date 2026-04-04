@@ -1,5 +1,6 @@
 use std::{any::TypeId, cell::Cell, collections::HashMap, ptr::NonNull};
 
+use crate::animation::animation::{AnimationPropertyTypeInfo, GameComponentAnimationChannelData};
 use crate::common::dyn_vec::TypeInfo;
 use crate::entity::{archetype::ComponentArchetype, ecs_world::Entity, query::QueryItemRef};
 use crate::physics::collider_registry::ColliderRegistry;
@@ -11,9 +12,23 @@ pub struct GameComponentType {
     pub type_info: TypeInfo,
     pub component_name: String,
     pub is_constructible: bool,
+    pub animaton_properties: Vec<AnimationPropertyTypeInfo>,
     pub construct_fn: GameComponentConstructFnPtr,
     pub deserialize_fn: GameComponentDeserializeFnPtr,
     pub methods_vtable_ptr: GameComponentMethodsVtablePtr,
+}
+
+impl GameComponentType {
+    /// Safety: Data pointer must not be null, and should be allocated with layout of type info of
+    /// this game component.
+    pub unsafe fn as_dyn_mut<'a>(&self, data_ptr: *mut u8) -> &'a mut dyn GameComponentMethods {
+        // Safety: The pointer should be valid and properly aligned, and the vtable pointer should be correct.
+        unsafe {
+            let vtable = self.methods_vtable_ptr as *const ();
+            let fat_ptr = (data_ptr as *mut (), vtable);
+            std::mem::transmute::<(*mut (), *const ()), &mut dyn GameComponentMethods>(fat_ptr)
+        }
+    }
 }
 
 pub struct GameComponentCloneContext<'a> {
@@ -47,6 +62,12 @@ pub trait GameComponentMethods {
         ctx: &GameComponentSerializeContext<'_>,
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()>;
+
+    fn get_animation_channel<'a>(
+        &'a mut self,
+        property: &str,
+        channel: &str,
+    ) -> GameComponentAnimationChannelData<'a>;
 }
 
 impl<T: GameComponent> GameComponentMethods for T {
@@ -60,6 +81,14 @@ impl<T: GameComponent> GameComponentMethods for T {
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()> {
         GameComponent::serialize_component(self, ctx, ser)
+    }
+
+    fn get_animation_channel<'a>(
+        &'a mut self,
+        property: &str,
+        channel: &str,
+    ) -> GameComponentAnimationChannelData<'a> {
+        GameComponent::get_animation_channel(self, property, channel)
     }
 }
 
@@ -93,6 +122,25 @@ pub trait GameComponent {
                 std::any::type_name::<Self>()
             );
         }
+    }
+
+    fn animation_properties() -> Vec<AnimationPropertyTypeInfo> {
+        Vec::new()
+    }
+
+    fn is_animatable() -> bool {
+        !Self::animation_properties().is_empty()
+    }
+
+    fn get_animation_channel<'a>(
+        &'a mut self,
+        property: &str,
+        channel: &str,
+    ) -> GameComponentAnimationChannelData<'a> {
+        panic!(
+            "GameComponent::animation_properties was either not written correctly, or this was called without checking if property {} exists first.",
+            property
+        );
     }
 
     fn clone_component(&self, ctx: &mut GameComponentCloneContext<'_>, dst_ptr: *mut u8);

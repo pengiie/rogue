@@ -11,8 +11,11 @@ use crate::consts;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[game_component(name = "Transform", constructible = false)]
 pub struct Transform {
+    #[game_component(animatable)]
     pub position: Vector3<f32>,
+    #[game_component(animatable)]
     pub rotation: UnitQuaternion<f32>,
+    #[game_component(animatable)]
     pub scale: Vector3<f32>,
 }
 

@@ -25,11 +25,13 @@ impl Default for WorldStreamingOptions {
         Self {
             origin_region: RegionPos::new(0, 0, 0),
             region_load_distance: 2,
-            max_loaded_chunks: 512,
+            max_loaded_chunks: 900,
         }
     }
 }
 
+// TODO: Ideal goal is to get a chunk render distance of 8, so 17x17 grid, in under 1
+// gigabyte on the cpu/gpu.
 #[derive(Resource)]
 pub struct WorldChunkStreamer {
     options: WorldStreamingOptions,

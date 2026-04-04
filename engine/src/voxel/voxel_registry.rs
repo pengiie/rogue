@@ -255,7 +255,6 @@ impl VoxelModelRegistry {
         mut ecs_world: ResMut<ECSWorld>,
     ) {
         let Some(project_dir) = assets.project_dir().clone() else {
-            log::error!("Tried loading voxel model assets before project dir is set.");
             return;
         };
         let voxel_registry = &mut voxel_registry as &mut VoxelModelRegistry;

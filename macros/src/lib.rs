@@ -16,6 +16,11 @@ pub fn game_component(attr: TokenStream, input: TokenStream) -> TokenStream {
     game_component::impl_game_component_attr(attr, input)
 }
 
+#[proc_macro_derive(GameComponent, attributes(game_component_field))]
+pub fn derive_game_component(input: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+
 /// Calls a macro implementation a number of times while generating generating generic arguments.
 #[proc_macro]
 pub fn generate_tuples(input: TokenStream) -> TokenStream {

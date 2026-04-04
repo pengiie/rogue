@@ -5,6 +5,7 @@ use std::{
 
 use nalgebra::{Vector2, Vector4};
 use rogue_engine::{
+    animation::animation_bank::AnimationBank,
     asset::asset::Assets,
     debug::debug_renderer::DebugRenderer,
     egui::Egui,
@@ -19,12 +20,15 @@ use rogue_engine::{
     world::{region_map::RegionMap, renderable::rt_pass::WorldRTPass, sky::Sky},
 };
 use rogue_macros::Resource;
+use serde_with::serde_as;
 
 use crate::{
+    animation_preview::EditorAnimationPreviewer,
     editing::voxel_editing::EditorVoxelEditing,
     game_session::EditorGameSession,
     session::EditorSession,
     ui::{
+        animation_pane::AnimationPane,
         asset_pane::AssetsPane,
         asset_properties_pane::AssetPropertiesPane,
         editing_pane::EditingPane,
@@ -61,6 +65,8 @@ pub struct EditorUIContext<'a> {
     pub voxel_editing: &'a mut EditorVoxelEditing,
     pub debug_renderer: &'a mut DebugRenderer,
     pub world_rt_pass: &'a mut WorldRTPass,
+    pub animation_preview: &'a mut EditorAnimationPreviewer,
+    pub animation_bank: &'a mut AnimationBank,
 }
 
 pub struct EditorCommands {
@@ -121,6 +127,7 @@ impl EditorCommand {
 enum EditorSide {
     Left = 0,
     Right = 1,
+    Bottom = 2,
     NumSides,
 }
 
@@ -230,11 +237,14 @@ impl EditorFilePicker {
     }
 }
 
+#[serde_as]
 #[derive(Resource, serde::Serialize, serde::Deserialize)]
 #[serde(default = "EditorUI::new")]
 pub struct EditorUI {
     /// Top, bottom, left, right
     content_padding: Vector4<u32>,
+
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
     side_panes: [Option<EditorUIPaneData>; EditorSide::COUNT],
     global_state: GlobalStateEditorUI,
 
@@ -295,12 +305,18 @@ impl EditorUI {
         mut sky: ResMut<Sky>,
         mut voxel_editing: ResMut<EditorVoxelEditing>,
         mut debug_renderer: ResMut<DebugRenderer>,
-        (mut game_session, mut world_rt_pass): (ResMut<EditorGameSession>, ResMut<WorldRTPass>),
+        (mut game_session, mut world_rt_pass, mut animation_preview, mut animation_bank): (
+            ResMut<EditorGameSession>,
+            ResMut<WorldRTPass>,
+            ResMut<EditorAnimationPreviewer>,
+            ResMut<AnimationBank>,
+        ),
     ) {
         let editor_ui = &mut *editor_ui;
         let mut commands = EditorCommands::new();
         egui.resolve_ui(&mut window, |ctx, window| {
             let frame = egui::Frame::new().fill(ctx.style().visuals.window_fill);
+            let max_ui_half_width = (window.width() as f32 / ctx.pixels_per_point()) * 0.5 - 50.0;
 
             let mut res_ctx = EditorUIContext {
                 game_session: &mut game_session,
@@ -320,49 +336,59 @@ impl EditorUI {
                 voxel_editing: &mut voxel_editing,
                 debug_renderer: &mut debug_renderer,
                 world_rt_pass: &mut world_rt_pass,
+                animation_preview: &mut animation_preview,
+                animation_bank: &mut animation_bank,
             };
+            let default_padding = editor_ui
+                .content_padding
+                .map(|x| (x as f32 / ctx.pixels_per_point()) as f32);
             let mut padding = Vector4::zeros();
             padding.x =
                 egui::TopBottomPanel::new(egui::panel::TopBottomSide::Top, "editor_top_panel")
                     .frame(frame.clone().inner_margin(8.0))
+                    .default_height(default_padding.x)
                     .show(ctx, |ui| {
                         TopBarPane::show(ui, &mut res_ctx);
                     })
                     .response
                     .rect
                     .height();
-            padding.y = 0.0;
-            //padding.y = egui::TopBottomPanel::new(
-            //    egui::panel::TopBottomSide::Bottom,
-            //    "editor_bottom_panel",
-            //)
-            //.frame(frame.clone())
-            //.resizable(true)
-            //.show(ctx, |ui| {
-            //    editor_ui.bottom_pane_ui(ui);
-            //})
-            //.response
-            //.rect
-            //.height();
-            let max_ui_half_width = (window.width() as f32 / ctx.pixels_per_point()) * 0.5 - 50.0;
-            padding.z = egui::SidePanel::new(egui::panel::Side::Left, "editor_left_panel")
+            padding.w = egui::SidePanel::new(egui::panel::Side::Right, "editor_right_panel")
                 .resizable(true)
+                .default_width(default_padding.w)
                 .max_width(max_ui_half_width)
                 .frame(frame.clone())
                 .show(ctx, |ui| {
-                    if let Some(pane) = &mut editor_ui.side_panes[EditorSide::Left as usize] {
+                    if let Some(pane) = &mut editor_ui.side_panes[EditorSide::Right as usize] {
                         pane.show(ui, &mut res_ctx);
                     }
                 })
                 .response
                 .rect
                 .width();
-            padding.w = egui::SidePanel::new(egui::panel::Side::Right, "editor_right_panel")
+            // Add bottom before left panel so it extends into the left.
+            padding.y = egui::TopBottomPanel::new(
+                egui::panel::TopBottomSide::Bottom,
+                "editor_bottom_panel",
+            )
+            .frame(frame.clone())
+            .default_height(default_padding.y)
+            .resizable(true)
+            .show(ctx, |ui| {
+                if let Some(pane) = &mut editor_ui.side_panes[EditorSide::Bottom as usize] {
+                    pane.show(ui, &mut res_ctx);
+                }
+            })
+            .response
+            .rect
+            .height();
+            padding.z = egui::SidePanel::new(egui::panel::Side::Left, "editor_left_panel")
                 .resizable(true)
+                .default_width(default_padding.z)
                 .max_width(max_ui_half_width)
                 .frame(frame.clone())
                 .show(ctx, |ui| {
-                    if let Some(pane) = &mut editor_ui.side_panes[EditorSide::Right as usize] {
+                    if let Some(pane) = &mut editor_ui.side_panes[EditorSide::Left as usize] {
                         pane.show(ui, &mut res_ctx);
                     }
                 })
@@ -414,6 +440,8 @@ impl EditorUI {
             voxel_editing: &mut voxel_editing,
             debug_renderer: &mut debug_renderer,
             world_rt_pass: &mut world_rt_pass,
+            animation_preview: &mut animation_preview,
+            animation_bank: &mut animation_bank,
         };
         editor_ui.file_picker.update(res_ctx);
 
@@ -478,6 +506,7 @@ impl EditorUI {
                     self.spawn_pane(AssetPropertiesPane::new(), EditorSide::Right)
                 }
                 EditingPane::ID => self.spawn_pane(EditingPane::new(), EditorSide::Right),
+                AnimationPane::ID => self.spawn_pane(AnimationPane::new(), EditorSide::Bottom),
                 _ => {
                     log::warn!(
                         "Tried to open pane with id {pane_id} but no implementation exists to spawn that pane."

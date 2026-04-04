@@ -6,12 +6,17 @@ use rogue_engine::{
     input::{self, Input, keyboard::Key, mouse},
     physics::transform::Transform,
     resource::{Res, ResMut, ResourceBank},
-    voxel::voxel_registry::VoxelModelRegistry,
+    voxel::{
+        voxel::{VoxelModelEdit, VoxelModelEditRegion},
+        voxel_registry::{self, VoxelModelRegistry},
+    },
 };
 use rogue_macros::Resource;
 
 use crate::{
-    editing::voxel_editing::{EditorEditingToolType, EditorVoxelEditing, EditorVoxelEditingTarget},
+    editing::voxel_editing::{
+        self, EditorEditingToolType, EditorVoxelEditing, EditorVoxelEditingTarget,
+    },
     session::EditorSession,
 };
 
@@ -41,6 +46,17 @@ impl VoxelEditingInProgressSelection {
 pub struct EditorVoxelEditingSelection {
     pub min: Vector3<i32>,
     pub max: Vector3<i32>,
+}
+
+impl EditorVoxelEditingSelection {
+    pub fn as_model_edit_region(&self) -> VoxelModelEditRegion {
+        assert!(self.min.iter().all(|x| *x >= 0));
+        assert!(self.max.iter().all(|x| *x >= 0));
+        VoxelModelEditRegion::Rect {
+            min: self.min.map(|x| x as u32),
+            max: self.max.map(|x| x as u32),
+        }
+    }
 }
 
 /// Selections are only applicable to the current editing target, if the target is new, the
@@ -73,7 +89,7 @@ impl EditorVoxelEditingSelections {
         }
         rb.run_system(Self::update_in_progress_selection);
         rb.run_system(Self::update_selection_scale_handles);
-        rb.run_system(Self::update_kb_delete);
+        rb.run_system(Self::update_kb_delete_and_f);
     }
 
     pub fn clear_selections(&mut self) {
@@ -148,7 +164,8 @@ impl EditorVoxelEditingSelections {
         }
     }
 
-    pub fn update_kb_delete(
+    /// F is for fill, delete also fills, so they share this function.
+    pub fn update_kb_delete_and_f(
         mut editing: ResMut<EditorVoxelEditing>,
         mut editing_selection: ResMut<EditorVoxelEditingSelections>,
         editor_session: Res<EditorSession>,
@@ -158,15 +175,53 @@ impl EditorVoxelEditingSelections {
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut events: ResMut<Events>,
     ) {
-        if !input.is_key_pressed(Key::Delete) {
+        if !(input.is_key_pressed(Key::Delete) || input.is_key_pressed(Key::F)) {
             return;
         }
         let Some(selection) = &editing_selection.selection else {
             return;
         };
 
+        let fill_material = if input.is_key_pressed(Key::Delete) {
+            None
+        } else if input.is_key_pressed(Key::F) {
+            Some(editing.current_voxel_material())
+        } else {
+            unreachable!()
+        };
+
         match &editing.edit_target {
-            Some(EditorVoxelEditingTarget::Entity(target_entity)) => {}
+            Some(EditorVoxelEditingTarget::Entity(target_entity)) => {
+                let renderable = ecs_world
+                    .get::<&RenderableVoxelEntity>(*target_entity)
+                    .expect("Target entity should have a renderable model attached.");
+                if !renderable.is_dynamic() {
+                    return;
+                }
+                let entity_model_id = renderable
+                    .voxel_model_id()
+                    .expect("Target entity should have a voxel model");
+                let entity_model_side_length =
+                    voxel_registry.get_dyn_model(entity_model_id).length();
+
+                let edit = VoxelModelEdit {
+                    region: selection.as_model_edit_region(),
+                    mask: rogue_engine::voxel::voxel::VoxelModelEditMask {
+                        layers: Vec::new(),
+                        mask_model: None,
+                    },
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(
+                        fill_material,
+                    ),
+                };
+                editing.apply_edit(
+                    &mut voxel_registry,
+                    &mut events,
+                    edit,
+                    entity_model_id,
+                    true,
+                );
+            }
             Some(EditorVoxelEditingTarget::Terrain) => {}
             None => {
                 return;

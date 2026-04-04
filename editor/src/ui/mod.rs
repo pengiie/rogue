@@ -4,6 +4,7 @@ pub use ui::*;
 pub mod animation_pane;
 pub mod asset_pane;
 pub mod asset_properties_pane;
+pub mod create_animation_track_dialog;
 pub mod create_voxel_model_dialog;
 pub mod editing_pane;
 pub mod entity_hierarchy;

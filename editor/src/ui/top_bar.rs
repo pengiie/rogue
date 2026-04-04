@@ -10,9 +10,10 @@ use crate::{
     game_session::EditorGameSessionEvent,
     session::EditorCommandEvent,
     ui::{
-        EditorCommand, EditorUIContext, asset_pane::AssetsPane, editing_pane::EditingPane,
-        entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
-        materials_pane::MaterialsPane, pane::EditorUIPane, world_pane::WorldPane,
+        EditorCommand, EditorUIContext, animation_pane::AnimationPane, asset_pane::AssetsPane,
+        editing_pane::EditingPane, entity_hierarchy::EntityHierarchyUI,
+        entity_properties::EntityPropertiesPane, materials_pane::MaterialsPane, pane::EditorUIPane,
+        world_pane::WorldPane,
     },
 };
 
@@ -41,6 +42,14 @@ impl TopBarPane {
             });
             ui.menu_button("View", |ui| {});
             ui.menu_button("Open", |ui| {
+                if ui.button("Animation").clicked() {
+                    ctx.commands.push(EditorCommand::open_ui(AnimationPane::ID));
+                    ui.close_menu();
+                }
+                if ui.button("Assets").clicked() {
+                    ctx.commands.push(EditorCommand::open_ui(AssetsPane::ID));
+                    ui.close_menu();
+                }
                 if ui.button("Entity Hiearchy").clicked() {
                     ctx.commands
                         .push(EditorCommand::open_ui(EntityHierarchyUI::ID));
@@ -55,16 +64,12 @@ impl TopBarPane {
                     ctx.commands.push(EditorCommand::open_ui(MaterialsPane::ID));
                     ui.close_menu();
                 }
-                if ui.button("World").clicked() {
-                    ctx.commands.push(EditorCommand::open_ui(WorldPane::ID));
-                    ui.close_menu();
-                }
-                if ui.button("Assets").clicked() {
-                    ctx.commands.push(EditorCommand::open_ui(AssetsPane::ID));
-                    ui.close_menu();
-                }
                 if ui.button("Voxel Editing").clicked() {
                     ctx.commands.push(EditorCommand::open_ui(EditingPane::ID));
+                    ui.close_menu();
+                }
+                if ui.button("World").clicked() {
+                    ctx.commands.push(EditorCommand::open_ui(WorldPane::ID));
                     ui.close_menu();
                 }
             });
@@ -174,6 +179,10 @@ impl TopBarPane {
                     ctx.world_rt_pass.shading_mode = *shading_mode;
                 }
             }
+            ui.horizontal(|ui| {
+                ui.label("Show colliders:");
+                ui.checkbox(&mut ctx.session.render_colliders, "");
+            });
         });
     }
 }

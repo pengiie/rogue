@@ -87,7 +87,7 @@ impl WorldGenerator {
 
             update_material_event_reader: EventReader::new(),
 
-            paused: false,
+            paused: true,
         }
     }
 
@@ -272,7 +272,7 @@ impl ChunkGenerator {
         let height = self
             .height_noise
             .noise_2d(height_sample_pos.x, height_sample_pos.z)
-            * 80.0;
+            * 0.0;
 
         let density_frequency = 0.01;
         let density_sample_pos = world_voxel_pos * density_frequency + self.sample_offset;
@@ -283,7 +283,7 @@ impl ChunkGenerator {
         );
 
         // 10m of possible 3d noise, rest must be from y shaping.
-        const SURFACE_FALLOFF: f32 = 10.0;
+        const SURFACE_FALLOFF: f32 = 0.0;
         density += -(world_voxel_pos.y - height) / SURFACE_FALLOFF;
 
         (density, height)

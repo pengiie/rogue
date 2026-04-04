@@ -2,9 +2,10 @@ use egui::Widget;
 use serde::ser::SerializeStruct;
 
 use crate::ui::{
-    EditorUIContext, asset_pane::AssetsPane, asset_properties_pane::AssetPropertiesPane,
-    editing_pane::EditingPane, entity_hierarchy::EntityHierarchyUI,
-    entity_properties::EntityPropertiesPane, materials_pane::MaterialsPane, world_pane::WorldPane,
+    EditorUIContext, animation_pane::AnimationPane, asset_pane::AssetsPane,
+    asset_properties_pane::AssetPropertiesPane, editing_pane::EditingPane,
+    entity_hierarchy::EntityHierarchyUI, entity_properties::EntityPropertiesPane,
+    materials_pane::MaterialsPane, world_pane::WorldPane,
 };
 
 pub struct EditorUIPaneData {
@@ -94,6 +95,7 @@ impl<'de> serde::de::DeserializeSeed<'de> for EditorUIPaneDataDeserializeSeed {
             AssetsPane::ID => deserialize_pane::<AssetsPane, D>(de),
             AssetPropertiesPane::ID => deserialize_pane::<AssetPropertiesPane, D>(de),
             EditingPane::ID => deserialize_pane::<EditingPane, D>(de),
+            AnimationPane::ID => deserialize_pane::<AnimationPane, D>(de),
             _ => panic!("Unknown pane id: {}", self.id),
         }
     }

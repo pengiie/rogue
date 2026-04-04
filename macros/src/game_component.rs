@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse::Parse, parse_macro_input, spanned::Spanned, DeriveInput};
+use syn::{DeriveInput, parse::Parse, parse_macro_input, spanned::Spanned};
 
 struct GameComponentArgs {
     name: syn::LitStr,
@@ -40,12 +40,120 @@ impl Parse for GameComponentArgs {
 }
 
 pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenStream {
-    let item = parse_macro_input!(input as syn::ItemStruct);
+    let Ok(mut item) = syn::parse::<syn::ItemStruct>(input.clone()) else {
+        return input;
+    };
+
     let mut game_component_args = parse_macro_input!(attr as GameComponentArgs);
+
+    let crate_name = match proc_macro_crate::crate_name("rogue_engine") {
+        Ok(proc_macro_crate::FoundCrate::Itself) => quote! { crate },
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote! { #ident }
+        }
+        Err(_) => panic!("Couldn't figure out path for rogue_engine crate"),
+    };
 
     let name = &item.ident;
     let game_component_serde_name = game_component_args.name;
     let is_constructible = game_component_args.is_constructible;
+
+    let animation_properties = item
+        .fields
+        .iter()
+        .map(|field| {
+            let attrs = field.attrs.iter().map(|field_attr| {
+                if field_attr.path().get_ident().map(|ident| ident.to_string())
+                    != Some("game_component".to_string())
+                {
+                    return Ok((false));
+                }
+                let arg = field_attr.parse_args::<syn::Ident>()?;
+                if &arg != "animatable" {
+                    return syn::Result::Err(syn::Error::new(
+                        arg.span(),
+                        "Only valid first argument is \"animatable\"",
+                    ));
+                }
+                Ok((true))
+            });
+            for attr in attrs {
+                match attr {
+                    Ok(is_animatable) => {
+                        if is_animatable {
+                            return Ok(Some(field));
+                        }
+                    }
+                    Err(err) => {
+                        return Err(err);
+                    }
+                }
+            }
+
+            return Ok(None);
+        })
+        .collect::<Vec<_>>();
+
+    for animation_property in &animation_properties {
+        if let Err(err) = animation_property {
+            return err.to_compile_error().into();
+        }
+    }
+    let animation_properties = animation_properties
+        .into_iter()
+        .filter_map(|res| res.unwrap())
+        .collect::<Vec<_>>();
+    let animation_property_type_infos = animation_properties.iter().map(|field| {
+        let field_ty = &field.ty;
+        let field_name = &field.ident;
+        quote! {
+            #crate_name::animation::animation::AnimationPropertyTypeInfo::new::<#field_ty>(stringify!(#field_name).to_owned())
+        }
+    });
+    let animation_property_get_arms = animation_properties.iter().map(|field| {
+        let field_name = &field.ident;
+        let field_ty = &field.ty;
+        quote! {
+            stringify!(#field_name) => self.#field_name.get_channel_data(channel),
+        }
+    });
+
+    let animation_properties_impl = if !animation_properties.is_empty() {
+        quote! {
+            fn animation_properties() -> Vec<#crate_name::animation::animation::AnimationPropertyTypeInfo> {
+                vec![
+                    #(#animation_property_type_infos),*
+                ]
+            }
+
+
+            fn get_animation_channel<'a>(
+                &'a mut self,
+                property: &str,
+                channel: &str,
+            ) -> #crate_name::animation::animation::GameComponentAnimationChannelData<'a> {
+                use #crate_name::animation::animation::AnimationProperty;
+                match property {
+                    #(#animation_property_get_arms)*
+                    _ => panic!("No animation property named {}", property),
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+    // Remove #[game_component] attributes from fields.
+    for field in &mut item.fields {
+        field.attrs.retain(|attr| {
+            if attr.path().get_ident().map(|ident| ident.to_string())
+                == Some("game_component".to_string())
+            {
+                return false;
+            }
+            return true;
+        });
+    }
 
     let constructible_impl = if is_constructible {
         quote! {
@@ -63,22 +171,14 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
         quote! {}
     };
 
-    let crate_name = match proc_macro_crate::crate_name("rogue_engine") {
-        Ok(proc_macro_crate::FoundCrate::Itself) => quote! { crate },
-        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
-            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-            quote! { #ident }
-        }
-        Err(_) => panic!("Couldn't figure out path for rogue_engine crate"),
-    };
-
-    let gen = quote! {
+    let generated = quote! {
         #item
 
         impl #crate_name::entity::component::GameComponent for #name {
             const NAME: &str = #game_component_serde_name;
 
             #constructible_impl
+            #animation_properties_impl
 
             fn clone_component(
                 &self,
@@ -111,5 +211,5 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
         }
     };
 
-    gen.into()
+    generated.into()
 }

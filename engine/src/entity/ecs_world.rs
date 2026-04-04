@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::{
     EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity, scripting::ScriptableEntity,
 };
+use crate::animation::animation::AnimationPropertyTypeInfo;
 use crate::animation::animator::Animator;
 use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
 use crate::asset::repr::project::ProjectSceneDeserializeContext;
@@ -129,6 +130,33 @@ impl ECSWorld {
         return ptr;
     }
 
+    pub fn get_children(&self, entity: Entity) -> Vec<Entity> {
+        let children = self.get::<&EntityChildren>(entity).ok();
+        return children
+            .map(|c| c.children.iter().map(|x| *x).collect::<Vec<_>>())
+            .unwrap_or_default();
+    }
+
+    pub fn get_animatable_game_components(
+        &self,
+        entity: Entity,
+    ) -> HashMap<TypeInfo, Vec<AnimationPropertyTypeInfo>> {
+        let entity_components = self.get_entity_components(entity);
+        let mut animatable = HashMap::new();
+        for type_info in &entity_components {
+            let Some(game_component) = self.game_components.get(&type_info.type_id) else {
+                continue;
+            };
+            if !game_component.animaton_properties.is_empty() {
+                animatable.insert(
+                    type_info.clone(),
+                    game_component.animaton_properties.clone(),
+                );
+            }
+        }
+        return animatable;
+    }
+
     pub fn get_constructible_game_components(&self) -> Vec<TypeId> {
         let mut constructible = Vec::new();
         for (type_id, game_component) in &self.game_components {
@@ -158,6 +186,19 @@ impl ECSWorld {
         todo!();
     }
 
+    pub fn get_child_by_name(&self, entity: Entity, child_name: &str) -> Option<Entity> {
+        let children = self.get::<&EntityChildren>(entity).ok()?;
+        for child in &children.children {
+            let Ok(child_game_entity) = self.get::<&GameEntity>(*child) else {
+                continue;
+            };
+            if &child_game_entity.name == child_name {
+                return Some(*child);
+            }
+        }
+        return None;
+    }
+
     pub fn handle_entity_commands(mut ecs_world: ResMut<ECSWorld>, events: ResMut<Events>) {
         let mut ecs_world = &mut ecs_world as &mut ECSWorld;
         let entity_events = ecs_world
@@ -184,6 +225,23 @@ impl ECSWorld {
         }
     }
 
+    pub fn insert_one_asset(
+        &mut self,
+        entity_id: Entity,
+        mut game_component_asset: WorldGameComponentAsset,
+    ) {
+        let owned_component_data_ptr = game_component_asset.take_data();
+        // Safety: WorldGameComponentAsse::take_data() asserts data is owned, and component asset
+        // should be allocated with the same type as the held data.
+        unsafe {
+            self.insert_one_raw(
+                entity_id,
+                game_component_asset.type_info(),
+                owned_component_data_ptr,
+            )
+        };
+    }
+
     pub fn register_game_component<C: GameComponent + 'static>(&mut self) {
         let type_id = std::any::TypeId::of::<C>();
         // Technically there can be two different vtable ptrs for the same type due to something
@@ -206,6 +264,7 @@ impl ECSWorld {
                 type_info: TypeInfo::new::<C>(),
                 component_name: C::NAME.to_owned(),
                 is_constructible: C::is_constructible(),
+                animaton_properties: C::animation_properties(),
                 construct_fn: C::construct_component,
                 deserialize_fn: C::deserialize_component,
                 methods_vtable_ptr: vtable_ptr,

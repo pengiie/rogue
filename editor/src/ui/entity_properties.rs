@@ -1,5 +1,6 @@
 use nalgebra::Vector3;
 use rogue_engine::{
+    animation::animator::Animator,
     asset::asset::{Assets, GameAssetPath},
     common::dyn_vec::TypeInfo,
     entity::{
@@ -106,6 +107,7 @@ impl EntityPropertiesShowFns {
         s.register_component_ui::<Camera>(Self::show_camera_component);
         s.register_component_ui::<RenderableVoxelEntity>(Self::show_renderable_voxel);
         s.register_component_ui::<RigidBody>(Self::show_rigid_body_component);
+        s.register_component_ui::<Animator>(Self::show_animator_component);
 
         s
     }
@@ -460,6 +462,41 @@ impl EntityPropertiesShowFns {
             _ => {}
         }
     }
+
+    fn show_animator_component(
+        animator: &mut Animator,
+        ui: &mut egui::Ui,
+        ctx: &mut ShowComponentContext,
+    ) {
+        struct AnimatorUIState {}
+
+        //let ui_state = ctx
+        //    .component_state
+        //    .entry(std::any::TypeId::of::<EntityColliders>())
+        //    .or_insert_with(|| {
+        //        Box::new(ColliderUIState {
+        //            selected_collider: None,
+        //        })
+        //    })
+        //    .downcast_mut::<ColliderUIState>()
+        //    .unwrap();
+        ui.horizontal(|ui| {
+            ui.label("Animations:");
+            if animator.animations.is_empty() {
+                ui.label("None");
+            }
+        });
+        let (res, new_animation) = ui.dnd_drop_zone::<GameAssetPath, _>(egui::Frame::new(), |ui| {
+            ui.vertical(|ui| {
+                for animation in &animator.animations {
+                    ui.label(animation.as_relative_path_str());
+                }
+            });
+        });
+        if let Some(new_animation) = new_animation {
+            animator.animations.insert((*new_animation).clone());
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -681,6 +718,12 @@ impl EntityPropertiesPane {
                         entity: *selected_entity,
                         despawn_children: true,
                     });
+                    if let Some(EditorVoxelEditingTarget::Entity(target_entity)) =
+                        &ctx.voxel_editing.edit_target
+                        && target_entity == selected_entity
+                    {
+                        ctx.voxel_editing.edit_target = None;
+                    }
                     ctx.session.selected_entity = None;
                 }
             }

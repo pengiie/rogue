@@ -24,6 +24,7 @@ use rogue_engine::{
 use winit::event::{DeviceEvent, ElementState};
 
 use crate::{
+    animation_preview::EditorAnimationPreviewer,
     editing::{
         voxel_editing::EditorVoxelEditing, voxel_editing_edit_tools::EditorVoxelEditingEditTools,
         voxel_editing_preview::EditorVoxelEditingPreview,
@@ -37,19 +38,24 @@ use crate::{
     game_session::EditorGameSession,
     gizmo::EditorGizmo,
     render_graph::EditorRenderGraph,
+    selected_entity_visualizer::SelectedEntityVisualizer,
     session::EditorSession,
     ui::EditorUI,
     world::generator::WorldGenerator,
 };
 
+pub mod animation_preview;
 pub mod camera_controller;
+pub mod copy_buffer;
 pub mod editing;
 pub mod editor_input;
 pub mod editor_project_settings;
 pub mod editor_settings;
 pub mod game_session;
 pub mod gizmo;
+pub mod history_buffer;
 mod render_graph;
+pub mod selected_entity_visualizer;
 pub mod session;
 pub mod ui;
 pub mod world;
@@ -122,6 +128,8 @@ fn on_post_graphics_init(rb: &mut ResourceBank) {
     rb.insert(EditorVoxelEditingEditTools::new());
     rb.insert(EditorVoxelEditingPreview::new());
     rb.insert(EditorVoxelEditingPreviewGpu::new());
+
+    rb.insert(EditorAnimationPreviewer::new());
 
     rb.insert(EditorGizmo::new());
 
@@ -208,6 +216,7 @@ fn on_device_event(rb: &mut ResourceBank, event: &mut winit::event::DeviceEvent)
 }
 
 fn setup_systems(app: &mut App) {
+    // ======= EDITOR SESSION =======
     // Update editor session raycast which is re-used throughout the frame.
     app.insert_system(AppStage::Update, EditorSession::update_raycasts);
     // Update editor camera controller and EditorSession::is_editor_camera_focused().
@@ -215,27 +224,40 @@ fn setup_systems(app: &mut App) {
         AppStage::Update,
         EditorSession::update_editor_camera_controller,
     );
+    // Handles events such as project/settings saving and loading.
+    app.insert_system(AppStage::Update, EditorSession::update_editor_events);
 
+    // ======= EDITOR GIZMO =======
     // Update editor gizmo actions and rendering.
     // Do this before updating the selected entity since the gizmo can consume clicks.
     app.insert_system(AppStage::Update, EditorGizmo::update);
-    app.insert_system(AppStage::Update, EditorGizmo::visualize_selected_entity);
+    app.insert_system(
+        AppStage::Update,
+        SelectedEntityVisualizer::visualize_selected_entity,
+    );
 
+    // ======== EDITOR SESSION - SELECTED ENTITY =======
     // Update editor session selected entity based on the raycast.
     app.insert_system(AppStage::Update, EditorSession::update_selected_entity);
 
+    // ======== VOXEL_EDITING =======
     // Update editor voxel editing systems for entities and terrain.
     app.insert_system(
         AppStage::Update,
         EditorVoxelEditing::on_update_voxel_editing_systems,
     );
 
+    // ======== WORLD GENERATOR =======
     // Update the voxel-based world generator.
     app.insert_system(AppStage::Update, WorldGenerator::update);
 
-    // Handles events such as project/settings saving and loading.
-    app.insert_system(AppStage::Update, EditorSession::update_editor_events);
+    // ======== ANIMATION PREVIEWER ======
+    app.insert_system(
+        AppStage::Update,
+        EditorAnimationPreviewer::update_animation_previewer,
+    );
 
+    // ======== GAME SESSION =========
     // Update game state from any events.
     app.insert_system(
         AppStage::Update,
@@ -248,9 +270,11 @@ fn setup_systems(app: &mut App) {
         EditorGameSession::try_run_game_on_fixed_update,
     );
 
+    // ======== EDITOR UI =========
     // Calls the immediate mode ui stuff.
     app.insert_system(AppStage::RenderWrite, EditorUI::resolve_egui_ui);
 
+    // ======== RENDER GRAPH =========
     app.insert_system(
         AppStage::PreUniformsRenderWrite,
         EditorRenderGraph::write_general_inputs,

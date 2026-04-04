@@ -1,11 +1,11 @@
 use rogue_macros::generate_tuples;
 use std::{mem::offset_of, u64};
 
+use super::dyn_vec::TypeInfo;
 use crate::common::{
     dyn_vec::{DynVecCloneable, TypeInfoCloneable},
     freelist::FreeListHandle,
 };
-use super::dyn_vec::TypeInfo;
 
 /// Essentially a type erased Free List Allocator with knowledge of (X, Y, Z)'s TypeIds and sizes.
 /// Useful for storing parallel heterogenous (X, Y, Z) tuples but being able to iterate over just
@@ -28,7 +28,10 @@ impl Archetype {
         Self {
             types: types.clone(),
             borrows: vec![0; types_len],
-            data: types.iter().map(|ty| DynVecCloneable::new(*ty)).collect(),
+            data: types
+                .iter()
+                .map(|ty| DynVecCloneable::new(ty.clone()))
+                .collect(),
             global_indices: Vec::new(),
             size: 0,
             capacity: 0,
@@ -80,7 +83,7 @@ impl Archetype {
             FreeListHandle::DANGLING
         );
         for (i, data) in self.data.iter_mut().enumerate() {
-            let type_info = self.types[i];
+            let type_info = self.types[i].clone();
             let ptr = data.get_mut_unchecked(index as usize).as_mut_ptr();
             unsafe { type_info.drop(ptr) };
         }

@@ -8,6 +8,7 @@ use winit::{
 };
 
 use crate::{
+    animation::animation_bank::AnimationBank,
     asset::{
         asset::Assets,
         repr::{project::ProjectAsset, settings::UserSettingsAsset},
@@ -154,6 +155,7 @@ impl App {
         self.insert_resource(WorldEntitiesGpu::new());
         self.insert_resource(VoxelBakerGpu::new());
         self.insert_resource(MaterialBankGpu::new());
+        self.insert_resource(AnimationBank::new());
         self.insert_resource(WorldChunkStreamer::new(WorldStreamingOptions::default()));
 
         self.insert_resource(DebugRenderer::new());

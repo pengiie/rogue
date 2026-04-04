@@ -17,6 +17,7 @@ pub mod voxel {
     pub const TERRAIN_CHUNK_METER_LENGTH: f32 =
         TERRAIN_CHUNK_VOXEL_LENGTH as f32 * VOXEL_METER_LENGTH;
     // Must be a power of 4 to be compatible 64-trees.
+    // 64 seems to be a good number in terms of scale.
     pub const TERRAIN_CHUNK_VOXEL_LENGTH: u32 = 64;
     const _: () = {
         assert!(is_power_of_four(TERRAIN_CHUNK_VOXEL_LENGTH));

@@ -1,3 +1,5 @@
+use crate::animation::animation_bank::AnimationBank;
+use crate::animation::animator::Animator;
 use crate::app::{App, AppStage};
 use crate::asset::asset::Assets;
 use crate::debug::debug_renderer::DebugRenderer;
@@ -55,6 +57,10 @@ pub fn game_loop(app: &App) {
         app.run_system(PhysicsWorld::end_time_step);
     }
     app.run_system(PhysicsWorld::do_transform_interpolation);
+
+    // ------- ANIMATION ---------
+    app.run_system(Animator::update_animators_system);
+    app.run_system(AnimationBank::update_loaded_animations);
 
     // ------- APP-DEFINED UPDATE SYSTEMS ------
     if let Some(systems) = app.systems(AppStage::Update) {

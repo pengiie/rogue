@@ -29,6 +29,10 @@ impl WorldGameComponentAsset {
         self.data = std::ptr::null_mut();
         return ptr;
     }
+
+    pub fn type_info(&self) -> &TypeInfo {
+        &self.type_info
+    }
 }
 
 impl Drop for WorldGameComponentAsset {

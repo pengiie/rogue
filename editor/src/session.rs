@@ -6,6 +6,7 @@ use std::{
 
 use nalgebra::Vector3;
 use rogue_engine::{
+    animation::{animation::Animation, animation_bank::AnimationBank},
     asset::asset::{Assets, GameAssetPath},
     common::geometry::ray::Ray,
     entity::ecs_world::{ECSWorld, Entity},
@@ -42,6 +43,7 @@ pub enum EditorCommandEvent {
     SaveEditorSettings,
     SaveProject,
     SaveVoxelModel(VoxelModelId),
+    SaveAnimation(GameAssetPath),
 }
 
 pub enum EditorEvent {
@@ -62,6 +64,8 @@ pub struct EditorSession {
     editor_camera_controller: EditorCameraController,
     double_right_click_buffer: InputBuffer,
 
+    pub render_colliders: bool,
+
     editor_event_reader: EventReader<EditorCommandEvent>,
 }
 
@@ -81,6 +85,8 @@ impl EditorSession {
             selected_entity: None,
             last_selected_entity: None,
             hovered_entity: None,
+
+            render_colliders: false,
 
             editor_camera,
             editor_camera_focused: true,
@@ -227,6 +233,7 @@ impl EditorSession {
         region_map: Res<RegionMap>,
         game_session: Res<EditorGameSession>,
         mut project_settings: ResMut<EditorProjectSettings>,
+        mut animation_bank: ResMut<AnimationBank>,
     ) {
         let session = &mut *session;
         let mut unique_events = HashSet::new();
@@ -282,6 +289,15 @@ impl EditorSession {
                     voxel_registry.update_static_asset_model(&game_asset_path, *voxel_model_id);
                     let asset_path = game_asset_path.as_file_asset_path(&project_dir);
                     Assets::save_asset_sync::<RVOXAsset>(asset_path, asset);
+                }
+                EditorCommandEvent::SaveAnimation(animation_path) => {
+                    let Some(project_dir) = assets.project_dir() else {
+                        return;
+                    };
+                    if let Some(animation) = animation_bank.get_animation_by_path(animation_path) {
+                        let asset_path = animation_path.as_file_asset_path(&project_dir);
+                        Assets::save_asset_sync::<Animation>(asset_path, animation.clone());
+                    }
                 }
             }
         }

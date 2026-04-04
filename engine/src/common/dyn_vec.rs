@@ -225,6 +225,32 @@ impl DynVecCloneable {
         std::mem::forget(val);
     }
 
+    // Safety: val_ptr is copied from and should be the same size as the type of this.
+    pub unsafe fn push_ptr(&mut self, val_ptr: *const u8) {
+        self.push_unchecked(unsafe { std::slice::from_raw_parts(val_ptr, self.type_info.size) });
+    }
+
+    pub unsafe fn insert_ptr(&mut self, index: usize, val: *const u8) {
+        assert!(index <= self.size);
+        if self.size == self.capacity {
+            self.grow(1);
+        }
+
+        // Shift elements to the right.
+        unsafe {
+            let src_ptr = self.data.byte_add(self.type_info.stride() * index);
+            let dst_ptr = self.data.byte_add(self.type_info.stride() * (index + 1));
+            let count = self.size - index;
+            src_ptr.copy_to(dst_ptr, count * self.type_info.stride());
+        }
+
+        unsafe {
+            let dst_ptr = self.data.byte_add(self.type_info.stride() * index);
+            val.copy_to(dst_ptr.as_ptr(), self.type_info.size)
+        };
+        self.size += 1;
+    }
+
     pub fn push_unchecked(&mut self, bytes: &[u8]) {
         if self.size == self.capacity {
             self.grow(1);
@@ -404,9 +430,10 @@ impl Drop for DynVecCloneable {
 // Safety: idk
 unsafe impl Send for DynVecCloneable {}
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub struct TypeInfoCloneable {
     type_id: std::any::TypeId,
+    name: String,
     drop_fn: unsafe fn(*mut u8),
     clone_fn: unsafe fn(*const u8) -> Box<u8>,
     size: usize,
@@ -428,6 +455,7 @@ impl TypeInfoCloneable {
 
         Self {
             type_id: std::any::TypeId::of::<T>(),
+            name: std::any::type_name::<T>().to_string(),
             drop_fn: drop_fn::<T>,
             clone_fn: clone_fn::<T>,
             size: std::mem::size_of::<T>(),
@@ -437,6 +465,10 @@ impl TypeInfoCloneable {
 
     pub unsafe fn clone_data(&self, data: *const u8) -> *mut u8 {
         Box::into_raw((self.clone_fn)(data))
+    }
+
+    pub fn type_name(&self) -> &str {
+        &self.name
     }
 
     pub fn type_id(&self) -> std::any::TypeId {
