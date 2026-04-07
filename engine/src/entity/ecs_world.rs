@@ -771,8 +771,13 @@ impl ECSWorld {
 
     //    return new;
     //}
+    //
+    //
+    pub fn contains<T: 'static>(&self, entity: Entity) -> bool {
+        self.get::<&T>(entity).is_ok()
+    }
 
-    pub fn contains(&self, entity: Entity) -> bool {
+    pub fn contains_entity(&self, entity: Entity) -> bool {
         self.entities.has_value(entity)
     }
 

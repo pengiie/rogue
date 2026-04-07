@@ -35,6 +35,7 @@ use crate::{
     editor_input::EditorInput,
     editor_project_settings::EditorProjectSettings,
     editor_settings::UserEditorSettingsAsset,
+    editor_transform_euler::EditorTransformEuler,
     game_session::EditorGameSession,
     gizmo::EditorGizmo,
     render_graph::EditorRenderGraph,
@@ -51,6 +52,7 @@ pub mod editing;
 pub mod editor_input;
 pub mod editor_project_settings;
 pub mod editor_settings;
+pub mod editor_transform_euler;
 pub mod game_session;
 pub mod gizmo;
 pub mod history_buffer;
@@ -216,6 +218,14 @@ fn on_device_event(rb: &mut ResourceBank, event: &mut winit::event::DeviceEvent)
 }
 
 fn setup_systems(app: &mut App) {
+    // ======= EDITOR EULER ANGLES =====
+    // We want to work with euler rotations in the editor so we have a separate representation for
+    // them.
+    app.insert_system(
+        AppStage::Update,
+        EditorTransformEuler::update_euler_representation,
+    );
+
     // ======= EDITOR SESSION =======
     // Update editor session raycast which is re-used throughout the frame.
     app.insert_system(AppStage::Update, EditorSession::update_raycasts);

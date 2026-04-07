@@ -1,7 +1,16 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    ptr::NonNull,
+    time::Duration,
+};
+
+use nalgebra::UnitQuaternion;
 
 use crate::{
-    common::dyn_vec::{DynVec, DynVecCloneable, TypeInfo, TypeInfoCloneable},
+    common::{
+        dyn_vec::{DynVec, DynVecCloneable, TypeInfo, TypeInfoCloneable},
+        vtable,
+    },
     entity::ecs_world::{ECSWorld, Entity},
     physics::transform::Transform,
     resource::ResMut,
@@ -33,6 +42,34 @@ impl AnimationTrackChannel {
         }
     }
 
+    pub fn remove_nearby_keyframes(&mut self, time: Duration, remove_radius: Duration) {
+        let mut i = 0;
+        while i < self.times.len() {
+            if self.times[i].abs_diff(time) <= remove_radius {
+                self.times.remove(i);
+                self.values.remove(i);
+                self.interpolation.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    pub fn record_keyframe_euler(&mut self, time: Duration, euler_angle: AnimationRadians) {
+        assert_eq!(
+            self.channel_type_info.type_info.type_id(),
+            std::any::TypeId::of::<AnimationRadians>(),
+            "Can't call AnimationTrackChannel::record_keyframe_euler for channel {}.{} since it is not of type AnimationRadians",
+            self.track_id.to_string(),
+            self.channel_type_info.channel_name
+        );
+        // Safety: We assert the type of this channel.
+        let data_ptr = &euler_angle as *const AnimationRadians as *const u8;
+        unsafe {
+            self.add_keyframe(time, data_ptr, AnimationInterpolation::Linear);
+        }
+    }
+
     pub fn record_keyframe(
         &mut self,
         ecs_world: &mut ECSWorld,
@@ -52,10 +89,9 @@ impl AnimationTrackChannel {
         // the component data.
         let game_component_dyn =
             unsafe { game_component.as_dyn_mut(component.get_component_ptr() as *mut u8) };
-        let channel_data = game_component_dyn.get_animation_channel(
-            &self.track_id.component_property,
-            &self.channel_type_info.channel_name,
-        );
+        let channel_data = game_component_dyn
+            .get_animation_property(&self.track_id.component_property)
+            .get_channel_data(self.channel_type_info.channel_name.as_str());
         assert_eq!(
             channel_data.type_info.type_id(),
             self.channel_type_info.type_info.type_id()
@@ -77,6 +113,10 @@ impl AnimationTrackChannel {
                 .map_or(false, |keyframe_time| keyframe_time < &time)
         {
             self.times.push(time);
+            // TODO: This is technically not correct as this "takes ownership" of value_ptr but
+            // unless it holds some references or has sepecific drop data like a Vec, we are fine.
+            // We want a copy from funciton instead or something but like the other serialization
+            // TODO do that with DynVecCloneable cleanup.
             self.values.push_ptr(value_ptr);
             self.interpolation.push(interpolation);
             return;
@@ -90,6 +130,47 @@ impl AnimationTrackChannel {
         self.values.insert_ptr(i, value_ptr);
         self.interpolation.insert(i, interpolation);
         assert!(self.times.is_sorted());
+    }
+
+    /// Returns Some(new_value) if the channel value was modified by the user through the editor UI.
+    pub fn show_ui(
+        &self,
+        ui: &mut egui::Ui,
+        base_entity: Entity,
+        ecs_world: &ECSWorld,
+    ) -> Option<GameComponentAnimationChannelData> {
+        let entity = self
+            .track_id
+            .get_entity(ecs_world, base_entity)
+            .expect("Couldn't find entity, this should have been checked before showing the UI.");
+        let component_type = ecs_world
+            .game_component_names
+            .get(&self.track_id.component_name)
+            .unwrap();
+        let game_component = ecs_world.game_components.get(component_type).unwrap();
+        let component = ecs_world.get_unchecked(entity, *component_type);
+        let game_component_dyn =
+            unsafe { game_component.as_dyn_mut(component.get_component_ptr() as *mut u8) };
+        let animation_property =
+            game_component_dyn.get_animation_property(&self.track_id.component_property);
+        let channel_name = self.channel_type_info.channel_name.as_str();
+        let channel_data = animation_property.get_channel_data(channel_name);
+        assert_eq!(
+            channel_data.type_info.type_id(),
+            self.channel_type_info.type_info.type_id()
+        );
+        let did_change = unsafe {
+            self.channel_type_info
+                .fn_caller
+                .show_ui_erased(channel_data.data_ptr, ui)
+        };
+        if did_change {
+            // Safety: We use the same channel name to get so the pointer type should be correct.
+            unsafe {
+                animation_property.set_channel_data(channel_name, channel_data.data_ptr);
+            }
+        }
+        return did_change.then_some(channel_data);
     }
 
     pub fn find_interpolation_indices(
@@ -127,6 +208,251 @@ impl AnimationTrackChannel {
     }
 }
 
+impl serde::Serialize for AnimationTrackChannel {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = se.serialize_struct("AnimationTrackChannel", 3)?;
+        s.serialize_field("channel_type_info", &self.channel_type_info)?;
+        s.serialize_field("times", &self.times)?;
+        s.serialize_field(
+            "values",
+            &ValuesSerializer {
+                serialize_vtable: self.channel_type_info.fn_caller.erased_serialize_vtable,
+                values: &self.values,
+            },
+        )?;
+        s.serialize_field("interpolation", &self.interpolation)?;
+        s.end()
+    }
+}
+
+struct ValuesSerializer<'a> {
+    serialize_vtable: *const (),
+    values: &'a DynVecCloneable,
+}
+
+impl serde::ser::Serialize for ValuesSerializer<'_> {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let values = self.values;
+        let len = values.len();
+        let mut seq = se.serialize_seq(Some(len))?;
+        for i in 0..len {
+            let val_ptr = values.get_unchecked(i).as_ptr();
+            // values dyn vec is made with same type info as the stored channel.
+            let dyn_serialize = unsafe {
+                &*(std::mem::transmute::<(*const (), *const ()), *const dyn erased_serde::Serialize>(
+                    (val_ptr as *const (), self.serialize_vtable),
+                ))
+            };
+            seq.serialize_element(dyn_serialize)?;
+        }
+        seq.end()
+    }
+}
+
+struct ValuesDeserializer<'a> {
+    channel_type: &'a AnimationPropertyChannelTypeInfo,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for ValuesDeserializer<'_> {
+    type Value = DynVecCloneable;
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        de.deserialize_seq(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for ValuesDeserializer<'_> {
+    type Value = DynVecCloneable;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("values array")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        // TODO: Ditch serde since we could do this so much cleaner with our own format.
+        struct ChannelValueDeserializer<'a> {
+            fn_caller: &'a AnimationPropertyChannelFnCaller,
+            dst_ptr: *mut u8,
+        }
+
+        impl<'de> serde::de::DeserializeSeed<'de> for ChannelValueDeserializer<'_> {
+            type Value = ();
+
+            fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let mut erased_de = <dyn erased_serde::Deserializer>::erase(de);
+                // Safety: We allocate memory for dst_ptr with the layout of this fn caller type.
+                unsafe {
+                    self.fn_caller
+                        .deserialize_erased(self.dst_ptr, &mut erased_de)
+                }
+                .map_err(|err| serde::de::Error::custom(err))?;
+                Ok(())
+            }
+        }
+        let mut values = DynVecCloneable::new(self.channel_type.type_info.clone());
+        let mut index = 0;
+        let data =
+            GameComponentAnimationChannelData::new_alloc(self.channel_type.type_info.clone());
+        while let Some(value) = seq.next_element_seed(ChannelValueDeserializer {
+            fn_caller: &self.channel_type.fn_caller,
+            dst_ptr: data.data_ptr,
+        })? {
+            // TODO: This isnt actually a Clone copy its just a straight byte copy, should be fine
+            // for animation channel data but its really semantically not correct to call this
+            // with push, probably deal with this when DynVecCloneable is collapsed to DynVec.
+            // Safety: We allocate the dst_ptr with the same type info as the dynvec.
+            unsafe { values.push_ptr(data.data_ptr) };
+            index += 1;
+        }
+        Ok(values)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum AnimationTrackChannelFields {
+    ChannelTypeInfo,
+    Times,
+    Values,
+    Interpolation,
+}
+
+struct AnimationTrackChannelsDeserializer<'a> {
+    track_id: &'a AnimationTrackId,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for AnimationTrackChannelsDeserializer<'_> {
+    type Value = Vec<AnimationTrackChannel>;
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        de.deserialize_seq(self)
+    }
+}
+impl<'de> serde::de::Visitor<'de> for AnimationTrackChannelsDeserializer<'_> {
+    type Value = Vec<AnimationTrackChannel>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("AnimationTrackChannel[]")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut channels = Vec::new();
+        while let Some(channel) = seq.next_element_seed(AnimationTrackChannelDeserializer {
+            track_id: self.track_id,
+        })? {
+            channels.push(channel);
+        }
+        Ok(channels)
+    }
+}
+
+struct AnimationTrackChannelDeserializer<'a> {
+    track_id: &'a AnimationTrackId,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for AnimationTrackChannelDeserializer<'_> {
+    type Value = AnimationTrackChannel;
+
+    fn deserialize<D>(self, de: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &["channel_type_info", "times", "values", "interpolation"];
+        de.deserialize_struct("AnimationTrackChannel", FIELDS, self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for AnimationTrackChannelDeserializer<'_> {
+    type Value = AnimationTrackChannel;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("AnimationTrackChannel")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut channel_type_info = None;
+        let mut times = None;
+        let mut values = None;
+        let mut interpolation = None;
+        while let Some(key) = map.next_key()? {
+            match key {
+                AnimationTrackChannelFields::ChannelTypeInfo => {
+                    if channel_type_info.is_some() {
+                        return Err(serde::de::Error::duplicate_field("channel_type_info"));
+                    }
+                    channel_type_info = Some(map.next_value()?);
+                }
+                AnimationTrackChannelFields::Times => {
+                    if times.is_some() {
+                        return Err(serde::de::Error::duplicate_field("times"));
+                    }
+                    times = Some(map.next_value()?);
+                }
+                AnimationTrackChannelFields::Values => {
+                    if values.is_some() {
+                        return Err(serde::de::Error::duplicate_field("values"));
+                    }
+                    let Some(channel_type_info) = &channel_type_info else {
+                        return Err(serde::de::Error::custom(
+                            "channel_type_info must come before values",
+                        ));
+                    };
+                    values = Some(map.next_value_seed(ValuesDeserializer {
+                        channel_type: channel_type_info,
+                    })?);
+                }
+                AnimationTrackChannelFields::Interpolation => {
+                    if interpolation.is_some() {
+                        return Err(serde::de::Error::duplicate_field("interpolation"));
+                    }
+                    interpolation = Some(map.next_value()?);
+                }
+            }
+        }
+
+        let channel_type_info = channel_type_info
+            .ok_or_else(|| serde::de::Error::missing_field("channel_type_info"))?;
+        let times = times.ok_or_else(|| serde::de::Error::missing_field("times"))?;
+        let values = values.ok_or_else(|| serde::de::Error::missing_field("values"))?;
+        let interpolation =
+            interpolation.ok_or_else(|| serde::de::Error::missing_field("interpolation"))?;
+
+        Ok(AnimationTrackChannel {
+            track_id: self.track_id.clone(),
+            channel_type_info,
+            times,
+            values,
+            interpolation,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct AnimationTrack {
     pub track_id: AnimationTrackId,
@@ -154,11 +480,15 @@ impl AnimationTrack {
 }
 
 impl serde::Serialize for AnimationTrack {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        todo!()
+        use serde::ser::SerializeStruct;
+        let mut s = se.serialize_struct("AnimationTrack", 3)?;
+        s.serialize_field("track_id", &self.track_id)?;
+        s.serialize_field("channels", &self.channels)?;
+        s.end()
     }
 }
 
@@ -166,9 +496,7 @@ impl serde::Serialize for AnimationTrack {
 #[serde(field_identifier, rename_all = "snake_case")]
 enum AnimationTrackField {
     TrackId,
-    Times,
-    Values,
-    Interpolation,
+    Channels,
 }
 
 impl<'de> serde::Deserialize<'de> for AnimationTrack {
@@ -193,35 +521,37 @@ impl<'de> serde::de::Visitor<'de> for AnimationTrackVisitor {
     where
         A: serde::de::MapAccess<'de>,
     {
-        let property = None;
-        let mut times = None;
-        let mut values = None;
-        let mut interpolation = None;
-        while let Some(key) = map.next_key::<AnimationTrackField>()? {
+        let mut track_id = None;
+        let mut channels = None;
+        while let Some(key) = map.next_key()? {
             match key {
-                AnimationTrackField::TrackId => {}
-                AnimationTrackField::Times => {
-                    times = Some(map.next_value::<Vec<Duration>>()?);
+                AnimationTrackField::TrackId => {
+                    if track_id.is_some() {
+                        return Err(serde::de::Error::duplicate_field("track_id"));
+                    }
+                    track_id = Some(map.next_value()?);
                 }
-                AnimationTrackField::Values => {
-                    //let values = map.next_value::<DynVec>()?;
-                }
-                AnimationTrackField::Interpolation => {
-                    interpolation = Some(map.next_value::<Vec<AnimationInterpolation>>()?);
+                AnimationTrackField::Channels => {
+                    if channels.is_some() {
+                        return Err(serde::de::Error::duplicate_field("channels"));
+                    }
+                    let Some(track_id) = &track_id else {
+                        return Err(serde::de::Error::custom(
+                            "track_id must come before channels",
+                        ));
+                    };
+                    channels =
+                        Some(map.next_value_seed(AnimationTrackChannelsDeserializer { track_id })?);
                 }
             }
         }
-
-        let track_id = property.ok_or_else(|| serde::de::Error::missing_field("track_id"))?;
-        let times = times.ok_or_else(|| serde::de::Error::missing_field("times"))?;
-        let values = values.ok_or_else(|| serde::de::Error::missing_field("values"))?;
-        let interpolation =
-            interpolation.ok_or_else(|| serde::de::Error::missing_field("interpolation"))?;
-        Ok(todo!())
+        let track_id = track_id.ok_or_else(|| serde::de::Error::missing_field("track_id"))?;
+        let channels = channels.ok_or_else(|| serde::de::Error::missing_field("channels"))?;
+        Ok(AnimationTrack { track_id, channels })
     }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash, Debug)]
 pub struct AnimationTrackId {
     // Empty for root, with each string representing the entity name.
     pub entity_traversal: Vec<String>,
@@ -244,12 +574,46 @@ impl AnimationTrackId {
     pub fn get_entity(&self, ecs_world: &ECSWorld, base_entity: Entity) -> Option<Entity> {
         let mut entity = base_entity;
         for name in &self.entity_traversal {
-            let Some(child) = ecs_world.get_child_by_name(base_entity, name) else {
+            let Some(child) = ecs_world.get_child_by_name(entity, name) else {
                 return None;
             };
             entity = child;
         }
         return Some(entity);
+    }
+
+    pub fn matches_prefix(
+        &self,
+        entity_traversal: &[String],
+        component_name: Option<&String>,
+        component_property: Option<&String>,
+    ) -> bool {
+        if self.entity_traversal.len() < entity_traversal.len() {
+            return false;
+        }
+        if &self.entity_traversal[0..entity_traversal.len()] != entity_traversal {
+            return false;
+        }
+        if let Some(component_name) = component_name {
+            if entity_traversal.len() < self.entity_traversal.len() {
+                return false;
+            }
+            if &self.component_name != component_name {
+                return false;
+            }
+        }
+        if let Some(component_property) = component_property {
+            assert!(component_name.is_some());
+            if &self.component_property != component_property {
+                log::info!(
+                    "Prefix match failed on component property, expected {}, got {}",
+                    component_property,
+                    self.component_property
+                );
+                return false;
+            }
+        }
+        return true;
     }
 }
 
@@ -305,6 +669,23 @@ impl Animation {
             .push(AnimationTrack::new(track_id, property_type_info));
     }
 
+    pub fn get_channel(
+        &self,
+        track_id: &AnimationTrackId,
+        channel_name: &str,
+    ) -> Option<&AnimationTrackChannel> {
+        self.tracks.iter().find_map(|track| {
+            if &track.track_id == track_id {
+                track
+                    .channels
+                    .iter()
+                    .find(|channel| channel.channel_type_info.channel_name == channel_name)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn get_track(&self, track_id: &AnimationTrackId) -> Option<&AnimationTrack> {
         self.tracks.iter().find(|track| &track.track_id == track_id)
     }
@@ -315,6 +696,50 @@ impl Animation {
             .find(|track| &track.track_id == track_id)
     }
 
+    pub fn get_channel_values(
+        &self,
+        ecs_world: &ECSWorld,
+        base_entity: Entity,
+    ) -> Vec<(
+        AnimationTrackId,
+        AnimationPropertyChannelTypeInfo,
+        GameComponentAnimationChannelData,
+    )> {
+        let mut channel_values = Vec::new();
+        for track in &self.tracks {
+            let Some(track_entity) = track.track_id.get_entity(ecs_world, base_entity) else {
+                continue;
+            };
+            let component_type_id = ecs_world
+                .game_component_names
+                .get(&track.track_id.component_name)
+                .unwrap();
+            let game_component_type = ecs_world.game_components.get(component_type_id).unwrap();
+            let component_ref = ecs_world.get_unchecked(track_entity, *component_type_id);
+            // Safety: We access the game component type and component data with the same
+            // type id.
+            let game_component_dyn = unsafe {
+                game_component_type.as_dyn_mut(component_ref.get_component_ptr() as *mut u8)
+            };
+            let animation_property = game_component_dyn
+                .get_animation_property(track.track_id.component_property.as_str());
+            for channel in &track.channels {
+                let channel_data = animation_property
+                    .get_channel_data(channel.channel_type_info.channel_name.as_str());
+                assert_eq!(
+                    channel_data.type_info.type_id(),
+                    channel.channel_type_info.type_info.type_id()
+                );
+                channel_values.push((
+                    track.track_id.clone(),
+                    channel.channel_type_info.clone(),
+                    channel_data,
+                ));
+            }
+        }
+        channel_values
+    }
+
     pub fn apply_animation(&self, ecs_world: &ECSWorld, base_entity: Entity, u: f32) {
         for track in &self.tracks {
             let component_type_id = ecs_world
@@ -322,39 +747,49 @@ impl Animation {
                 .get(&track.track_id.component_name)
                 .unwrap();
             let game_component_type = ecs_world.game_components.get(component_type_id).unwrap();
+            let Some(track_entity) = track.track_id.get_entity(ecs_world, base_entity) else {
+                continue;
+            };
+            let component_ref = ecs_world.get_unchecked(track_entity, *component_type_id);
+            // Safety: We access the game component type and component data with the same
+            // type id.
+            let game_component_dyn = unsafe {
+                game_component_type.as_dyn_mut(component_ref.get_component_ptr() as *mut u8)
+            };
+
+            // Collect each interpolated channel value, then apply it to the animation property
+            // encompassing those channels, done this way to allow for intermediate conversion
+            // mainly for rotations.
+            let mut property_apply_data = AnimationPropertyApplyData::new();
             for channel in &track.channels {
                 if let Some((start_index, end_index, t)) = channel.find_interpolation_indices(
                     Duration::from_secs_f32(u * self.duration.as_secs_f32()),
                 ) {
-                    let Some(channel_entity) = channel.track_id.get_entity(ecs_world, base_entity)
-                    else {
-                        continue;
-                    };
-                    let component_ref = ecs_world.get_unchecked(channel_entity, *component_type_id);
-                    // Safety: We access the game component type and component data with the same
-                    // type id.
-                    let game_component_dyn = unsafe {
-                        game_component_type.as_dyn_mut(component_ref.get_component_ptr() as *mut u8)
-                    };
-                    let channel_data = game_component_dyn.get_animation_channel(
-                        &channel.track_id.component_property,
-                        &channel.channel_type_info.channel_name,
-                    );
-                    assert_eq!(
-                        channel_data.type_info.type_id(),
-                        channel.channel_type_info.type_info.type_id()
-                    );
-                    let dst_ptr = channel_data.data_ptr;
+                    // Safety: We insert this into property_apply_data which handles deallocation.
+                    let dst_ptr =
+                        unsafe { std::alloc::alloc(channel.channel_type_info.type_info.layout(1)) };
+                    assert!(!dst_ptr.is_null(), "Failed to allocate memory.");
                     let a_ptr = channel.values.get_unchecked(start_index).as_ptr() as *const u8;
                     let b_ptr = channel.values.get_unchecked(end_index).as_ptr() as *const u8;
+                    // Safety: Each value is allocated with the same channel type info.
                     unsafe {
                         channel
                             .channel_type_info
-                            .update_fn
+                            .fn_caller
                             .update_erased(dst_ptr, a_ptr, b_ptr, t);
+                    }
+                    // Safety: dst_ptr is allocated above and is not referenced later, relieving
+                    // ownership.
+                    unsafe {
+                        property_apply_data
+                            .add_channel_value(dst_ptr, channel.channel_type_info.clone());
                     }
                 }
             }
+
+            game_component_dyn
+                .get_animation_property(track.track_id.component_property.as_str())
+                .set_property_data(property_apply_data);
         }
     }
 }
@@ -382,30 +817,134 @@ pub struct AnimationPropertyChannelTypeInfo {
     pub channel_id: String,
     // Type of the channel we are storing.
     pub type_info: TypeInfoCloneable,
-    pub update_fn: AnimationPropertyUpdateFnCaller,
+    pub fn_caller: AnimationPropertyChannelFnCaller,
 }
 
 impl AnimationPropertyChannelTypeInfo {
-    fn new<T: AnimationPropertyChannel>(channel_name: String) -> Self {
+    fn new<T: AnimationPropertyChannel + for<'de> serde::Deserialize<'de>>(
+        channel_name: String,
+    ) -> Self {
         Self {
             channel_name: channel_name.clone(),
             channel_id: T::ID.to_owned(),
             type_info: TypeInfoCloneable::new::<T>(),
-            update_fn: AnimationPropertyUpdateFnCaller::new::<T>(),
+            fn_caller: AnimationPropertyChannelFnCaller::new::<T>(),
         }
+    }
+
+    pub fn from_id(channel_id: &str, channel_name: String) -> Option<Self> {
+        match channel_id {
+            AnimationRadians::ID => Some(Self::new::<AnimationRadians>(channel_name)),
+            f32::ID => Some(Self::new::<f32>(channel_name)),
+            _ => None,
+        }
+    }
+}
+
+impl serde::Serialize for AnimationPropertyChannelTypeInfo {
+    fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = se.serialize_struct("AnimationPropertyChannelTypeInfo", 3)?;
+        s.serialize_field("channel_name", &self.channel_name)?;
+        s.serialize_field("channel_id", &self.channel_id)?;
+        s.end()
+    }
+}
+
+impl<'de> serde::de::Deserialize<'de> for AnimationPropertyChannelTypeInfo {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        de.deserialize_struct(
+            "AnimationPropertyChannelTypeInfo",
+            &["channel_name", "channel_id"],
+            AnimationPropertyChannelTypeInfoVisitor,
+        )
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum AnimationPropertyChannelTypeInfoField {
+    ChannelName,
+    ChannelId,
+}
+
+struct AnimationPropertyChannelTypeInfoVisitor;
+impl<'de> serde::de::Visitor<'de> for AnimationPropertyChannelTypeInfoVisitor {
+    type Value = AnimationPropertyChannelTypeInfo;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("AnimationPropertyChannelTypeInfo")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut channel_name = None;
+        let mut channel_id = None;
+        while let Some(key) = map.next_key()? {
+            match key {
+                AnimationPropertyChannelTypeInfoField::ChannelName => {
+                    if channel_name.is_some() {
+                        return Err(serde::de::Error::duplicate_field("channel_name"));
+                    }
+                    channel_name = Some(map.next_value::<String>()?);
+                }
+                AnimationPropertyChannelTypeInfoField::ChannelId => {
+                    if channel_id.is_some() {
+                        return Err(serde::de::Error::duplicate_field("channel_id"));
+                    }
+                    channel_id = Some(map.next_value::<String>()?);
+                }
+            }
+        }
+        let channel_name =
+            channel_name.ok_or_else(|| serde::de::Error::missing_field("channel_name"))?;
+        let channel_id = channel_id
+            .as_ref()
+            .ok_or_else(|| serde::de::Error::missing_field("channel_id"))?;
+        let channel_type = AnimationPropertyChannelTypeInfo::from_id(
+            &channel_id,
+            channel_name.clone(),
+        )
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "Unknown channel_id {} while deserializing AnimationPropertyChannelTypeInfo",
+                channel_id
+            ))
+        })?;
+        Ok(channel_type)
     }
 }
 
 // Need to do this since AnimationProperty::update relies on the type of Self which is basically a
 // generic so we need an erased version of it to call.
 type AnimationPropertyUpdateErasedFn = unsafe fn(dst: *mut u8, a: *const u8, b: *const u8, t: f32);
+type AnimationPropertyShowUiErasedFn = unsafe fn(val: *mut u8, ui: &mut egui::Ui) -> bool;
+type AnimationPropertyPartialEqErasedFn = unsafe fn(a: *const u8, b: *const u8) -> bool;
+type ChannelValueDeserializerFn =
+    unsafe fn(*mut u8, &mut dyn erased_serde::Deserializer) -> erased_serde::Result<()>;
 #[derive(Clone)]
-pub struct AnimationPropertyUpdateFnCaller {
+pub struct AnimationPropertyChannelFnCaller {
     update_fn_erased: AnimationPropertyUpdateErasedFn,
+    show_ui_fn_erased: AnimationPropertyShowUiErasedFn,
+    partial_eq_erased: AnimationPropertyPartialEqErasedFn,
+    erased_serialize_vtable: *const (),
+    deserialize_erased: ChannelValueDeserializerFn,
 }
 
-impl AnimationPropertyUpdateFnCaller {
-    pub fn new<T: AnimationPropertyChannel>() -> Self {
+// Safety: The pointers are all to static function pointers and vtables.
+unsafe impl Send for AnimationPropertyChannelFnCaller {}
+unsafe impl Sync for AnimationPropertyChannelFnCaller {}
+
+impl AnimationPropertyChannelFnCaller {
+    pub fn new<T: AnimationPropertyChannel + for<'de> serde::de::Deserialize<'de>>() -> Self {
         unsafe fn update_erased<T: AnimationPropertyChannel>(
             dst: *mut u8,
             a: *const u8,
@@ -417,37 +956,178 @@ impl AnimationPropertyUpdateFnCaller {
             let b = &*(b as *const T);
             T::update(dst, a, b, t);
         }
+        unsafe fn show_ui_erased<T: AnimationPropertyChannel>(
+            val: *mut u8,
+            ui: &mut egui::Ui,
+        ) -> bool {
+            let val = &mut *(val as *mut T);
+            T::show_ui(val, ui)
+        }
+
+        unsafe fn partial_eq_erased<T: AnimationPropertyChannel>(
+            a: *const u8,
+            b: *const u8,
+        ) -> bool {
+            let a = &*(a as *const T);
+            let b = &*(b as *const T);
+            log::debug!(
+                "Comparing values for channel, equal: {} {:?} {:?}",
+                a == b,
+                a,
+                b
+            );
+            a == b
+        }
+
+        unsafe fn erased_deserialize_fn<
+            T: AnimationPropertyChannel + for<'de> serde::de::Deserialize<'de>,
+        >(
+            dst_ptr: *mut u8,
+            de: &mut dyn erased_serde::Deserializer,
+        ) -> erased_serde::Result<()> {
+            let dst_ptr = dst_ptr as *mut T;
+            // Safety: dst_ptr should be allocated with the memory layout for this type.
+            unsafe { dst_ptr.write(erased_serde::deserialize::<T>(de)?) };
+            Ok(())
+        }
+
+        let erased_serialize_vtable = {
+            // Basically copied from `ECSWorld::register_game_component`.
+            // Safety: We never access the contents of the pointer, only extracting the vtable, so
+            // should be okay right? Use `without_provenance_mut` since this ptr isn't actually
+            // associated with a memory allocation.
+            let null =
+                unsafe { NonNull::new_unchecked(std::ptr::without_provenance_mut::<T>(0x1234)) };
+            let dyn_ref = unsafe { null.as_ref() } as &dyn erased_serde::Serialize;
+            // Safety: This reference is in fact a dyn ref, even tho the data ptr might be null :p
+            let vtable_ptr =
+                unsafe { vtable::get_vtable_ptr(dyn_ref as &dyn erased_serde::Serialize) };
+            vtable_ptr
+        };
 
         Self {
             update_fn_erased: update_erased::<T>,
+            show_ui_fn_erased: show_ui_erased::<T>,
+            partial_eq_erased: partial_eq_erased::<T>,
+            erased_serialize_vtable,
+            deserialize_erased: erased_deserialize_fn::<T>,
         }
     }
 
-    unsafe fn update_erased(&self, dst: *mut u8, a: *const u8, b: *const u8, t: f32) {
+    pub unsafe fn update_erased(&self, dst: *mut u8, a: *const u8, b: *const u8, t: f32) {
         (self.update_fn_erased)(dst, a, b, t);
+    }
+
+    pub unsafe fn show_ui_erased(&self, val: *mut u8, ui: &mut egui::Ui) -> bool {
+        (self.show_ui_fn_erased)(val, ui)
+    }
+
+    pub unsafe fn partial_eq_erased(&self, a: *const u8, b: *const u8) -> bool {
+        (self.partial_eq_erased)(a, b)
+    }
+
+    pub unsafe fn deserialize_erased(
+        &self,
+        dst_ptr: *mut u8,
+        de: &mut dyn erased_serde::Deserializer,
+    ) -> erased_serde::Result<()> {
+        (self.deserialize_erased)(dst_ptr, de)
     }
 }
 
-pub struct AnimationPropertyChannelUpdateCtx<'a> {
-    ecs_world: &'a mut ECSWorld,
-    base_entity: Entity,
-    property_id: AnimationTrackId,
+pub struct AnimationPropertyApplyData {
+    pub channel_values: HashMap<
+        String,
+        (
+            /*owned_value_ptr*/ *mut u8,
+            AnimationPropertyChannelTypeInfo,
+        ),
+    >,
 }
 
-pub struct GameComponentAnimationChannelData<'a> {
+impl AnimationPropertyApplyData {
+    pub fn new() -> Self {
+        Self {
+            channel_values: HashMap::new(),
+        }
+    }
+
+    // Safety: value_ptr must be pointer owned pointer which transfers ownership to this struct.
+    pub unsafe fn add_channel_value(
+        &mut self,
+        value_ptr: *mut u8,
+        channel_type_info: AnimationPropertyChannelTypeInfo,
+    ) {
+        self.channel_values.insert(
+            channel_type_info.channel_name.clone(),
+            (value_ptr, channel_type_info),
+        );
+    }
+
+    pub fn get_channel<T: AnimationPropertyChannel>(&self, channel_name: &str) -> Option<T> {
+        let (value_ptr, channel_type_info) = self.channel_values.get(channel_name)?;
+        assert_eq!(
+            channel_type_info.type_info.type_id(),
+            std::any::TypeId::of::<T>(),
+            "Channel {} is not of type {}",
+            channel_name,
+            std::any::type_name::<T>(),
+        );
+        // Safety: We assert the type of the channel value is T.
+        let val = unsafe { &*((*value_ptr) as *const T) }.clone();
+        Some(val)
+    }
+}
+
+impl Drop for AnimationPropertyApplyData {
+    fn drop(&mut self) {
+        for (_, (value_ptr, channel_type_info)) in self.channel_values.iter() {
+            // We need to deallocate the memory we allocated for the channel values after applying
+            // the animation.
+            unsafe {
+                std::alloc::dealloc(*value_ptr, channel_type_info.type_info.layout(1));
+            }
+        }
+    }
+}
+
+pub struct GameComponentAnimationChannelData {
     // Type of `value`, used to assert this type is the type expected for this channel name in the
     // `AnimationTrackChannel`.
     pub type_info: TypeInfoCloneable,
-    pub data_ptr: *mut u8,
-    pub marker: std::marker::PhantomData<&'a mut ()>,
+    // Owned data ptr.
+    data_ptr: *mut u8,
 }
 
-impl<'a> GameComponentAnimationChannelData<'a> {
-    pub fn new<T: Clone + 'static>(data_ptr: &mut T) -> Self {
+impl GameComponentAnimationChannelData {
+    pub fn new<T: Clone + 'static>(data_ptr: T) -> Self {
+        let data_ptr = Box::into_raw(Box::new(data_ptr));
         Self {
             type_info: TypeInfoCloneable::new::<T>(),
-            data_ptr: data_ptr as *mut T as *mut u8,
-            marker: std::marker::PhantomData,
+            data_ptr: data_ptr as *mut u8,
+        }
+    }
+
+    pub fn new_alloc(type_info: TypeInfoCloneable) -> Self {
+        let data_ptr = unsafe { std::alloc::alloc(type_info.layout(1)) };
+        assert!(!data_ptr.is_null(), "Failed to allocate memory.");
+        Self {
+            type_info,
+            data_ptr,
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.data_ptr as *const u8
+    }
+}
+
+impl Drop for GameComponentAnimationChannelData {
+    fn drop(&mut self) {
+        assert!(!self.data_ptr.is_null());
+        // Deallocate the owned data.
+        unsafe {
+            std::alloc::dealloc(self.data_ptr, self.type_info.layout(1));
         }
     }
 }
@@ -457,7 +1137,29 @@ pub trait AnimationProperty: Clone {
     const ID: &'static str;
 
     fn channels() -> Vec<AnimationPropertyChannelTypeInfo>;
-    fn get_channel_data<'a>(&'a mut self, channel: &str) -> GameComponentAnimationChannelData<'a>;
+    fn get_channel_data(&self, channel: &str) -> GameComponentAnimationChannelData;
+    unsafe fn set_channel_data(&mut self, channel: &str, new_value: *const u8);
+    fn set_property_data(&mut self, property_data: AnimationPropertyApplyData);
+}
+
+pub trait AnimationPropertyMethods {
+    fn get_channel_data(&self, channel: &str) -> GameComponentAnimationChannelData;
+    unsafe fn set_channel_data(&mut self, channel: &str, new_value: *const u8);
+    fn set_property_data(&mut self, property_data: AnimationPropertyApplyData);
+}
+
+impl<T: AnimationProperty> AnimationPropertyMethods for T {
+    fn get_channel_data(&self, channel: &str) -> GameComponentAnimationChannelData {
+        AnimationProperty::get_channel_data(self, channel)
+    }
+
+    unsafe fn set_channel_data(&mut self, channel: &str, new_value: *const u8) {
+        AnimationProperty::set_channel_data(self, channel, new_value)
+    }
+
+    fn set_property_data(&mut self, property_data: AnimationPropertyApplyData) {
+        AnimationProperty::set_property_data(self, property_data)
+    }
 }
 
 impl AnimationProperty for nalgebra::Vector3<f32> {
@@ -471,38 +1173,139 @@ impl AnimationProperty for nalgebra::Vector3<f32> {
         ]
     }
 
-    fn get_channel_data<'a>(&'a mut self, channel: &str) -> GameComponentAnimationChannelData<'a> {
+    fn get_channel_data(&self, channel: &str) -> GameComponentAnimationChannelData {
         match channel {
-            "x" => GameComponentAnimationChannelData::new(&mut self.x),
-            "y" => GameComponentAnimationChannelData::new(&mut self.y),
-            "z" => GameComponentAnimationChannelData::new(&mut self.z),
+            "x" => GameComponentAnimationChannelData::new(self.x),
+            "y" => GameComponentAnimationChannelData::new(self.y),
+            "z" => GameComponentAnimationChannelData::new(self.z),
             _ => panic!("No channel named {} for Vector3<f32>", channel),
         }
     }
+
+    unsafe fn set_channel_data(&mut self, channel: &str, new_value: *const u8) {
+        let new_value = *(new_value as *const f32);
+        match channel {
+            "x" => self.x = new_value,
+            "y" => self.y = new_value,
+            "z" => self.z = new_value,
+            _ => panic!("No channel named {} for Vector3<f32>", channel),
+        }
+    }
+
+    fn set_property_data(&mut self, property_data: AnimationPropertyApplyData) {
+        self.x = property_data.get_channel::<f32>("x").unwrap_or(self.x);
+        self.y = property_data.get_channel::<f32>("y").unwrap_or(self.y);
+        self.z = property_data.get_channel::<f32>("z").unwrap_or(self.z);
+    }
+}
+
+/// (yaw, pitch, roll)
+fn quat_to_euler_angles(quat: &UnitQuaternion<f32>) -> (f32, f32, f32) {
+    let (roll, pitch, yaw) = quat.euler_angles();
+    (yaw, pitch, roll)
+}
+
+fn euler_angles_to_quat(yaw: f32, pitch: f32, roll: f32) -> UnitQuaternion<f32> {
+    UnitQuaternion::from_euler_angles(roll, pitch, yaw)
 }
 
 impl AnimationProperty for nalgebra::UnitQuaternion<f32> {
     const ID: &'static str = "UnitQuaternion<f32>";
 
     fn channels() -> Vec<AnimationPropertyChannelTypeInfo> {
-        vec![AnimationPropertyChannelTypeInfo::new::<Self>(
-            "rotation".to_owned(),
-        )]
+        vec![
+            AnimationPropertyChannelTypeInfo::new::<AnimationRadians>("pitch".to_owned()),
+            AnimationPropertyChannelTypeInfo::new::<AnimationRadians>("yaw".to_owned()),
+            AnimationPropertyChannelTypeInfo::new::<AnimationRadians>("roll".to_owned()),
+        ]
     }
 
-    fn get_channel_data<'a>(&'a mut self, channel: &str) -> GameComponentAnimationChannelData<'a> {
+    fn get_channel_data(&self, channel: &str) -> GameComponentAnimationChannelData {
+        let (yaw, pitch, roll) = quat_to_euler_angles(self);
+        let (yaw, pitch, roll) = (
+            AnimationRadians(yaw),
+            AnimationRadians(pitch),
+            AnimationRadians(roll),
+        );
         match channel {
-            "rotation" => GameComponentAnimationChannelData::new(self),
+            "pitch" => GameComponentAnimationChannelData::new(pitch),
+            "yaw" => GameComponentAnimationChannelData::new(yaw),
+            "roll" => GameComponentAnimationChannelData::new(roll),
             _ => panic!("No channel named {} for UnitQuaternion<f32>", channel),
         }
+    }
+
+    unsafe fn set_channel_data(&mut self, channel: &str, new_value: *const u8) {
+        let new_value = *(new_value as *const AnimationRadians);
+        let (mut yaw, mut pitch, mut roll) = quat_to_euler_angles(self);
+        let (mut yaw, mut pitch, mut roll) = (
+            AnimationRadians(yaw),
+            AnimationRadians(pitch),
+            AnimationRadians(roll),
+        );
+        match channel {
+            "pitch" => {
+                pitch = new_value;
+            }
+            "yaw" => {
+                yaw = new_value;
+            }
+            "roll" => {
+                roll = new_value;
+            }
+            _ => panic!("No channel named {} for UnitQuaternion<f32>", channel),
+        }
+        *self = euler_angles_to_quat(yaw.0, pitch.0, roll.0);
+    }
+
+    fn set_property_data(&mut self, property_data: AnimationPropertyApplyData) {
+        let (o_yaw, o_pitch, o_roll) = quat_to_euler_angles(self);
+        let (o_yaw, o_pitch, o_roll) = (
+            AnimationRadians(o_yaw),
+            AnimationRadians(o_pitch),
+            AnimationRadians(o_roll),
+        );
+        let yaw = property_data
+            .get_channel::<AnimationRadians>("yaw")
+            .unwrap_or(o_yaw);
+        let pitch = property_data
+            .get_channel::<AnimationRadians>("pitch")
+            .unwrap_or(o_pitch);
+        let roll = property_data
+            .get_channel::<AnimationRadians>("roll")
+            .unwrap_or(o_roll);
+        *self = euler_angles_to_quat(yaw.0, pitch.0, roll.0);
     }
 }
 
 /// The animatable value.
-pub trait AnimationPropertyChannel: Clone + 'static {
+pub trait AnimationPropertyChannel:
+    Clone + PartialEq + std::fmt::Debug + erased_serde::Serialize + 'static
+{
     const ID: &'static str;
 
     fn update(dst: &mut Self, a: &Self, b: &Self, t: f32);
+    fn show_ui(val: &mut Self, ui: &mut egui::Ui) -> bool;
+}
+
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct AnimationRadians(pub f32);
+
+impl AnimationPropertyChannel for AnimationRadians {
+    const ID: &'static str = "AnimationRadians";
+
+    fn update(dst: &mut Self, a: &Self, b: &Self, t: f32) {
+        dst.0 = (1.0 - t) * a.0 + t * b.0;
+    }
+
+    fn show_ui(val: &mut Self, ui: &mut egui::Ui) -> bool {
+        let mut x = val.0.to_degrees();
+        let res = ui.add(egui::DragValue::new(&mut x).suffix("°"));
+        *val = AnimationRadians(x.to_radians());
+        return res.changed();
+    }
 }
 
 impl AnimationPropertyChannel for f32 {
@@ -511,12 +1314,8 @@ impl AnimationPropertyChannel for f32 {
     fn update(dst: &mut Self, a: &Self, b: &Self, t: f32) {
         *dst = (1.0 - t) * a + t * b;
     }
-}
 
-impl AnimationPropertyChannel for nalgebra::UnitQuaternion<f32> {
-    const ID: &'static str = "UnitQuaternion<f32>";
-
-    fn update(dst: &mut Self, a: &Self, b: &Self, t: f32) {
-        *dst = a.slerp(b, t);
+    fn show_ui(val: &mut Self, ui: &mut egui::Ui) -> bool {
+        return ui.add(egui::DragValue::new(val)).changed();
     }
 }

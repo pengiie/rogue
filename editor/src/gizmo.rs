@@ -17,7 +17,10 @@ use rogue_engine::{
 };
 use rogue_macros::Resource;
 
-use crate::{editing::voxel_editing::EditorVoxelEditing, session::EditorSession, ui::EditorUI};
+use crate::{
+    editing::voxel_editing::EditorVoxelEditing, editor_transform_euler::EditorTransformEuler,
+    session::EditorSession, ui::EditorUI,
+};
 
 #[derive(Copy, Clone, strum_macros::EnumDiscriminants)]
 enum GizmoType {
@@ -28,22 +31,36 @@ enum GizmoType {
 struct ActiveGizmo {
     gizmo_type: GizmoType,
     axis: Vector3<f32>,
+    world_axis: Vector3<f32>,
     initial_entity_pos: Vector3<f32>,
 }
 
 impl ActiveGizmo {
-    pub fn plane_axes(axis: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
-        if axis.x != 0.0 {
-            (Vector3::y(), Vector3::z())
-        } else if axis.y != 0.0 {
-            (Vector3::x(), Vector3::z())
+    pub fn plane_axes_aligned(axis: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+        let bitangent = if axis != &Vector3::y() {
+            axis.cross(&Vector3::y()).normalize()
         } else {
-            (Vector3::x(), Vector3::y())
-        }
+            axis.cross(&Vector3::x()).normalize()
+        };
+        let tangent = axis.cross(&bitangent).normalize();
+        (tangent, bitangent)
+    }
+
+    /// Calculates plane axes in left-handed system.
+    pub fn plane_axes(axis: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+        let tangent = if axis != &Vector3::y() {
+            axis.cross(&Vector3::y()).normalize()
+        } else {
+            axis.cross(&Vector3::x()).normalize()
+        };
+        let bitangent = tangent.cross(axis).normalize();
+        assert_ne!(axis, &tangent);
+        assert_ne!(axis, &bitangent);
+        (tangent, bitangent)
     }
 
     pub fn plane_proj_axis(pos: &Vector3<f32>, axis: &Vector3<f32>, ray: &Ray) -> Option<f32> {
-        let (pa, pb) = Self::plane_axes(axis);
+        let (pa, pb) = Self::plane_axes_aligned(axis);
         let pta = ray.intersect_plane(*pos, pa);
         let ptb = ray.intersect_plane(*pos, pb);
         let pt = match (pta, ptb) {
@@ -69,13 +86,12 @@ impl ActiveGizmo {
         };
         let hit_pos = ray.origin + pt * ray.dir;
         let diff = hit_pos - pos;
-        if axis.x != 0.0 {
-            Some(diff.y.atan2(diff.z))
-        } else if axis.y != 0.0 {
-            Some(diff.z.atan2(diff.x))
-        } else {
-            Some(diff.x.atan2(diff.y))
-        }
+        let (tangent, bitangent) = Self::plane_axes(axis);
+        let proj_tangent = diff.dot(&tangent);
+        let proj_bitangent = diff.dot(&bitangent);
+        let proj_diff = Vector3::new(proj_tangent, proj_bitangent, 0.0);
+        let rot = proj_diff.y.atan2(proj_diff.x);
+        return Some(rot);
     }
 
     pub fn apply_update(&mut self, ray: &Ray, world_transform: &mut Transform) {
@@ -91,17 +107,17 @@ impl ActiveGizmo {
             }
             GizmoType::Rotation { last_rot } => {
                 let Some(mut rot) =
-                    Self::plane_proj_rotation(&self.initial_entity_pos, &self.axis, ray)
+                    Self::plane_proj_rotation(&self.initial_entity_pos, &self.world_axis, ray)
                 else {
                     return;
                 };
                 let drot = rot - *last_rot;
                 *last_rot = rot;
-                let rot_quat = UnitQuaternion::from_axis_angle(
-                    &nalgebra::Unit::new_unchecked(self.axis),
-                    -drot,
-                );
-                world_transform.rotation *= rot_quat;
+                world_transform.rotation = world_transform.rotation
+                    * UnitQuaternion::from_axis_angle(
+                        &nalgebra::Unit::new_normalize(self.axis),
+                        -drot,
+                    );
             }
         }
     }
@@ -155,6 +171,9 @@ impl EditorGizmo {
                 .expect("Should have a transform");
             ecs_world.get_world_transform(selected_entity, &local_transform)
         };
+        let mut editor_transform_euler = ecs_world
+            .get::<&mut EditorTransformEuler>(selected_entity)
+            .unwrap();
 
         struct AxisInfo {
             hover_t: Option<f32>,
@@ -241,7 +260,7 @@ impl EditorGizmo {
                     GizmoTypeDiscriminants::Rotation => GizmoType::Rotation {
                         last_rot: ActiveGizmo::plane_proj_rotation(
                             &world_transform.position,
-                            &axis.axis,
+                            &world_transform.rotation.transform_vector(&axis.axis),
                             &editor_session.editor_camera_ray,
                         )
                         .unwrap_or(0.0),
@@ -250,6 +269,7 @@ impl EditorGizmo {
                 gizmo.active_gizmo = Some(ActiveGizmo {
                     gizmo_type,
                     axis: axis.axis,
+                    world_axis: world_transform.rotation.transform_vector(&axis.axis),
                     initial_entity_pos: world_transform.position,
                 });
             }
@@ -293,7 +313,7 @@ impl EditorGizmo {
                 active_gizmo.apply_update(&editor_session.editor_camera_ray, &mut world_transform);
                 world_transform
             };
-            let new_local_transform =
+            let mut new_local_transform =
                 ecs_world.get_world_to_local_transform(selected_entity, &world_transform);
             *ecs_world
                 .get::<&mut Transform>(selected_entity)

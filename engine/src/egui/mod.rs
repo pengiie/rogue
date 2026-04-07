@@ -33,6 +33,37 @@ pub mod util {
         });
     }
 
+    /// (pitch, yaw, roll)
+    const DEGREE_DRAG_SPEED: f32 = 0.25;
+    pub fn rotation_ui_euler(ui: &mut egui::Ui, rotation: &mut Vector3<f32>) {
+        ui.horizontal(|ui| {
+            ui.label("Rotation:");
+            ui.label("X");
+            // nalgebra uses positive rotation for clockwise but intuitively
+            // counter-clockwise makes more sense since math.
+            ui.add(
+                egui::DragValue::new(&mut rotation.x)
+                    .suffix("°")
+                    .speed(DEGREE_DRAG_SPEED)
+                    .fixed_decimals(2),
+            );
+            ui.label("Y");
+            ui.add(
+                egui::DragValue::new(&mut rotation.y)
+                    .suffix("°")
+                    .speed(DEGREE_DRAG_SPEED)
+                    .fixed_decimals(2),
+            );
+            ui.label("Z");
+            ui.add(
+                egui::DragValue::new(&mut rotation.z)
+                    .suffix("°")
+                    .speed(DEGREE_DRAG_SPEED)
+                    .fixed_decimals(2),
+            );
+        });
+    }
+
     pub fn rotation_ui(ui: &mut egui::Ui, rotation: &mut UnitQuaternion<f32>) {
         ui.horizontal(|ui| {
             ui.label("Rotation:");

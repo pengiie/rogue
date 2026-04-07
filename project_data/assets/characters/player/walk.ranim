@@ -1,0 +1,186 @@
+{
+  "tracks": [
+    {
+      "track_id": {
+        "entity_traversal": [
+          "foot_left"
+        ],
+        "component_name": "Transform",
+        "component_property": "rotation"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "pitch",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 500000000
+            },
+            {
+              "secs": 2,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            0.9599311,
+            -0.9599311,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "yaw",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0
+          ],
+          "interpolation": [
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "roll",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0
+          ],
+          "interpolation": [
+            "Linear"
+          ]
+        }
+      ]
+    },
+    {
+      "track_id": {
+        "entity_traversal": [
+          "foot_right"
+        ],
+        "component_name": "Transform",
+        "component_property": "rotation"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "pitch",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 500000000
+            },
+            {
+              "secs": 2,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            -0.9599311,
+            0.9599311,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "yaw",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "roll",
+            "channel_id": "AnimationRadians"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    }
+  ],
+  "duration": {
+    "secs": 2,
+    "nanos": 0
+  }
+}

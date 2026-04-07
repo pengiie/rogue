@@ -21,6 +21,7 @@ pub struct AnimationBank {
 
     to_load_animations: HashSet<GameAssetPath>,
     loading_animations: HashMap<GameAssetPath, AssetHandle>,
+    failed_to_load_animations: HashSet<GameAssetPath>,
 }
 
 impl AnimationBank {
@@ -31,6 +32,7 @@ impl AnimationBank {
 
             to_load_animations: HashSet::new(),
             loading_animations: HashMap::new(),
+            failed_to_load_animations: HashSet::new(),
         }
     }
 
@@ -53,13 +55,16 @@ impl AnimationBank {
             return;
         };
         for animation_path in animation_bank.to_load_animations.drain() {
-            if animation_bank
+            let animation_loaded = animation_bank
+                .asset_to_animation
+                .contains_key(&animation_path);
+            let animation_failed_to_load = animation_bank
+                .failed_to_load_animations
+                .contains(&animation_path);
+            let animation_loading = animation_bank
                 .loading_animations
-                .contains_key(&animation_path)
-                || animation_bank
-                    .asset_to_animation
-                    .contains_key(&animation_path)
-            {
+                .contains_key(&animation_path);
+            if animation_loaded || animation_failed_to_load || animation_loading {
                 continue;
             }
 
@@ -89,6 +94,9 @@ impl AnimationBank {
                         "Animation asset not found at path: {}",
                         loading_animation_path.as_relative_path_str()
                     );
+                    animation_bank
+                        .failed_to_load_animations
+                        .insert(loading_animation_path.clone());
                 }
                 AssetStatus::Error(error) => {
                     log::error!(
@@ -96,6 +104,9 @@ impl AnimationBank {
                         loading_animation_path.as_relative_path_str(),
                         error
                     );
+                    animation_bank
+                        .failed_to_load_animations
+                        .insert(loading_animation_path.clone());
                 }
             }
             finished_loading_animations.push(loading_animation_path.clone());

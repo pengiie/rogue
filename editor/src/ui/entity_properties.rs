@@ -36,6 +36,7 @@ use std::{
 
 use crate::{
     editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
+    editor_transform_euler::EditorTransformEuler,
     session::{EditorCommandEvent, EditorSession},
     ui::{
         EditorCommand, EditorCommands, EditorDialog, EditorUIContext, FilePickerType,
@@ -577,7 +578,20 @@ impl EntityPropertiesPane {
         if let Ok(mut transform) = ctx.ecs_world.get::<&mut Transform>(selected_entity) {
             Self::component_widget(ui, "Transform", None, |ui| {
                 rogue_engine::egui::util::position_ui(ui, &mut transform.position);
-                rogue_engine::egui::util::rotation_ui(ui, &mut transform.rotation);
+                if let Ok(mut editor_euler) = ctx
+                    .ecs_world
+                    .get::<&mut EditorTransformEuler>(selected_entity)
+                {
+                    let mut prev_euler = editor_euler.euler().map(|x| x.to_degrees());
+                    let mut new_euler = prev_euler;
+                    rogue_engine::egui::util::rotation_ui_euler(ui, &mut new_euler);
+                    if new_euler != prev_euler {
+                        let new_quat = editor_euler.set_euler(new_euler.map(|x| x.to_radians()));
+                        transform.rotation = new_quat;
+                    }
+                } else {
+                    rogue_engine::egui::util::rotation_ui(ui, &mut transform.rotation);
+                }
                 rogue_engine::egui::util::scale_ui(ui, &mut transform.scale);
             });
         }
@@ -605,15 +619,17 @@ impl EntityPropertiesPane {
             if to_avoid_components.contains(&ty.type_id) {
                 continue;
             }
-
-            let mut should_remove = false;
-            let component_ref = ctx.ecs_world.get_unchecked(selected_entity, ty.type_id);
-            let component_name = &ctx
+            let Some(component_name) = ctx
                 .ecs_world
                 .game_components
                 .get(&ty.type_id)
-                .unwrap()
-                .component_name;
+                .map(|c| &c.component_name)
+            else {
+                continue;
+            };
+
+            let mut should_remove = false;
+            let component_ref = ctx.ecs_world.get_unchecked(selected_entity, ty.type_id);
             Self::component_widget(ui, component_name, Some(&mut should_remove), |ui| {
                 if let Some(show_fn) = ctx.ui_state.show_fns().get(&ty.type_id) {
                     // SAFETY: Show fn was registered with the same type as the type id it is keyed by,

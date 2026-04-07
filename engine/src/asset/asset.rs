@@ -723,7 +723,7 @@ macro_rules! impl_asset_load_save_serde {
                 Self: Sized + std::any::Any,
             {
                 match data.path().extension() {
-                    "json" | "rmat" => match data.read_contents() {
+                    "json" | "rmat" | "ranim" => match data.read_contents() {
                         Ok(contents) => serde_json::from_str::<$name>(&contents).map_err(|err| {
                             $crate::asset::asset::AssetLoadError::Other(anyhow::anyhow!(
                                 "Failed to deserialize file into {}, error: {}",
@@ -751,7 +751,7 @@ macro_rules! impl_asset_load_save_serde {
                 Self: Sized,
             {
                 match out_file.path().extension() {
-                    "json" => match out_file.write_contents(
+                    "json" | "rmat" | "ranim" => match out_file.write_contents(
                         serde_json::to_string_pretty(data).expect("Failed to serialize."),
                     ) {
                         Ok(()) => Ok(()),
@@ -770,7 +770,7 @@ macro_rules! impl_asset_load_save_serde {
                 Self: Sized,
             {
                 match out_file.path().extension() {
-                    "json" => match out_file.write_contents(
+                    "json" | "rmat" | "ranim" => match out_file.write_contents(
                         serde_json::to_string_pretty(data).expect("Failed to serialize."),
                     ) {
                         Ok(()) => Ok(()),

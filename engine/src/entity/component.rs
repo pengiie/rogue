@@ -1,6 +1,8 @@
 use std::{any::TypeId, cell::Cell, collections::HashMap, ptr::NonNull};
 
-use crate::animation::animation::{AnimationPropertyTypeInfo, GameComponentAnimationChannelData};
+use crate::animation::animation::{
+    AnimationPropertyMethods, AnimationPropertyTypeInfo, GameComponentAnimationChannelData,
+};
 use crate::common::dyn_vec::TypeInfo;
 use crate::entity::{archetype::ComponentArchetype, ecs_world::Entity, query::QueryItemRef};
 use crate::physics::collider_registry::ColliderRegistry;
@@ -63,11 +65,7 @@ pub trait GameComponentMethods {
         ser: &mut dyn erased_serde::Serializer,
     ) -> erased_serde::Result<()>;
 
-    fn get_animation_channel<'a>(
-        &'a mut self,
-        property: &str,
-        channel: &str,
-    ) -> GameComponentAnimationChannelData<'a>;
+    fn get_animation_property(&mut self, property: &str) -> &mut dyn AnimationPropertyMethods;
 }
 
 impl<T: GameComponent> GameComponentMethods for T {
@@ -83,12 +81,8 @@ impl<T: GameComponent> GameComponentMethods for T {
         GameComponent::serialize_component(self, ctx, ser)
     }
 
-    fn get_animation_channel<'a>(
-        &'a mut self,
-        property: &str,
-        channel: &str,
-    ) -> GameComponentAnimationChannelData<'a> {
-        GameComponent::get_animation_channel(self, property, channel)
+    fn get_animation_property(&mut self, property: &str) -> &mut dyn AnimationPropertyMethods {
+        GameComponent::get_animation_property(self, property)
     }
 }
 
@@ -132,11 +126,7 @@ pub trait GameComponent {
         !Self::animation_properties().is_empty()
     }
 
-    fn get_animation_channel<'a>(
-        &'a mut self,
-        property: &str,
-        channel: &str,
-    ) -> GameComponentAnimationChannelData<'a> {
+    fn get_animation_property(&mut self, property: &str) -> &mut dyn AnimationPropertyMethods {
         panic!(
             "GameComponent::animation_properties was either not written correctly, or this was called without checking if property {} exists first.",
             property

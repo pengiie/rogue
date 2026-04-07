@@ -251,6 +251,27 @@ impl DynVecCloneable {
         self.size += 1;
     }
 
+    pub fn remove(&mut self, index: usize) {
+        assert!(index < self.size);
+        // Drop the removed element.
+        unsafe {
+            let dst_ptr = self.data.byte_add(self.type_info.stride() * index);
+            (self.type_info.drop_fn)(dst_ptr.as_ptr());
+        }
+
+        self.size -= 1;
+        if index == self.size {
+            return;
+        }
+        // Shift elements after removed one to the left.
+        unsafe {
+            let src_ptr = self.data.byte_add(self.type_info.stride() * (index + 1));
+            let dst_ptr = self.data.byte_add(self.type_info.stride() * index);
+            let count = self.size - index;
+            src_ptr.copy_to(dst_ptr, count * self.type_info.stride());
+        }
+    }
+
     pub fn push_unchecked(&mut self, bytes: &[u8]) {
         if self.size == self.capacity {
             self.grow(1);

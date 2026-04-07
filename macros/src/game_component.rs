@@ -115,7 +115,7 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
         let field_name = &field.ident;
         let field_ty = &field.ty;
         quote! {
-            stringify!(#field_name) => self.#field_name.get_channel_data(channel),
+            stringify!(#field_name) => &mut self.#field_name as &mut dyn #crate_name::animation::animation::AnimationPropertyMethods,
         }
     });
 
@@ -128,12 +128,7 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
             }
 
 
-            fn get_animation_channel<'a>(
-                &'a mut self,
-                property: &str,
-                channel: &str,
-            ) -> #crate_name::animation::animation::GameComponentAnimationChannelData<'a> {
-                use #crate_name::animation::animation::AnimationProperty;
+            fn get_animation_property(&mut self, property: &str) -> &mut dyn #crate_name::animation::animation::AnimationPropertyMethods {
                 match property {
                     #(#animation_property_get_arms)*
                     _ => panic!("No animation property named {}", property),
