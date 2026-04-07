@@ -2,13 +2,13 @@ use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_engine::{
     common::geometry::ray::Ray,
     entity::ecs_world::ECSWorld,
-    input::{Input, keyboard::Key},
+    input::{keyboard::Key, Input},
     physics::{physics_world::PhysicsWorld, rigid_body::RigidBody, transform::Transform},
     resource::{Res, ResMut},
     voxel::voxel_registry::VoxelModelRegistry,
     window::{time::Time, window::Window},
-    world::region_map::RegionMap,
 };
+use rogue_engine::world::terrain::region_map::RegionMap;
 use rogue_macros::game_component;
 
 use crate::player::player_controller::PlayerController;

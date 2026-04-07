@@ -1,6 +1,6 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::mpsc::{channel, Receiver, Sender},
 };
 
 use nalgebra::{Vector2, Vector4};
@@ -17,11 +17,11 @@ use rogue_engine::{
     resource::{Res, ResMut, Resource},
     voxel::voxel_registry::VoxelModelRegistry,
     window::window::Window,
-    world::{region_map::RegionMap, renderable::rt_pass::WorldRTPass, sky::Sky},
+    world::{renderable::rt_pass::WorldRTPass, sky::Sky},
 };
 use rogue_macros::Resource;
 use serde_with::serde_as;
-
+use rogue_engine::world::terrain::region_map::RegionMap;
 use crate::{
     animation_preview::EditorAnimationPreviewer,
     editing::voxel_editing::EditorVoxelEditing,

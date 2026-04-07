@@ -1,11 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
 use crate::{
-    consts,
-    event::{EventReader, Events},
+    event::EventReader,
     graphics::{
         backend::GraphicsBackendRecorder,
         frame_graph::{
@@ -15,8 +14,8 @@ use crate::{
     },
     resource::{Res, ResMut},
     voxel::{voxel_registry::VoxelModelId, voxel_registry_gpu::VoxelModelRegistryGpu},
-    world::region_map::{ChunkEvent, ChunkEventType, ChunkId, RegionMap},
 };
+use crate::world::terrain::region_map::{ChunkEvent, ChunkId};
 
 struct VoxelBakerGraphConstants {
     bake_pass_name: &'static str,

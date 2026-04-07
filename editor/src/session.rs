@@ -12,7 +12,7 @@ use rogue_engine::{
     entity::ecs_world::{ECSWorld, Entity},
     event::{EventReader, Events},
     graphics::camera::{Camera, MainCamera},
-    input::{Input, input_buffer::InputBuffer, mouse},
+    input::{input_buffer::InputBuffer, mouse, Input},
     material::MaterialBank,
     physics::{physics_world::PhysicsWorld, transform::Transform},
     resource::{Res, ResMut},
@@ -21,14 +21,11 @@ use rogue_engine::{
         voxel_registry::{self, VoxelModelId, VoxelModelRegistry},
     },
     window::{time::Time, window::Window},
-    world::{
-        region_map::{RegionMap, TerrainRaycastHit},
-        world_entities::{WorldEntities, WorldEntityRaycastHit},
-    },
+    world::world_entities::{WorldEntities, WorldEntityRaycastHit},
 };
 use rogue_macros::Resource;
 use winit::event::MouseButton;
-
+use rogue_engine::world::terrain::region_map::{RegionMap, TerrainRaycastHit};
 use crate::{
     camera_controller::{EditorCameraController, EditorCameraControllerType},
     editor_project_settings::{EditorProjectSettings, EditorProjectSettingsData},

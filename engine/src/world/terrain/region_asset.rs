@@ -1,5 +1,5 @@
 use crate::asset::{asset::AssetLoader, util::AssetByteReader};
-use crate::world::region::WorldRegionNode;
+use crate::world::terrain::region::WorldRegionNode;
 use crate::voxel::sft_compressed::VoxelModelSFTCompressed;
 
 pub struct WorldRegionAsset {

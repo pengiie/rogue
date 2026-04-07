@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashSet, VecDeque};
 
 use rogue_macros::Resource;
 
@@ -7,12 +7,12 @@ use crate::{
     consts,
     event::{EventReader, Events},
     resource::ResMut,
-    world::region_map::{
-        ChunkEvent, ChunkEventType, ChunkId, ChunkLOD, ChunkPos, RegionEvent, RegionEventType,
-        RegionMap, RegionPos,
-    },
 };
 use nalgebra::Vector3;
+use crate::world::terrain::region_map::{
+    ChunkEvent, ChunkEventType, ChunkId, ChunkLOD, RegionEvent,
+    RegionMap, RegionPos,
+};
 
 pub struct WorldStreamingOptions {
     pub origin_region: RegionPos,
@@ -25,7 +25,7 @@ impl Default for WorldStreamingOptions {
         Self {
             origin_region: RegionPos::new(0, 0, 0),
             region_load_distance: 2,
-            max_loaded_chunks: 900,
+            max_loaded_chunks: 100,
         }
     }
 }

@@ -5,7 +5,7 @@ use rogue_engine::egui::egui_gpu::EguiGpu;
 use rogue_engine::graphics::backend::{GfxBlitInfo, GfxFilterMode};
 use rogue_engine::graphics::device::DeviceResource;
 use rogue_engine::graphics::frame_graph::FrameGraphImageInfo;
-use rogue_engine::graphics::post_process_pass::PostProcessPass;
+use rogue_engine::graphics::passes::post_process_pass::PostProcessPass;
 use rogue_engine::graphics::{frame_graph::FrameGraphBuilder, renderer::Renderer};
 use rogue_engine::resource::{Res, ResMut};
 use rogue_engine::voxel::baker_gpu::VoxelBakerGpu;

@@ -16,12 +16,10 @@ use crate::{
         baker_gpu::VoxelBakerGpu,
         voxel_registry_gpu::{VoxelModelGpuInvalidationInfo, VoxelModelRegistryGpu},
     },
-    world::{
-        region::{WorldRegion, WorldRegionNode},
-        region_map::{ChunkEvent, ChunkEventType, ChunkLOD, RegionEvent, RegionMap, RegionPos},
-        renderable::region_window::TerrainRenderableWindow,
-    },
 };
+use crate::world::terrain::region::{WorldRegion, WorldRegionNode};
+use crate::world::terrain::region_map::{ChunkEvent, ChunkEventType, ChunkLOD, RegionEvent, RegionMap, RegionPos};
+use crate::world::terrain::region_window_gpu::TerrainRenderableWindow;
 
 #[derive(Resource)]
 pub struct RegionMapGpu {

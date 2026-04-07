@@ -4,11 +4,9 @@ mod world;
 pub use world::*;
 
 pub mod entity_bvh;
-pub mod region;
-pub mod region_asset;
-pub mod region_iter;
-pub mod region_map;
 pub mod renderable;
 pub mod sky;
 pub mod world_entities;
 pub mod world_streaming;
+pub mod terrain;
+pub mod world_entities_gpu;

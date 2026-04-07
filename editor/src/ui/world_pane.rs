@@ -17,15 +17,16 @@ impl WorldPane {
     }
 
     pub fn show_generator_section(ui: &mut egui::Ui, ctx: &mut super::EditorUIContext<'_>) {
-        egui::CollapsingHeader::new("Generation")
+        egui::CollapsingHeader::new("Terrain")
             .default_open(true)
             .show_unindented(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Enabled");
+                    ui.label("Generation Enabled");
                     let mut enabled = !ctx.world_generator.paused;
                     ui.checkbox(&mut enabled, "");
                     ctx.world_generator.paused = !enabled;
                 });
+                ui.horizontal(|ui| ui.label("Terrain: "));
             });
         egui::CollapsingHeader::new("Sky")
             .default_open(true)

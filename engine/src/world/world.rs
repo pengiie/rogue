@@ -1,5 +1,5 @@
 use nalgebra::Vector3;
-use crate::world::region_map::RegionMap;
+use crate::world::terrain::region_map::RegionMap;
 use crate::entity::ecs_world::{ECSWorld, Entity};
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 

@@ -7,11 +7,11 @@ use std::{
 use nalgebra::Vector3;
 use rand::{Rng, SeedableRng};
 use rogue_engine::{
-    asset::asset::GameAssetPath,
-    common::morton,
+    asset::asset::GameAssetPath
+    ,
     consts,
     event::{EventReader, Events},
-    input::{Input, keyboard::Key},
+    input::{keyboard::Key, Input},
     material::{MaterialBank, MaterialUpdateEvent},
     noise::{
         fbm::{Fbm, FbmOptions},
@@ -21,21 +21,18 @@ use rogue_engine::{
     task::tasks::Tasks,
     voxel::{
         attachment::Attachment,
-        flat::VoxelModelFlat,
-        sft::VoxelModelSFT,
+        flat::VoxelModelFlat
+        ,
         sft_compressed::VoxelModelSFTCompressed,
         voxel::VoxelMaterialData,
-        voxel_registry::{self, VoxelModelRegistry},
+        voxel_registry::VoxelModelRegistry,
     },
-    world::{
-        region::{RegionTree, WorldRegion, WorldRegionNode},
-        region_iter::RegionIter,
-        region_map::{ChunkId, ChunkLOD, ChunkPos, RegionEvent, RegionMap, RegionPos},
-        world_streaming::ChunkStreamEvent,
-    },
+    world::world_streaming::ChunkStreamEvent,
 };
 use rogue_macros::Resource;
 use wide::CmpGt;
+use rogue_engine::world::terrain::region::RegionTree;
+use rogue_engine::world::terrain::region_map::{ChunkId, ChunkLOD, ChunkPos, RegionMap};
 
 struct GeneratorMaterials;
 
@@ -87,7 +84,7 @@ impl WorldGenerator {
 
             update_material_event_reader: EventReader::new(),
 
-            paused: true,
+            paused: false,
         }
     }
 

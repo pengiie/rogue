@@ -1,18 +1,14 @@
 use device::DeviceResource;
 use renderer::Renderer;
-use shader::ShaderCompiler;
-
-use crate::resource::ResourceBank;
-
 pub mod backend;
 pub mod camera;
 pub mod device;
 pub mod frame_graph;
 pub mod gpu_allocator;
-pub mod post_process_pass;
 pub mod renderer;
 pub mod shader;
 pub mod vulkan;
+pub mod passes;
 
 pub fn initialize_graphics_resources(app: &mut crate::app::App) {
     let mut device_ref_mut = app.get_resource_mut::<DeviceResource>();

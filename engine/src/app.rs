@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::mpsc::{channel, Receiver, Sender},
 };
 
 use winit::{
@@ -16,21 +16,18 @@ use crate::{
     graphics::renderer::Renderer,
     material::material_gpu::MaterialBankGpu,
     world::{
-        renderable::{region_map_gpu::RegionMapGpu, rt_pass::WorldRTPass},
+        renderable::rt_pass::WorldRTPass,
         world_entities::WorldEntities,
     },
 };
-use crate::{audio::Audio, world::renderable::entities_gpu::WorldEntitiesGpu};
+use crate::audio::Audio;
 use crate::{debug::debug_renderer::DebugRenderer, task::tasks::Tasks};
 use crate::{
     event::{EventReader, Events},
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
 };
 use crate::{game_loop, settings::Settings};
-use crate::{
-    graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource},
-    world::region_map::RegionMap,
-};
+use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
 use crate::{input::Input, world::world_streaming::WorldStreamingOptions};
 use crate::{
     resource::{Res, ResMut, Resource, ResourceBank},
@@ -44,6 +41,9 @@ use crate::{
     voxel::baker_gpu::VoxelBakerGpu,
     window::{time::Time, window::Window},
 };
+use crate::world::terrain::region_map::RegionMap;
+use crate::world::terrain::region_map_gpu::RegionMapGpu;
+use crate::world::world_entities_gpu::WorldEntitiesGpu;
 
 enum AppEvent {
     Init { device: DeviceResource },

@@ -331,7 +331,7 @@ impl EntityPropertiesShowFns {
             ui.checkbox(&mut rigid_body.locked_rotational_axes.z, "Z");
         });
         ui.label(format!(
-            "Velocity  X: {}, Y: {}, Z: {}",
+            "Velocity  X: {:.2}, Y: {:.2}, Z: {:.2}",
             rigid_body.velocity.x, rigid_body.velocity.y, rigid_body.velocity.z
         ));
     }

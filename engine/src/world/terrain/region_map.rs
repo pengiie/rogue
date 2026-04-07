@@ -12,21 +12,16 @@ use crate::{
     asset::asset::GameAssetPath, common::geometry::ray::RayDDA, resource::ResMut,
     voxel::voxel_registry::VoxelModelRegistry,
 };
-use crate::{
-    asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
-    world::region::WorldRegion,
-};
+use crate::asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets};
 use crate::{common::geometry::ray::Ray, consts};
 use crate::{
     common::morton,
     event::Events,
     voxel::{sft_compressed::VoxelModelSFTCompressed, voxel_registry::VoxelModelId},
-    world::region::WorldRegionNode,
 };
-use crate::{
-    voxel::voxel::VoxelModelTrace,
-    world::{region::RegionTree, region_asset::WorldRegionAsset},
-};
+use crate::voxel::voxel::VoxelModelTrace;
+use crate::world::terrain::region::{RegionTree, WorldRegion, WorldRegionNode};
+use crate::world::terrain::region_asset::WorldRegionAsset;
 
 #[derive(Clone, Debug)]
 pub struct RegionEvent {

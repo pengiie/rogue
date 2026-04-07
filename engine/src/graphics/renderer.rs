@@ -27,7 +27,7 @@ use crate::{
     debug::debug_renderer::DebugRenderer,
     graphics::backend::ResourceId,
     settings::{GraphicsSettings, Settings},
-    world::{renderable::entities_gpu::WorldEntitiesGpu, sky::Sky},
+    world::sky::Sky,
 };
 use crate::{
     entity::{self, ecs_world::ECSWorld},
@@ -38,13 +38,13 @@ use crate::{
     graphics::frame_graph::IntoFrameGraphResource,
     window::{time::Time, window::Window},
 };
-use crate::{
-    material::material_gpu::MaterialBankGpu, world::renderable::region_map_gpu::RegionMapGpu,
-};
+use crate::material::material_gpu::MaterialBankGpu;
 use crate::{
     resource::{Res, ResMut},
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
 };
+use crate::world::terrain::region_map_gpu::RegionMapGpu;
+use crate::world::world_entities_gpu::WorldEntitiesGpu;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Antialiasing {

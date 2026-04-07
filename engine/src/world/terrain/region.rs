@@ -6,7 +6,7 @@ use crate::common::geometry::ray::{Ray, RayAABBHitInfo};
 use crate::common::morton;
 use crate::consts;
 use crate::voxel::voxel_registry::{VoxelModelId, VoxelModelRegistry};
-use crate::world::region_map::{ChunkLOD, RegionPos, TerrainRaycastHit};
+use crate::world::terrain::region_map::{ChunkLOD, RegionPos, TerrainRaycastHit};
 use nalgebra::Vector3;
 
 pub struct WorldRegion {

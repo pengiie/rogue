@@ -13,13 +13,10 @@ use crate::physics::{
     collider_component::EntityColliders,
     transform::Transform,
 };
-use crate::world::region_map::RegionMap;
-use crate::{
-    common::{
-        dyn_vec::{DynVecCloneable, TypeInfoCloneable},
-        vtable,
-    },
-    world::region_map::RegionPos,
+use crate::world::terrain::region_map::RegionPos;
+use crate::common::{
+    dyn_vec::{DynVecCloneable, TypeInfoCloneable},
+    vtable,
 };
 use nalgebra::Vector3;
 

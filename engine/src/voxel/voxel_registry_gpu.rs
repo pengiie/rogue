@@ -17,7 +17,7 @@ use crate::voxel::{
     voxel::VoxelModelGpuImplMethods, voxel_allocator::VoxelDataAllocator,
     voxel_registry::VoxelModelId,
 };
-use crate::world::region_map::ChunkId;
+use crate::world::terrain::region_map::ChunkId;
 
 struct VoxelModelGpuInfo {
     gpu_model: Box<dyn VoxelModelGpuImplMethods>,
