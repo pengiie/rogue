@@ -1,0 +1,55 @@
+use std::env;
+
+fn main() {
+    let assets_path = format!(
+        "{}/../assets",
+        env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap()
+    );
+    let assets_out_path = format!(
+        "{}/../target/{}/assets",
+        env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap(),
+        env::var_os("PROFILE").unwrap().to_str().unwrap(),
+    );
+    let project_path = format!(
+        "{}/../project_data",
+        env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap()
+    );
+    let project_out_path = format!(
+        "{}/../target/{}/project_data",
+        env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap(),
+        env::var_os("PROFILE").unwrap().to_str().unwrap(),
+    );
+
+    if let Err(err) = std::fs::metadata(&assets_path) {
+        panic!("Error with finding src asset path {}: {}", assets_path, err);
+    }
+
+    if std::fs::symlink_metadata(assets_out_path.clone()).is_err() {
+        if cfg!(unix) {
+            std::os::unix::fs::symlink(assets_path, assets_out_path)
+                .expect("Our previous check if the symlink already exists failed somehow.");
+        } else if cfg!(windows) {
+            println!(
+                "warning=TODO: Copy asset dir on windows and println changes on asset dir. Print stamp files to the out dir (if those files persist between builds), to prevent copying every single asset."
+            );
+        } else {
+            println!("warning=Can't symlink assets dir.");
+        }
+    }
+
+    if let Err(err) = std::fs::metadata(&project_path) {
+        panic!(
+            "Error with finding src project path {}: {}",
+            project_path, err
+        );
+    }
+
+    if std::fs::symlink_metadata(project_out_path.clone()).is_err() {
+        if cfg!(unix) {
+            std::os::unix::fs::symlink(project_path, project_out_path)
+                .expect("Our previous check if the symlink already exists failed somehow.");
+        } else {
+            println!("warning=Can't symlink project dir.");
+        }
+    }
+}

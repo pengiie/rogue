@@ -203,7 +203,6 @@ impl EditorVoxelEditing {
                     }
                     EditorVoxelEditingHistoryItem::TerrainEdit { saved_chunk_states } => {
                         for (chunk_id, saved_model_state) in saved_chunk_states {
-                            log::info!("restoring chunk {:?}", chunk_id);
                             let region_pos = chunk_id.chunk_pos.get_region_pos();
                             if let Some(region) = region_map.get_region_mut(&region_pos) {
                                 if let Some(saved_model_state) = saved_model_state {

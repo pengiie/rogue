@@ -21,152 +21,6 @@
       {
         "components": [
           {
-            "name": "Colliders",
-            "data": [
-              {
-                "name": "CapsuleCollider",
-                "data": {
-                  "center": [
-                    0.0,
-                    0.65,
-                    0.0
-                  ],
-                  "orientation": [
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "radius": 0.25,
-                  "half_height": 0.39999938
-                }
-              }
-            ]
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6",
-              "name": "player"
-            }
-          },
-          {
-            "name": "PlayerController",
-            "data": {
-              "idle_animation": {
-                "asset_path": "characters::player::idle::ranim"
-              }
-            }
-          },
-          {
-            "name": "EntityChildren",
-            "data": {}
-          },
-          {
-            "name": "RigidBody",
-            "data": {
-              "rigid_body_type": "Kinematic",
-              "mass": 1.0,
-              "restitution": 0.5,
-              "friction": 0.7,
-              "locked_rotational_axes": [
-                false,
-                false,
-                false
-              ],
-              "interpolation": "Interpolate"
-            }
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                1.4325128,
-                1.0,
-                0.8348545
-              ],
-              "rotation": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "scale": [
-                0.25,
-                0.25,
-                0.25
-              ]
-            }
-          },
-          {
-            "name": "Animator",
-            "data": {
-              "animations": [
-                {
-                  "asset_path": "characters::player::idle::ranim"
-                },
-                {
-                  "asset_path": "characters::player::walk::ranim"
-                }
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
-            "name": "EntityParent",
-            "data": {
-              "uuid": "37e402b2-5bfc-494c-b15c-a4f4b27b6293"
-            }
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d",
-              "name": "torso"
-            }
-          },
-          {
-            "name": "EntityChildren",
-            "data": {}
-          },
-          {
-            "name": "RenderableVoxelEntity",
-            "data": {
-              "model_asset_path": {
-                "asset_path": "models::player_torso::rvox"
-              },
-              "is_dynamic": true
-            }
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                -0.00021743774,
-                0.3377719,
-                0.0
-              ],
-              "rotation": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "scale": [
-                1.0,
-                1.0,
-                1.0
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
             "name": "EntityParent",
             "data": {
               "uuid": "67cf6043-72ee-47a9-be6a-0a36d20ae28e"
@@ -449,6 +303,101 @@
       {
         "components": [
           {
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "CapsuleCollider",
+                "data": {
+                  "center": [
+                    0.0,
+                    0.65,
+                    0.0
+                  ],
+                  "orientation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "radius": 0.25,
+                  "half_height": 0.39999938
+                }
+              }
+            ]
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6",
+              "name": "player"
+            }
+          },
+          {
+            "name": "PlayerController",
+            "data": {
+              "idle_animation": {
+                "asset_path": "characters::player::idle::ranim"
+              }
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "RigidBody",
+            "data": {
+              "rigid_body_type": "Kinematic",
+              "mass": 1.0,
+              "restitution": 0.5,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
+              ],
+              "interpolation": "Interpolate"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                1.4325128,
+                1.0,
+                0.8348545
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                0.25,
+                0.25,
+                0.25
+              ]
+            }
+          },
+          {
+            "name": "Animator",
+            "data": {
+              "animations": [
+                {
+                  "asset_path": "characters::player::idle::ranim"
+                },
+                {
+                  "asset_path": "characters::player::walk::ranim"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
             "name": "PlayerCameraController",
             "data": null
           },
@@ -495,22 +444,35 @@
           {
             "name": "EntityParent",
             "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+              "uuid": "37e402b2-5bfc-494c-b15c-a4f4b27b6293"
             }
           },
           {
             "name": "GameEntity",
             "data": {
-              "uuid": "3deae309-593e-40d1-8301-a5c8cc53245b",
-              "name": "camera_anchor"
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d",
+              "name": "torso"
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "models::player_torso::rvox"
+              },
+              "is_dynamic": true
             }
           },
           {
             "name": "Transform",
             "data": {
               "position": [
-                0.0,
-                3.542769,
+                -0.00021743774,
+                0.3377719,
                 0.0
               ],
               "rotation": [
@@ -520,9 +482,9 @@
                 1.0
               ],
               "scale": [
-                1.25,
-                1.25,
-                1.25
+                1.0,
+                1.0,
+                1.0
               ]
             }
           }
@@ -635,15 +597,15 @@
             "name": "Transform",
             "data": {
               "position": [
-                -1.1390219,
-                -0.44252038,
-                -0.8820982
+                2.1768818,
+                2.9075232,
+                -0.71475196
               ],
               "rotation": [
-                0.0046233702,
-                0.0014959709,
-                -0.3126127,
-                0.94986403
+                0.0,
+                0.0,
+                0.9221366,
+                0.38686842
               ],
               "scale": [
                 1.0,
@@ -691,6 +653,44 @@
                 1.0,
                 1.0,
                 1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "3deae309-593e-40d1-8301-a5c8cc53245b",
+              "name": "camera_anchor"
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.0,
+                3.542769,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.25,
+                1.25,
+                1.25
               ]
             }
           }

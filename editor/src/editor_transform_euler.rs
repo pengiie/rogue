@@ -37,7 +37,16 @@ impl EditorTransformEuler {
     }
 
     fn from_transform(transform: &Transform) -> Self {
-        let (roll, pitch, yaw) = transform.rotation.euler_angles();
+        let (mut pitch, mut yaw, mut roll) = transform.rotation.euler_angles();
+        if roll == -0.0 {
+            roll = 0.0;
+        }
+        if pitch == -0.0 {
+            pitch = 0.0;
+        }
+        if yaw == -0.0 {
+            yaw = 0.0;
+        }
         Self {
             euler: Vector3::new(pitch, yaw, roll),
             last_quat_value: transform.rotation,
@@ -46,18 +55,7 @@ impl EditorTransformEuler {
 
     fn try_update_from_transform(&mut self, transform: &Transform) {
         if transform.rotation != self.last_quat_value {
-            let (mut roll, mut pitch, mut yaw) = transform.rotation.euler_angles();
-            if roll == -0.0 {
-                roll = 0.0;
-            }
-            if pitch == -0.0 {
-                pitch = 0.0;
-            }
-            if yaw == -0.0 {
-                yaw = 0.0;
-            }
-            self.euler = Vector3::new(pitch, yaw, roll);
-            self.last_quat_value = transform.rotation;
+            *self = Self::from_transform(transform);
         }
     }
 

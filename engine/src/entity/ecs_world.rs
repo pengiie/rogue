@@ -805,9 +805,34 @@ impl ECSWorld {
     pub fn duplicate(
         &mut self,
         entity: Entity,
-        mut clone_ctx: GameComponentCloneContext<'_>,
+        new_parent_entity: Option<Entity>,
+        mut clone_ctx: &mut GameComponentCloneContext<'_>,
     ) -> Entity {
-        let new_entity_id = self.entities.next_free_handle();
+        // Filled in later.
+        let new_entity_id = self.entities.push(EntityInfo {
+            components: Vec::new(),
+            archetype_ptr: 0,
+            index: 0,
+        });
+
+        // If new_parent_entity is a parent entity that is also being duplicated, the components
+        // won't be ready yet, this is for existing entities not a part of the recursive
+        // duplication process.
+        if let Some(new_parent_entity) = new_parent_entity
+            && let Ok(mut new_parent_entity_children) =
+                self.get::<&mut EntityChildren>(new_parent_entity)
+        {
+            new_parent_entity_children.children.insert(new_entity_id);
+        }
+
+        // Duplicate any children and set their parent to
+        let mut new_children = Vec::new();
+        if let Ok(children) = self.get::<&EntityChildren>(entity).map(|c| c.clone()) {
+            for child in &children.children {
+                let new_child = self.duplicate(*child, Some(new_entity_id), clone_ctx);
+                new_children.push(new_child);
+            }
+        }
 
         let entity_info = self
             .entities
@@ -819,6 +844,14 @@ impl ECSWorld {
             .components
             .iter()
             .filter_map(|type_info| {
+                // If the new duplicated entity doesn't have a parent but the original did, ignore
+                // the parent component.
+                if type_info.type_id == std::any::TypeId::of::<EntityParent>()
+                    && new_parent_entity.is_none()
+                {
+                    return None;
+                }
+
                 self.game_components
                     .contains_key(&type_info.type_id)
                     .then_some(type_info.clone())
@@ -838,23 +871,38 @@ impl ECSWorld {
                 )
             })
             .collect::<Vec<_>>();
-        let cloned_data =
-            src_data
-                .iter()
-                .map(|(type_info, src_data)| {
-                    // Safety: We free the pointers after the data is copied to the new archetype.
-                    let clone_dst_layout = type_info.layout(1);
-                    let clone_dst = unsafe { std::alloc::alloc(clone_dst_layout) };
-                    assert!(!clone_dst.is_null());
+        let cloned_data = src_data
+            .iter()
+            .map(|(type_info, src_data)| {
+                // Safety: We free the pointers after the data is copied to the new archetype.
+                let clone_dst_layout = type_info.layout(1);
+                let clone_dst = unsafe { std::alloc::alloc(clone_dst_layout) };
+                assert!(!clone_dst.is_null());
 
-                    // Handle special case of duplicating by changing the name.
-                    if type_info.type_id == std::any::TypeId::of::<GameEntity>() {
+                // Handle special case of duplicating by changing the name.
+                match type_info.type_id {
+                    id if id == std::any::TypeId::of::<GameEntity>() => {
                         let game_entity_component = unsafe {
                             &*std::mem::transmute::<*const u8, *const GameEntity>(*src_data)
                         };
                         let new_game_entity = game_entity_component.duplicate();
                         unsafe { (clone_dst as *mut GameEntity).write(new_game_entity) };
-                    } else {
+                    }
+                    id if id == std::any::TypeId::of::<EntityChildren>() => {
+                        let new_entity_children = EntityChildren {
+                            children: new_children.iter().cloned().collect(),
+                        };
+                        unsafe { (clone_dst as *mut EntityChildren).write(new_entity_children) };
+                    }
+                    id if id == std::any::TypeId::of::<EntityParent>() => {
+                        assert!(
+                            new_parent_entity.is_some(),
+                            "Tried to duplicate an entity with a parent without providing a new parent entity."
+                        );
+                        let new_entity_parent = EntityParent::new(new_parent_entity.unwrap());
+                        unsafe { (clone_dst as *mut EntityParent).write(new_entity_parent) };
+                    }
+                    _ => {
                         let game_component_vtable = self
                             .game_components
                             .get(&type_info.type_id)
@@ -867,14 +915,15 @@ impl ECSWorld {
                             >((*src_data, game_component_vtable))
                         };
                         let game_component = unsafe { game_component_ptr.as_ref().unwrap() };
-                        game_component.clone_component(&mut clone_ctx, clone_dst);
+                        game_component.clone_component(clone_ctx, clone_dst);
                     }
+                }
 
-                    (clone_dst, clone_dst_layout)
-                })
-                .collect::<Vec<_>>();
+                (clone_dst, clone_dst_layout)
+            })
+            .collect::<Vec<_>>();
 
-        // Since cloneable components may differ than total components for some reason.
+        // Since cloneable components may differ than total components if there are non-GameComponents attached.
         let (dst_archetype_ptr, dst_archetype) =
             self.get_or_create_archetype(entity_game_components.clone());
         let archetype_index = unsafe {
@@ -889,11 +938,11 @@ impl ECSWorld {
             unsafe { std::alloc::dealloc(cloned_ptr, cloned_dst_layout) };
         }
 
-        self.entities.push(EntityInfo {
+        *self.entities.get_mut(new_entity_id).unwrap() = EntityInfo {
             components: entity_game_components,
             archetype_ptr: dst_archetype_ptr,
             index: archetype_index,
-        });
+        };
 
         return new_entity_id;
     }

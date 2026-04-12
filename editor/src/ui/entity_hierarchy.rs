@@ -101,98 +101,109 @@ impl EntityHierarchyUI {
         entity_id: Entity,
         entity_name: String,
     ) {
-        let dnd_source_id = egui::Id::new(format!(
-            "left_panel_{}_{}_entity_label_dnd_source",
-            entity_id.index(),
-            entity_id.generation()
-        ));
+        ui.push_id(format!("entity_{}", entity_id.index()), |ui| {
+            let dnd_source_id = egui::Id::new(format!(
+                "left_panel_{}_{}_entity_label_dnd_source",
+                entity_id.index(),
+                entity_id.generation()
+            ));
 
-        let label_hover_id = egui::Id::new(format!(
-            "left_panel_{}_{}_entity_label_hover",
-            entity_id.index(),
-            entity_id.generation()
-        ));
-        let label_click_id = egui::Id::new(format!(
-            "left_panel_{}_{}_entity_label_hover",
-            entity_id.index(),
-            entity_id.generation()
-        ));
-        let is_hovering = ui.data(|w| w.get_temp(label_hover_id).unwrap_or(false));
+            let label_hover_id = egui::Id::new(format!(
+                "left_panel_{}_{}_entity_label_hover",
+                entity_id.index(),
+                entity_id.generation()
+            ));
+            let label_click_id = egui::Id::new(format!(
+                "left_panel_{}_{}_entity_label_hover",
+                entity_id.index(),
+                entity_id.generation()
+            ));
+            let is_hovering = ui.data(|w| w.get_temp(label_hover_id).unwrap_or(false));
 
-        let mut text = egui::RichText::new(entity_name);
-        if is_hovering {
-            text = text.background_color(egui::Color32::from_white_alpha(2));
-        }
-        if ctx.session.selected_entity.is_some()
-            && ctx.session.selected_entity.unwrap() == entity_id
-        {
-            text = text.background_color(egui::Color32::from_white_alpha(3));
-        }
-
-        let label = ui
-            .dnd_drag_source::<EntityPayload, _>(dnd_source_id, entity_id, |ui| {
-                ui.add(egui::Label::new(text).truncate());
-            })
-            .response;
-        // dnd_drag_source makes it grabby hand icon and I dont like that.
-        if label.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
-        }
-
-        // Parent entity with drag and drop.
-        if let Some(new_child) = label.dnd_release_payload::<EntityPayload>()
-            && *new_child != entity_id
-        {
-            // Check that we don't create a parent cycle.
-            if !ctx.ecs_world.has_parent(entity_id, *new_child) {
-                ctx.events.push(EntityCommandEvent::SetParent {
-                    parent: Some(entity_id),
-                    child: *new_child,
-                    modify_transform: true,
-                });
+            let mut text = egui::RichText::new(entity_name);
+            if is_hovering {
+                text = text.background_color(egui::Color32::from_white_alpha(2));
             }
-        }
-
-        ui.data_mut(|w| w.insert_temp(label_hover_id, label.hovered()));
-        if label.hovered() {
-            ctx.session.hovered_entity = Some(entity_id);
-        }
-
-        if label.interact(egui::Sense::click()).clicked() {
-            ctx.session.selected_entity = Some(entity_id);
-            if !ctx.voxel_editing.enabled {
-                ctx.commands
-                    .push(EditorCommand::open_ui(EntityPropertiesPane::ID));
+            if ctx.session.selected_entity.is_some()
+                && ctx.session.selected_entity.unwrap() == entity_id
+            {
+                text = text.background_color(egui::Color32::from_white_alpha(3));
             }
-        }
 
-        label.context_menu(|ui| {
-            Self::add_menu(ui, Some(entity_id), ctx);
+            let label = ui
+                .dnd_drag_source::<EntityPayload, _>(dnd_source_id, entity_id, |ui| {
+                    ui.add(egui::Label::new(text).truncate());
+                })
+                .response;
+            // dnd_drag_source makes it grabby hand icon and I dont like that.
+            if label.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+            }
 
-            if ui.button("Copy").clicked() {
-                log::error!("TODOOOOOOOOOOOO Enityt copying is not implement yet!!!!!");
-                ui.close_menu();
+            // Parent entity with drag and drop.
+            if let Some(new_child) = label.dnd_release_payload::<EntityPayload>()
+                && *new_child != entity_id
+            {
+                // Check that we don't create a parent cycle.
+                if !ctx.ecs_world.has_parent(entity_id, *new_child) {
+                    ctx.events.push(EntityCommandEvent::SetParent {
+                        parent: Some(entity_id),
+                        child: *new_child,
+                        modify_transform: true,
+                    });
+                }
             }
-            if ui.button("Duplicate").clicked() {
-                ctx.session.selected_entity = Some(ctx.ecs_world.duplicate(
-                    entity_id,
-                    GameComponentCloneContext {
-                        voxel_registry: ctx.voxel_registry,
-                        collider_registry: &mut ctx.physics_world.colliders,
-                    },
-                ));
-                ui.close_menu();
+
+            ui.data_mut(|w| w.insert_temp(label_hover_id, label.hovered()));
+            if label.hovered() {
+                ctx.session.hovered_entity = Some(entity_id);
             }
-            if ui.button("Delete").clicked() {
-                // Ensure we do it as an event since we are iterating over
-                // the e
-                ctx.events.push(EntityCommandEvent::Despawn {
-                    entity: entity_id,
-                    despawn_children: true,
-                });
-                ctx.session.selected_entity = None;
-                ui.close_menu();
+
+            if label.interact(egui::Sense::click()).clicked() {
+                ctx.session.selected_entity = Some(entity_id);
+                if !ctx.voxel_editing.enabled {
+                    ctx.commands
+                        .push(EditorCommand::open_ui(EntityPropertiesPane::ID));
+                }
             }
+
+            label.context_menu(|ui| {
+                Self::add_menu(ui, Some(entity_id), ctx);
+
+                if ui.button("Save as prefab").clicked() {
+                    ui.close_menu();
+                }
+                if ui.button("Copy").clicked() {
+                    log::error!("TODOOOOOOOOOOOO Enityt copying is not implement yet!!!!!");
+                    ui.close_menu();
+                }
+                if ui.button("Duplicate").clicked() {
+                    let existing_parent = ctx
+                        .ecs_world
+                        .get::<&EntityParent>(entity_id)
+                        .map(|p| p.parent())
+                        .ok();
+                    ctx.session.selected_entity = Some(ctx.ecs_world.duplicate(
+                        entity_id,
+                        existing_parent,
+                        &mut GameComponentCloneContext {
+                            voxel_registry: ctx.voxel_registry,
+                            collider_registry: &mut ctx.physics_world.colliders,
+                        },
+                    ));
+                    ui.close_menu();
+                }
+                if ui.button("Delete").clicked() {
+                    // Ensure we do it as an event since we are iterating over
+                    // the e
+                    ctx.events.push(EntityCommandEvent::Despawn {
+                        entity: entity_id,
+                        despawn_children: true,
+                    });
+                    ctx.session.selected_entity = None;
+                    ui.close_menu();
+                }
+            });
         });
     }
 

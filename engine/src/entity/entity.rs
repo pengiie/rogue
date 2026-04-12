@@ -38,7 +38,6 @@ impl GameEntity {
 }
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[game_component(name = "RenderableVoxelEntity")]
 pub struct RenderableVoxelEntity {
     /// The asset path of the model, optional since the model
     /// may be procedurally generated.
@@ -125,6 +124,47 @@ impl RenderableVoxelEntity {
 
     pub fn model_asset_path(&self) -> Option<&GameAssetPath> {
         self.model_asset_path.as_ref()
+    }
+}
+
+impl GameComponent for RenderableVoxelEntity {
+    const NAME: &str = "RenderableVoxelEntity";
+
+    fn clone_component(
+        &self,
+        ctx: &mut super::component::GameComponentCloneContext<'_>,
+        dst_ptr: *mut u8,
+    ) {
+        let mut s = self.clone();
+        // Clone the voxel model if it is a dynamic model renderable.
+        if s.is_dynamic()
+            && let Some(model_id) = s.voxel_model_id()
+        {
+            s.voxel_model_id = ctx.voxel_registry.clone_model(model_id);
+        }
+
+        let dst_ptr = dst_ptr as *mut Self;
+        // Safety: dst_ptr should be allocated with the memory layout for this type.
+        unsafe { dst_ptr.write(s) };
+    }
+
+    fn serialize_component(
+        &self,
+        ctx: &GameComponentSerializeContext<'_>,
+        ser: &mut dyn erased_serde::Serializer,
+    ) -> erased_serde::Result<()> {
+        erased_serde::Serialize::erased_serialize(self, ser)
+    }
+
+    unsafe fn deserialize_component(
+        ctx: &mut GameComponentDeserializeContext<'_>,
+        de: &mut dyn erased_serde::Deserializer,
+        dst_ptr: *mut u8,
+    ) -> erased_serde::Result<()> {
+        let dst_ptr = dst_ptr as *mut Self;
+        // Safety: dst_ptr should be allocated with the memory layout for this type.
+        unsafe { dst_ptr.write(erased_serde::deserialize::<Self>(de)?) };
+        Ok(())
     }
 }
 

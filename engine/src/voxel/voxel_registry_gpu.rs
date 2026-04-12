@@ -212,7 +212,7 @@ impl VoxelModelRegistryGpu {
             if needs_info_allocation {
                 if let Some(old_ptr) = gpu_model_info.gpu_model_ptr {
                     // TODO: Deallocate old info.
-                    log::info!(
+                    log::debug!(
                         "New allocation requested with old ptr pointing at {}",
                         old_ptr
                     );

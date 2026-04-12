@@ -1,0 +1,104 @@
+[package]
+name = "rogue_runtime"
+build = "build.rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Macros
+rogue_macros = { path = "../macros" }
+
+# Game/Engine
+rogue_engine = { path = "../engine" }
+rogue_game = { path = "../game" }
+
+# # Windowing/graphics apis
+# ash = "0.38.0+1.3.281"
+# ash-window = "0.13.0"
+# raw-window-handle = "0.6.2"
+# shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs.git", rev = "60767e4" }
+# wgpu = { version = "22.1.0", features = ["webgpu", "vulkan-portability", "spirv"] }
+winit = "0.30.5"
+# 
+# # Egui
+# catppuccin-egui = { version = "5.5.0", default-features = false, features = ["egui31"] }
+egui = { version = "0.31.1", features = ["bytemuck"] }
+# egui_dock = "0.16"
+# egui_plot = "0.32.1"
+egui-winit = { version = "0.31.1", default-features = false, features = [] }
+epaint = { version = "0.31.1", features = ["bytemuck"] }
+# 
+# # Utility
+anyhow = { version = "1.0.89" }
+# bitflags = "2.6.0"
+bytemuck = { version = "1.16.1", features = ["derive"] }
+# cfg-if = "1"
+# downcast = "0.11.0"
+env_logger = "0.11.3"
+log = "0.4.21"
+# rand = "0.8.5"
+# regex = "1.11.0"
+# rkyv = "0.8.12"
+# ron = "0.8.1"
+# parking_lot = "0.12.1"
+# petgraph = "0.6.5"
+pollster = "0.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_with = { version = "3.18.0" }
+serde_json = "1.0.140"
+strum = "0.28.0"
+strum_macros = "0.28.0"
+wide = "1.1.1"
+rand = "0.10.0"
+erased-serde = { git = "https://github.com/pengiie/erased-serde", rev = "d8f3b5f" }
+# uuid = { version = "1.15.1", features = [ "v4", "bytemuck", "serde" ]}
+# 
+# # Math/physics
+nalgebra = { version = "0.33.0", features = ["serde-serialize", "bytemuck"] }
+# noise = "0.9.0"
+# 
+# # Scripting
+# mlua = { version = "0.10.5", features = ["lua54", "vendored"]}
+# 
+# # Audio
+# cpal = "0.15.3"
+# 
+# # Gamepad
+# gilrs = "0.11.0"
+# 
+# # IO related
+# png = "0.17.16"
+# zune-jpeg = "0.5.6"
+rfd = "0.17.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.10.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+console_log = "1.0"
+wasm-bindgen = "0.2.92"
+wasm-bindgen-futures = "0.4.42"
+web-sys = { version = "0.3.72", features = [
+  "Document",
+  "Window",
+  "Element",
+  "FileSystem",
+  "Performance",
+  "Request",
+  "RequestMode",
+  "Headers",
+  "AbortSignal",
+  "Response",
+  "RequestInit",
+]}
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev-noopt]
+inherits = "dev"
+opt-level = 0
+
+[profile.dev-noopt.package.nalgebra]
+opt-level = 2

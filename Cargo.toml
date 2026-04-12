@@ -2,7 +2,8 @@
 members = [ "engine", 
             "editor",
             "macros", 
-            "game" ]
+            "game",
+            "runtime"]
 resolver = "3"
 
 [profile.dev]

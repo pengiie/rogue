@@ -3277,6 +3277,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "rogue_runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "console_error_panic_hook",
+ "console_log",
+ "egui",
+ "egui-winit",
+ "env_logger",
+ "epaint",
+ "erased-serde",
+ "log",
+ "nalgebra",
+ "pollster 0.4.0",
+ "rand 0.10.0",
+ "rayon",
+ "rfd 0.17.2",
+ "rogue_engine",
+ "rogue_game",
+ "rogue_macros",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum",
+ "strum_macros",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wide 1.1.1",
+ "winit",
+]
+
+[[package]]
 name = "ron"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
