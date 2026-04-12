@@ -12,29 +12,25 @@ use crate::asset::{
     repr::TextAsset,
 };
 use crate::entity::{
-    component::{GameComponentDeserializeContext, GameComponentSerializeContext}, ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor}, EntityChildren,
-    EntityParent,
-    GameEntity,
+    EntityChildren, EntityParent, GameEntity,
+    component::{GameComponentDeserializeContext, GameComponentSerializeContext},
+    ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor},
 };
 use crate::graphics::camera::MainCamera;
 use crate::material::{Material, MaterialBank};
 use crate::physics::physics_world::PhysicsWorld;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
-use serde::{ser::SerializeStruct, Deserializer};
 use crate::world::terrain::region_map::RegionMap;
+use serde::{Deserializer, ser::SerializeStruct};
 
 #[derive(Clone)]
 pub struct ProjectSettings {
-    pub terrain_asset_path: Option<PathBuf>,
     pub game_camera: Option<Entity>,
 }
 
 impl ProjectSettings {
     pub fn new_empty() -> Self {
-        Self {
-            terrain_asset_path: None,
-            game_camera: None,
-        }
+        Self { game_camera: None }
     }
 
     pub fn as_serializable(&self, ecs_world: &ECSWorld) -> ProjectSettingsSerializable {
@@ -42,7 +38,6 @@ impl ProjectSettings {
             .game_camera
             .map(|e| ecs_world.get::<&GameEntity>(e).unwrap().uuid.clone());
         ProjectSettingsSerializable {
-            terrain_asset_path: self.terrain_asset_path.clone(),
             game_camera: game_camera_uuid,
         }
     }
@@ -50,7 +45,6 @@ impl ProjectSettings {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ProjectSettingsSerializable {
-    pub terrain_asset_path: Option<PathBuf>,
     pub game_camera: Option<Uuid>,
 }
 
@@ -108,7 +102,6 @@ impl ProjectAsset {
 
     pub fn serialize(context: ProjectSerializeContext<'_>) -> anyhow::Result<TextAsset> {
         let project_settings = ProjectSettings {
-            terrain_asset_path: context.region_map.regions_data_path.clone(),
             game_camera: context.game_camera,
         };
 
@@ -254,10 +247,7 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
             .transpose()?
             .map(|e| *e);
 
-        let project_settings = ProjectSettings {
-            terrain_asset_path: project_settings_ser.terrain_asset_path,
-            game_camera,
-        };
+        let project_settings = ProjectSettings { game_camera };
 
         Ok(ProjectAsset {
             project_dir: Some(self.project_dir),

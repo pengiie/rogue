@@ -31,8 +31,10 @@ use rogue_engine::{
 };
 use rogue_macros::Resource;
 use wide::CmpGt;
+use rogue_engine::world::terrain::chunk_lod::ChunkLOD;
+use rogue_engine::world::terrain::chunk_pos::ChunkPos;
 use rogue_engine::world::terrain::region::RegionTree;
-use rogue_engine::world::terrain::region_map::{ChunkId, ChunkLOD, ChunkPos, RegionMap};
+use rogue_engine::world::terrain::region_map::{ChunkId, RegionMap};
 
 struct GeneratorMaterials;
 

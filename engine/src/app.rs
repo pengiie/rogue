@@ -1,12 +1,17 @@
 use std::{
     collections::HashMap,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel},
 };
 
 use winit::{
     application::ApplicationHandler, event::WindowEvent as WinitWindowEvent, event_loop::EventLoop,
 };
 
+use crate::audio::Audio;
+use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
+use crate::world::terrain::region_map::RegionMap;
+use crate::world::terrain::region_map_gpu::RegionMapGpu;
+use crate::world::world_entities_gpu::WorldEntitiesGpu;
 use crate::{
     animation::animation_bank::AnimationBank,
     asset::{
@@ -15,19 +20,14 @@ use crate::{
     },
     graphics::renderer::Renderer,
     material::material_gpu::MaterialBankGpu,
-    world::{
-        renderable::rt_pass::WorldRTPass,
-        world_entities::WorldEntities,
-    },
+    world::{renderable::rt_pass::WorldRTPass, world_entities::WorldEntities},
 };
-use crate::audio::Audio;
 use crate::{debug::debug_renderer::DebugRenderer, task::tasks::Tasks};
 use crate::{
     event::{EventReader, Events},
     voxel::voxel_registry_gpu::VoxelModelRegistryGpu,
 };
 use crate::{game_loop, settings::Settings};
-use crate::graphics::{backend::GraphicsBackendEvent, camera::MainCamera, device::DeviceResource};
 use crate::{input::Input, world::world_streaming::WorldStreamingOptions};
 use crate::{
     resource::{Res, ResMut, Resource, ResourceBank},
@@ -41,9 +41,6 @@ use crate::{
     voxel::baker_gpu::VoxelBakerGpu,
     window::{time::Time, window::Window},
 };
-use crate::world::terrain::region_map::RegionMap;
-use crate::world::terrain::region_map_gpu::RegionMapGpu;
-use crate::world::world_entities_gpu::WorldEntitiesGpu;
 
 enum AppEvent {
     Init { device: DeviceResource },
@@ -137,7 +134,7 @@ impl App {
         app.insert_resource(project.physics_world);
         app.insert_resource(project.material_bank);
         app.insert_resource(Assets::new(project.project_dir));
-        app.insert_resource(RegionMap::new(None));
+        app.insert_resource(RegionMap::new());
 
         app
     }

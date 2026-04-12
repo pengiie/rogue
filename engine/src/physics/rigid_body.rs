@@ -200,6 +200,10 @@ impl RigidBody {
         }
     }
 
+    pub fn position(&self) -> Vector3<f32> {
+        self.position
+    }
+
     pub fn kinetic_energy(&self) -> f32 {
         0.5 * self.mass() * self.velocity.component_mul(&self.velocity()).norm()
     }
@@ -289,6 +293,13 @@ impl RigidBody {
             &self.locked_rotational_axes,
             |v, locked| if locked { 0.0 } else { v },
         );
+    }
+
+    pub fn set_position(&mut self, position: Vector3<f32>) {
+        if self.is_static() {
+            return;
+        }
+        self.position = position;
     }
 
     pub fn apply_force(&mut self, force_type: ForceType, force: Vector3<f32>) {

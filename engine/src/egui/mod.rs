@@ -2,6 +2,7 @@ mod egui;
 pub use egui::*;
 
 pub mod egui_gpu;
+pub mod egui_util;
 
 pub mod util {
     use nalgebra::{UnitQuaternion, Vector3};

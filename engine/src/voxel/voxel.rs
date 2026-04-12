@@ -14,14 +14,6 @@ use super::{
     voxel_registry::VoxelModelId,
     voxel_transform::VoxelModelTransform,
 };
-use crate::common::geometry::ray::Ray;
-use crate::common::{color::ColorSrgba, geometry::aabb::AABB};
-use crate::graphics::{
-    backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId},
-    device::{DeviceResource, GfxDevice},
-    gpu_allocator::GpuBufferAllocator,
-};
-use crate::material::MaterialId;
 use crate::physics::transform::Transform;
 use crate::physics::voxel_collider::{VoxelModelCollider, VoxelModelColliderData};
 use crate::{
@@ -31,25 +23,183 @@ use crate::{
     },
     voxel::rvox_asset::RVOXAsset,
 };
+use crate::{common::geometry::ray::Ray, consts};
+use crate::{
+    common::{color::ColorSrgba, geometry::aabb::AABB},
+    voxel::voxel_registry::VoxelModelRegistry,
+};
+use crate::{
+    graphics::{
+        backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId},
+        device::{DeviceResource, GfxDevice},
+        gpu_allocator::GpuBufferAllocator,
+    },
+    world::terrain::{chunk_pos::ChunkPos, region_map::RegionMap},
+};
+use crate::{
+    material::MaterialId,
+    world::terrain::{chunk_lod::ChunkLOD, region_map::ChunkId},
+};
 
-pub struct VoxelModelEditMaskModel<'a> {
-    pub model: &'a dyn VoxelModelImplMethods,
-    /// Where the mask is relative to this models min corner.
-    /// Basically -offset is to the current voxel position applied when sampling voxels from the mask model.
+pub struct VoxelModelEditMaskSource<'a> {
+    pub source: &'a dyn VoxelModelEditMaskSourceMethods,
+    /// Where the mask is relative to this sources min corner.
+    /// Basically -offset is to the current voxel position applied when sampling voxels from the mask source.
     pub offset: Vector3<u32>,
 }
+
+impl VoxelModelEditMaskSource<'_> {}
 
 pub struct VoxelModelEditMask<'a> {
     pub layers: Vec<VoxelModelEditMaskLayer>,
     /// None if the model uses itself as the mask.
-    pub mask_model: Option<VoxelModelEditMaskModel<'a>>,
+    pub mask_source: Option<VoxelModelEditMaskSource<'a>>,
+}
+
+pub trait VoxelModelEditMaskSourceMethods {
+    fn get_voxel(&self, voxel_pos: Vector3<i32>) -> Option<VoxelMaterialData>;
+}
+
+pub struct VoxelModelEditMaskModelSource<'a> {
+    pub model: &'a dyn VoxelModelImplMethods,
+}
+
+impl VoxelModelEditMaskSourceMethods for VoxelModelEditMaskModelSource<'_> {
+    fn get_voxel(&self, voxel_pos: Vector3<i32>) -> Option<VoxelMaterialData> {
+        if !self.model.in_bounds(voxel_pos) {
+            return None;
+        }
+        self.model.get_voxel(voxel_pos.map(|x| x as u32))
+    }
+}
+
+pub struct VoxelModelEditMaskTerrainSource<'a> {
+    chunks: Vec<Option<&'a dyn VoxelModelImplMethods>>,
+    chunk_count: Vector3<u32>,
+    chunk_min: Vector3<i32>,
+}
+
+impl<'a> VoxelModelEditMaskTerrainSource<'a> {
+    pub fn new(chunk_count: Vector3<u32>, chunk_min: Vector3<i32>) -> Self {
+        let volume = chunk_count.x as usize * chunk_count.y as usize * chunk_count.z as usize;
+        Self {
+            chunks: vec![None; volume],
+            chunk_count,
+            chunk_min,
+        }
+    }
+
+    pub fn from_voxel_min_max(
+        world_voxel_min: Vector3<i32>,
+        world_voxel_max: Vector3<i32>,
+    ) -> Self {
+        let chunk_min =
+            world_voxel_min.map(|x| x.div_euclid(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32));
+        let chunk_max =
+            world_voxel_max.map(|x| x.div_euclid(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32));
+        let chunk_count = (chunk_max - chunk_min + Vector3::new(1, 1, 1)).map(|x| x as u32);
+        Self::new(chunk_count, chunk_min)
+    }
+
+    pub fn chunk_min(&self) -> ChunkPos {
+        ChunkPos::new(self.chunk_min)
+    }
+
+    pub fn populate_from_registry(
+        &mut self,
+        voxel_registry: &'a mut VoxelModelRegistry,
+        region_map: &RegionMap,
+        editing_model: VoxelModelId,
+    ) -> &'a mut dyn VoxelModelImplMethods {
+        let mut required_ids = Vec::new();
+        let mut id_to_chunk_pos = Vec::new();
+        for x in 0..self.chunk_count.x {
+            for y in 0..self.chunk_count.y {
+                for z in 0..self.chunk_count.z {
+                    let chunk_pos = Vector3::new(x, y, z);
+                    let world_chunk_pos =
+                        ChunkPos::new(self.chunk_min + chunk_pos.map(|x| x as i32));
+                    let region_pos = world_chunk_pos.get_region_pos();
+
+                    let Some(chunk_model_id) =
+                        region_map.get_region(&region_pos).and_then(|region| {
+                            region.get_chunk_model(ChunkId {
+                                chunk_pos: world_chunk_pos,
+                                chunk_lod: ChunkLOD::FULL_RES_LOD,
+                            })
+                        })
+                    else {
+                        continue;
+                    };
+                    required_ids.push(chunk_model_id);
+                    id_to_chunk_pos.push(chunk_pos);
+                }
+            }
+        }
+        required_ids.push(editing_model);
+
+        let models = voxel_registry.get_dyn_model_mut_disjoint_vec(required_ids);
+        let models_len = models.len();
+        let mut editing_model_ref = None;
+        for (i, model) in models.into_iter().enumerate() {
+            if i == models_len - 1 {
+                editing_model_ref = Some(model);
+                break;
+            }
+
+            let chunk_pos = id_to_chunk_pos[i];
+            self.set_chunk(chunk_pos, model);
+        }
+
+        return editing_model_ref.unwrap();
+    }
+
+    fn get_index(&self, chunk_pos: Vector3<u32>) -> usize {
+        (chunk_pos.x
+            + chunk_pos.y * self.chunk_count.x
+            + chunk_pos.z * self.chunk_count.y * self.chunk_count.x) as usize
+    }
+
+    pub fn set_chunk(&mut self, chunk_pos: Vector3<u32>, chunk: &'a dyn VoxelModelImplMethods) {
+        let index = self.get_index(chunk_pos);
+        self.chunks[index] = Some(chunk);
+    }
+
+    pub fn chunk_volume(&self) -> usize {
+        self.chunk_count.x as usize * self.chunk_count.y as usize * self.chunk_count.z as usize
+    }
+
+    pub fn in_bounds(&self, voxel_pos: Vector3<i32>) -> bool {
+        return voxel_pos.x >= 0
+            && voxel_pos.y >= 0
+            && voxel_pos.z >= 0
+            && (voxel_pos.x as u32)
+                < self.chunk_count.x * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH
+            && (voxel_pos.y as u32)
+                < self.chunk_count.y * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH
+            && (voxel_pos.z as u32)
+                < self.chunk_count.z * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH;
+    }
+}
+
+impl VoxelModelEditMaskSourceMethods for VoxelModelEditMaskTerrainSource<'_> {
+    fn get_voxel(&self, voxel_pos: Vector3<i32>) -> Option<VoxelMaterialData> {
+        if !self.in_bounds(voxel_pos) {
+            return None;
+        }
+        let voxel_pos = voxel_pos.map(|x| x as u32);
+        let chunk_pos = voxel_pos.map(|x| x / consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
+        let local_voxel_pos = voxel_pos.map(|x| x % consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH);
+        let chunk_index = self.get_index(chunk_pos);
+        return self.chunks[chunk_index].and_then(|chunk| chunk.get_voxel(local_voxel_pos));
+    }
 }
 
 impl VoxelModelEditMask<'_> {
     pub fn new() -> Self {
         Self {
             layers: Vec::new(),
-            mask_model: None,
+            mask_source: None,
         }
     }
 }
@@ -108,6 +258,7 @@ pub struct VoxelModelEdit<'a> {
     pub operator: VoxelModelEditOperator,
 }
 
+#[derive(Clone)]
 pub enum VoxelModelEditOperator {
     Replace(Option<VoxelMaterialData>),
 }

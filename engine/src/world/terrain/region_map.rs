@@ -8,20 +8,31 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use crate::world::terrain::region::{RegionTree, WorldRegion, WorldRegionNode};
+use crate::world::terrain::region_asset::WorldRegionAsset;
+use crate::world::terrain::region_pos::RegionPos;
 use crate::{
-    asset::asset::GameAssetPath, common::geometry::ray::RayDDA, resource::ResMut,
-    voxel::voxel_registry::VoxelModelRegistry,
+    asset::asset::GameAssetPath,
+    common::geometry::ray::RayDDA,
+    resource::ResMut,
+    voxel::{voxel::VoxelModelEditMask, voxel_registry::VoxelModelRegistry},
 };
-use crate::asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets};
+use crate::{
+    asset::asset::{AssetHandle, AssetPath, AssetStatus, Assets},
+    voxel::voxel::VoxelModelEditOperator,
+};
 use crate::{common::geometry::ray::Ray, consts};
 use crate::{
     common::morton,
     event::Events,
     voxel::{sft_compressed::VoxelModelSFTCompressed, voxel_registry::VoxelModelId},
 };
-use crate::voxel::voxel::VoxelModelTrace;
-use crate::world::terrain::region::{RegionTree, WorldRegion, WorldRegionNode};
-use crate::world::terrain::region_asset::WorldRegionAsset;
+use crate::{
+    event::EventReader,
+    voxel::voxel::{VoxelModelEditMaskLayer, VoxelModelTrace},
+};
+use crate::{voxel::attachment::Attachment, world::terrain::chunk_pos::ChunkPos};
+use crate::{voxel::voxel::VoxelModelEdit, world::terrain::chunk_lod::ChunkLOD};
 
 #[derive(Clone, Debug)]
 pub struct RegionEvent {
@@ -49,20 +60,77 @@ pub enum ChunkEventType {
     Updated,
 }
 
-//pub struct VoxelTerrainEdit {
-//    /// In world space voxel coordinates.
-//    pub min: Vector3<i32>,
-//    pub max: Vector3<i32>,
-//    pub data: VoxelEditData,
-//}
-//
-//pub struct VoxelRegionEdit {
-//    /// In region-space voxel coordinates with the origin being
-//    /// the regions minimum point.
-//    pub min: Vector3<i32>,
-//    pub max: Vector3<i32>,
-//    pub data: VoxelEditData,
-//}
+#[derive(Clone, Debug)]
+pub enum RegionMapCommandEvent {
+    SetTerrainAssetPath { asset_path: GameAssetPath },
+}
+
+pub struct VoxelTerrainRegion {
+    /// In world space voxel coordinates.
+    pub min: Vector3<i32>,
+    pub max: Vector3<i32>,
+}
+
+impl VoxelTerrainRegion {
+    pub fn new_rect(min: Vector3<i32>, max: Vector3<i32>) -> Self {
+        Self { min, max }
+    }
+
+    pub fn get_affected_chunk_models(
+        &self,
+        region_map: &RegionMap,
+    ) -> Vec<(ChunkId, Option<VoxelModelId>)> {
+        let chunk_min = ChunkPos::from_world_voxel_pos(&self.min);
+        let chunk_max = ChunkPos::from_world_voxel_pos(&self.max);
+        let mut affected_chunks = Vec::new();
+        for chunk_x in chunk_min.x..=chunk_max.x {
+            for chunk_y in chunk_min.y..=chunk_max.y {
+                for chunk_z in chunk_min.z..=chunk_max.z {
+                    let chunk_pos = ChunkPos::new(Vector3::new(chunk_x, chunk_y, chunk_z));
+                    let chunk_id = ChunkId {
+                        chunk_pos,
+                        chunk_lod: ChunkLOD::FULL_RES_LOD,
+                    };
+                    let region_pos = chunk_pos.get_region_pos();
+                    let chunk_model = region_map
+                        .get_region(&region_pos)
+                        .and_then(|region| region.get_chunk_model(chunk_id));
+                    affected_chunks.push((chunk_id, chunk_model));
+                }
+            }
+        }
+        return affected_chunks;
+    }
+}
+
+pub struct VoxelTerrainEditMask {
+    pub layers: Vec<VoxelTerrainEditMaskLayer>,
+}
+
+/// Intentially different since masks may need conversion with an offset for the model mask.
+#[derive(Clone)]
+pub struct VoxelTerrainEditMaskLayer(pub VoxelModelEditMaskLayer);
+
+impl VoxelTerrainEditMaskLayer {
+    pub fn as_chunk_model_mask_layer(
+        &self,
+        chunk_world_voxel_min_pos: &Vector3<i32>,
+    ) -> VoxelModelEditMaskLayer {
+        let chunk_voxel_pos = chunk_world_voxel_min_pos;
+        let mut s = self.0.clone();
+        match &mut s {
+            VoxelModelEditMaskLayer::Presence => {}
+            VoxelModelEditMaskLayer::Sphere { center, diameter } => *center -= chunk_voxel_pos,
+        }
+        return s;
+    }
+}
+
+pub struct VoxelTerrainEdit {
+    pub region: VoxelTerrainRegion,
+    pub mask: VoxelTerrainEditMask,
+    pub operator: VoxelModelEditOperator,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ChunkId {
@@ -92,74 +160,6 @@ impl ChunkId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ChunkLOD(pub u32);
-
-impl ChunkLOD {
-    /// Max LOD in this case is the lowest level of detail, naming is a bit unintuitive but is
-    /// because full resolution starts at 0.
-    pub const MAX_LOD: u32 = consts::voxel::TERRAIN_REGION_TREE_HEIGHT;
-    /// AKA MIN lod;
-    pub const FULL_RES_LOD: ChunkLOD = ChunkLOD::new_full_res();
-
-    pub const fn new_full_res() -> Self {
-        Self::new(0)
-    }
-
-    pub fn is_full_res(&self) -> bool {
-        self.0 == 0
-    }
-
-    pub fn is_lowest_res(&self) -> bool {
-        self.0 == Self::MAX_LOD
-    }
-
-    pub fn from_tree_height(tree_height: u32) -> Self {
-        assert!(
-            tree_height <= consts::voxel::TERRAIN_REGION_TREE_HEIGHT,
-            "Cannot request an LOD which is higher (lower resolution) than the maximum region tree height, max is {} and requested {}",
-            Self::MAX_LOD,
-            tree_height
-        );
-        Self(Self::MAX_LOD - tree_height)
-    }
-
-    pub fn region_chunk_length(&self) -> u32 {
-        consts::voxel::TERRAIN_REGION_CHUNK_LENGTH >> (self.0 * 2)
-    }
-
-    pub fn leaf_chunk_length(&self) -> u32 {
-        1 << (self.0 * 2)
-    }
-
-    pub fn chunk_to_region_proportion(&self) -> f32 {
-        1.0 / (self.region_chunk_length() as f32)
-    }
-
-    pub fn as_tree_height(&self) -> u32 {
-        consts::voxel::TERRAIN_REGION_TREE_HEIGHT - self.0
-    }
-
-    /// LOD 0 is the highest detail level with each LOD fourthing
-    /// the voxel resolution since we use 64-trees.
-    pub const fn new(lod: u32) -> Self {
-        assert!(lod <= Self::MAX_LOD);
-        Self(lod)
-    }
-
-    pub fn new_lowest_res() -> Self {
-        Self::new(Self::MAX_LOD)
-    }
-
-    pub fn max_tree_height(&self) -> u32 {
-        (consts::voxel::TERRAIN_REGION_CHUNK_LENGTH.trailing_zeros() >> 1) - self.0
-    }
-
-    pub fn voxel_meter_size(&self) -> f32 {
-        consts::voxel::VOXEL_METER_LENGTH * (4u32.pow(self.0) as f32)
-    }
-}
-
 pub struct LoadingRegion {
     pub asset_handle: Option<AssetHandle>,
 }
@@ -167,241 +167,6 @@ pub struct LoadingRegion {
 impl LoadingRegion {
     pub fn new() -> Self {
         Self { asset_handle: None }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct RegionPos(Vector3<i32>);
-
-impl RegionPos {
-    pub fn new(x: i32, y: i32, z: i32) -> Self {
-        Self(Vector3::new(x, y, z))
-    }
-
-    pub fn new_vec(vec: Vector3<i32>) -> Self {
-        Self(vec)
-    }
-
-    pub fn zeros() -> Self {
-        Self(Vector3::zeros())
-    }
-
-    pub fn from_world_pos(world_pos: &Vector3<f32>) -> Self {
-        Self::new_vec(
-            (world_pos * (1.0 / consts::voxel::TERRAIN_REGION_METER_LENGTH))
-                .map(|x| x.floor() as i32),
-        )
-    }
-
-    pub fn into_chunk_pos(&self) -> ChunkPos {
-        ChunkPos::new(self.map(|x| x * consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as i32))
-    }
-}
-
-impl Deref for RegionPos {
-    type Target = Vector3<i32>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<RegionPos> for Vector3<i32> {
-    fn from(region_pos: RegionPos) -> Self {
-        region_pos.0
-    }
-}
-
-impl From<Vector3<i32>> for RegionPos {
-    fn from(vec: Vector3<i32>) -> Self {
-        RegionPos(vec)
-    }
-}
-
-impl Add<Vector3<i32>> for RegionPos {
-    type Output = RegionPos;
-
-    fn add(self, rhs: Vector3<i32>) -> Self::Output {
-        RegionPos(self.0 + rhs)
-    }
-}
-
-impl Add<RegionPos> for Vector3<i32> {
-    type Output = RegionPos;
-
-    fn add(self, rhs: RegionPos) -> Self::Output {
-        RegionPos(rhs.0 + self)
-    }
-}
-
-impl Add<RegionPos> for RegionPos {
-    type Output = RegionPos;
-
-    fn add(self, rhs: RegionPos) -> Self::Output {
-        RegionPos(self.0 + rhs.0)
-    }
-}
-
-impl Add<&RegionPos> for RegionPos {
-    type Output = RegionPos;
-
-    fn add(self, rhs: &RegionPos) -> Self::Output {
-        RegionPos(self.0 + rhs.0)
-    }
-}
-
-impl Add<RegionPos> for &RegionPos {
-    type Output = RegionPos;
-
-    fn add(self, rhs: RegionPos) -> Self::Output {
-        RegionPos(self.0 + rhs.0)
-    }
-}
-
-impl Mul<i32> for RegionPos {
-    type Output = RegionPos;
-
-    fn mul(self, rhs: i32) -> Self::Output {
-        RegionPos(self.0 * rhs)
-    }
-}
-
-impl Sub<RegionPos> for RegionPos {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: RegionPos) -> Self::Output {
-        self.0 - rhs.0
-    }
-}
-
-impl Sub<Vector3<i32>> for RegionPos {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: Vector3<i32>) -> Self::Output {
-        self.0 - rhs
-    }
-}
-
-impl Sub<RegionPos> for Vector3<i32> {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: RegionPos) -> Self::Output {
-        self - rhs.0
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ChunkPos(Vector3<i32>);
-
-impl ChunkPos {
-    pub fn new(vec: Vector3<i32>) -> Self {
-        Self(vec)
-    }
-
-    pub fn get_region_pos(&self) -> RegionPos {
-        RegionPos::new_vec(
-            self.map(|x| x.div_euclid(consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as i32)),
-        )
-    }
-
-    pub fn get_chunk_traversal(&self) -> u64 {
-        let local_pos = self
-            .0
-            .map(|x| (x.rem_euclid(consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as i32)) as u32);
-        let morton = morton::morton_encode(local_pos);
-        morton::morton_traversal_thc(morton, consts::voxel::TERRAIN_REGION_TREE_HEIGHT)
-    }
-}
-
-impl Deref for ChunkPos {
-    type Target = Vector3<i32>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<ChunkPos> for Vector3<i32> {
-    fn from(region_pos: ChunkPos) -> Self {
-        region_pos.0
-    }
-}
-
-impl From<Vector3<i32>> for ChunkPos {
-    fn from(vec: Vector3<i32>) -> Self {
-        ChunkPos(vec)
-    }
-}
-
-impl Add<Vector3<i32>> for ChunkPos {
-    type Output = ChunkPos;
-
-    fn add(self, rhs: Vector3<i32>) -> Self::Output {
-        ChunkPos(self.0 + rhs)
-    }
-}
-
-impl Add<ChunkPos> for Vector3<i32> {
-    type Output = ChunkPos;
-
-    fn add(self, rhs: ChunkPos) -> Self::Output {
-        ChunkPos(rhs.0 + self)
-    }
-}
-
-impl Add<ChunkPos> for ChunkPos {
-    type Output = ChunkPos;
-
-    fn add(self, rhs: ChunkPos) -> Self::Output {
-        ChunkPos(self.0 + rhs.0)
-    }
-}
-
-impl Add<&ChunkPos> for ChunkPos {
-    type Output = ChunkPos;
-
-    fn add(self, rhs: &ChunkPos) -> Self::Output {
-        ChunkPos(self.0 + rhs.0)
-    }
-}
-
-impl Add<ChunkPos> for &ChunkPos {
-    type Output = ChunkPos;
-
-    fn add(self, rhs: ChunkPos) -> Self::Output {
-        ChunkPos(self.0 + rhs.0)
-    }
-}
-
-impl Mul<i32> for ChunkPos {
-    type Output = ChunkPos;
-
-    fn mul(self, rhs: i32) -> Self::Output {
-        ChunkPos(self.0 * rhs)
-    }
-}
-
-impl Sub<ChunkPos> for ChunkPos {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: ChunkPos) -> Self::Output {
-        self.0 - rhs.0
-    }
-}
-
-impl Sub<Vector3<i32>> for ChunkPos {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: Vector3<i32>) -> Self::Output {
-        self.0 - rhs
-    }
-}
-
-impl Sub<ChunkPos> for Vector3<i32> {
-    type Output = Vector3<i32>;
-
-    fn sub(self, rhs: ChunkPos) -> Self::Output {
-        self - rhs.0
     }
 }
 
@@ -415,33 +180,36 @@ pub struct RegionMap {
     /// Only contains regions that have been attempted
     /// to load from disk.
     pub regions: HashMap<RegionPos, WorldRegion>,
-    //pub pending_region_edits: HashMap<RegionPos, VecDeque<VoxelRegionEdit>>,
+
     /// Regions that are in the process of loading, waiting on
     /// `Assets` to finish processing the region asset.
     pub loading_regions: HashMap<RegionPos, LoadingRegion>,
+
     pub region_events: Vec<RegionEvent>,
     pub chunk_events: Vec<ChunkEvent>,
+    pub command_event_render: EventReader<RegionMapCommandEvent>,
 
     pub to_set_chunk_sfts: HashMap<RegionPos, Vec<(ChunkId, Option<VoxelModelId>)>>,
-
-    /// The directory that contains all the region files for this RegionMap.
-    pub regions_data_path: Option<PathBuf>,
+    pub to_apply_edits: Vec<VoxelTerrainEdit>,
 
     pub used_materials: HashSet<GameAssetPath>,
+
+    pub save_dir: Option<GameAssetPath>,
 }
 
 impl RegionMap {
-    pub fn new(region_data_path: Option<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
             regions: HashMap::new(),
-            //pending_region_edits: HashMap::new(),
             loading_regions: HashMap::new(),
+
             region_events: Vec::new(),
             chunk_events: Vec::new(),
+            command_event_render: EventReader::new(),
 
             to_set_chunk_sfts: HashMap::new(),
-
-            regions_data_path: region_data_path,
+            to_apply_edits: Vec::new(),
+            save_dir: None,
             used_materials: HashSet::new(),
         }
     }
@@ -457,18 +225,19 @@ impl RegionMap {
         // is less than a region in most cases.
         let region_pos = ray
             .origin
-            .map(|x| x.div_euclid(consts::voxel::TERRAIN_REGION_METER_LENGTH));
+            .map(|x| x / consts::voxel::TERRAIN_REGION_METER_LENGTH);
         let mut curr_grid = region_pos.map(|x| x.floor() as i32);
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
         let next_point = curr_grid.cast::<f32>() + (unit_grid.cast::<f32>() * 0.5).add_scalar(0.5);
         let mut curr_t = ray
             .inv_dir
             .component_mul(&(next_point - region_pos))
-            .map(|x| if x.is_infinite() { 1000000.00 } else { x });
+            .map(|x| if x.is_infinite() { 10000.00 } else { x });
         let unit_t = ray
             .inv_dir
             .map(|x| if x.is_infinite() { 0.0 } else { x.abs() });
-        while (curr_t.min() * consts::voxel::TERRAIN_REGION_METER_LENGTH < max_t) {
+        let mut traversed_distance = 0.0;
+        while (traversed_distance * consts::voxel::TERRAIN_REGION_METER_LENGTH < max_t) {
             if let Some(region) = self.get_region(&RegionPos::new_vec(curr_grid)) {
                 if let Some(res) = region.raycast_region(voxel_registry, ray, max_t) {
                     return Some(res);
@@ -480,6 +249,7 @@ impl RegionMap {
             let mask = curr_t.map(|x| if x == min_t { 1 } else { 0 });
             curr_grid += mask.component_mul(&unit_grid);
             curr_t += mask.cast::<f32>().component_mul(&unit_t);
+            traversed_distance = min_t;
         }
 
         return None;
@@ -541,9 +311,7 @@ impl RegionMap {
     /// Enqueues the chunk to be set, will be applied before rendering.
     pub fn set_chunk(&mut self, chunk_id: ChunkId, sft_id: Option<VoxelModelId>) {
         let region_pos = chunk_id.chunk_pos.get_region_pos();
-        if !self.is_region_loaded(&region_pos) {
-            self.load_region(&region_pos);
-        }
+        self.ensure_region_loaded(&region_pos);
         self.to_set_chunk_sfts
             .entry(region_pos)
             .or_insert_with(|| Vec::new())
@@ -556,118 +324,11 @@ impl RegionMap {
         chunk_id: &ChunkId,
         sft_id: Option<VoxelModelId>,
     ) -> Option<VoxelModelId> {
-        let ChunkId {
-            chunk_pos,
-            chunk_lod,
-        } = chunk_id;
-        let region_pos = chunk_pos.get_region_pos();
-        let chunk_height = chunk_lod.as_tree_height();
-        let chunk_traversal = chunk_pos.get_chunk_traversal();
-
         let mut region = regions
-            .get_mut(&region_pos)
+            .get_mut(&chunk_id.chunk_pos.get_region_pos())
             .expect("Region should exist to set chunk.");
-        let mut node_idx = 0;
-        for i in 0..chunk_height {
-            let child_index = (chunk_traversal >> (i * 6)) & 0b111111;
-            let mut node_data = &mut region.tree.nodes[node_idx];
-            let child_bit = 1 << child_index;
-            if sft_id.is_some() {
-                // Ensure child bit is set and allocate child if it doesn't exist.
-                node_data.child_mask |= child_bit;
-                let child_ptr = if let Some(child_ptr) = node_data.child_ptr() {
-                    child_ptr
-                } else {
-                    let new_child_ptr = region.tree.nodes.len() as u32;
-                    region.tree.nodes[node_idx].child_ptr = new_child_ptr;
-                    for _ in 0..64 {
-                        region
-                            .tree
-                            .nodes
-                            .push(WorldRegionNode::new_empty(node_idx as u32));
-                    }
-                    new_child_ptr
-                };
-                node_idx = child_ptr as usize + child_index as usize;
-            } else {
-                if node_data.child_mask & child_bit != 0 {
-                    if i == chunk_height - 1 {
-                        node_data.child_mask &= !child_bit;
-                        let child_ptr = node_data
-                            .child_ptr()
-                            .expect("Child ptr should exist if child bit is set in the child mask.")
-                            as usize;
-                        let parent_node = node_idx;
-                        node_idx = child_ptr + child_index as usize;
-                        if region.tree.nodes[node_idx].has_model_ptr() {
-                            // TODO: Deallocate old model thing.
-                        }
-                        return None;
-                    }
-                } else {
-                    // Noop since node chunk is already empty.
-                    return None;
-                }
-            }
-        }
-
-        let node_data = &mut region.tree.nodes[node_idx];
-        let Some(sft_id) = sft_id else {
-            unreachable!("Deallocation should've happened in loop.");
-        };
-        if node_data.has_model_ptr() {
-            // TODO: Deallocate old pointer.
-        }
-        let new_model_ptr = region.model_handles.len() as u32;
-        region.model_handles.push(sft_id);
-        node_data.model_ptr = new_model_ptr;
-        region.active_leaves.insert(node_idx as u32);
-        return node_data
-            .model_ptr()
-            .map(|old_model_ptr| region.model_handles[old_model_ptr as usize]);
+        return region.set_chunk_model(chunk_id, sft_id);
     }
-
-    //pub fn apply_edit(&mut self, edit: VoxelTerrainEdit) {
-    //    todo!()
-    //    //let region_min = RegionMap::world_to_region_pos(&edit.min.map(|x| x as f31));
-    //    //let region_max = RegionMap::world_to_region_pos(&edit.max.map(|x| x as f32));
-    //    //for region_x in region_min.x..=region_max.x {
-    //    //    for region_y in region_min.y..=region_max.y {
-    //    //        for region_z in region_min.z..=region_max.z {
-    //    //            let region_pos = Vector3::new(region_x, region_y, region_z);
-    //    //            let region_voxel_min =
-    //    //                region_pos.map(|x| x * consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32);
-    //    //            let region_voxel_max = region_voxel_min
-    //    //                + Vector3::new(
-    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-    //    //                    consts::voxel::TERRAIN_REGION_VOXEL_LENGTH as i32 - 1,
-    //    //                );
-
-    //    //            // Calculate region-local bounds;
-    //    //            let edit_min = Vector3::new(
-    //    //                edit.min.x.max(region_voxel_min.x) - region_voxel_min.x,
-    //    //                edit.min.y.max(region_voxel_min.y) - region_voxel_min.y,
-    //    //                edit.min.z.max(region_voxel_min.z) - region_voxel_min.z,
-    //    //            );
-    //    //            let edit_max = Vector3::new(
-    //    //                edit.max.x.min(region_voxel_max.x) - region_voxel_min.x,
-    //    //                edit.max.y.min(region_voxel_max.y) - region_voxel_min.y,
-    //    //                edit.max.z.min(region_voxel_max.z) - region_voxel_min.z,
-    //    //            );
-    //    //            let region_edit = VoxelRegionEdit {
-    //    //                min: edit_min,
-    //    //                max: edit_max,
-    //    //                data: edit.data.clone(),
-    //    //            };
-    //    //            self.pending_region_edits
-    //    //                .entry(region_pos)
-    //    //                .or_insert_with(VecDeque::new)
-    //    //                .push_back(region_edit);
-    //    //        }
-    //    //    }
-    //    //}
-    //}
 
     pub fn is_region_loaded(&self, region_pos: &RegionPos) -> bool {
         self.regions.contains_key(region_pos)
@@ -695,12 +356,6 @@ impl RegionMap {
             }
             for (chunk_id, sft_id) in vec.drain(..) {
                 Self::set_chunk_unchecked(&mut region_map.regions, &chunk_id, sft_id);
-                //region_map.chunk_events.push(ChunkEvent {
-                //    region_pos: chunk_pos.get_region_pos(),
-                //    chunk_height: chunk_lod.as_tree_height(),
-                //    chunk_traversal: chunk_pos.get_chunk_traversal(),
-                //    event_type: ChunkEventType::Updated,
-                //});
                 region_map.chunk_events.push(ChunkEvent {
                     chunk_id,
                     event_type: if sft_id.is_some() {
@@ -800,7 +455,153 @@ impl RegionMap {
         }
     }
 
-    pub fn update_region_edits(mut region_map: ResMut<RegionMap>) {
-        todo!()
+    pub fn mark_chunk_updated(&mut self, chunk_id: &ChunkId) {
+        self.chunk_events.push(ChunkEvent {
+            chunk_id: *chunk_id,
+            event_type: ChunkEventType::Updated,
+        });
+    }
+
+    pub fn update_region_edits(
+        mut region_map: ResMut<RegionMap>,
+        mut voxel_registry: ResMut<VoxelModelRegistry>,
+    ) {
+        let region_map = &mut *region_map;
+        let mut finished_edit_indices = Vec::new();
+        for (edit_index, edit) in region_map.to_apply_edits.iter().enumerate() {
+            let region_min = RegionPos::from_world_voxel_pos(&edit.region.min);
+            let region_max = RegionPos::from_world_voxel_pos(&edit.region.max);
+            let mut missing_region = false;
+            for region_x in region_min.x..=region_max.x {
+                if missing_region {
+                    break;
+                }
+                for region_y in region_min.y..=region_max.y {
+                    if missing_region {
+                        break;
+                    }
+                    for region_z in region_min.z..=region_max.z {
+                        if missing_region {
+                            break;
+                        }
+                        let region_pos = RegionPos::new(region_x, region_y, region_z);
+                        let region = match region_map.regions.get_mut(&region_pos) {
+                            Some(region) => region,
+                            None => {
+                                missing_region = true;
+                                continue;
+                            }
+                        };
+                    }
+                }
+            }
+            if missing_region {
+                log::info!("Mising region");
+                // Put off edit for now since regions are loading.
+                continue;
+            }
+
+            finished_edit_indices.push(edit_index);
+            let chunk_min = ChunkPos::from_world_voxel_pos(&edit.region.min);
+            let chunk_max = ChunkPos::from_world_voxel_pos(&edit.region.max);
+            for chunk_x in chunk_min.x..=chunk_max.x {
+                for chunk_y in chunk_min.y..=chunk_max.y {
+                    for chunk_z in chunk_min.z..=chunk_max.z {
+                        let chunk_id = ChunkId {
+                            chunk_pos: ChunkPos::new(Vector3::new(chunk_x, chunk_y, chunk_z)),
+                            chunk_lod: ChunkLOD::FULL_RES_LOD,
+                        };
+                        let region_pos = chunk_id.chunk_pos.get_region_pos();
+                        let region = region_map
+                            .regions
+                            .get_mut(&region_pos)
+                            .expect("Region should be loaded.");
+                        let chunk_model_id = match region.get_chunk_model(chunk_id) {
+                            Some(model_id) => model_id,
+                            None => {
+                                let mut empty_chunk_model = VoxelModelSFTCompressed::new_empty(
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                );
+                                empty_chunk_model.initialize_attachment_buffers(&Attachment::BMAT);
+                                let voxel_model_id =
+                                    voxel_registry.register_voxel_model(empty_chunk_model, None);
+                                let res = region.set_chunk_model(&chunk_id, Some(voxel_model_id));
+                                assert!(
+                                    res.is_none(),
+                                    "WorldRegion::get_chunk_model returned None so there shouldn't be an existing model, chunk id {:?}",
+                                    chunk_id
+                                );
+                                region_map.region_events.push(RegionEvent {
+                                    region_pos,
+                                    event_type: RegionEventType::Updated,
+                                });
+                                voxel_model_id
+                            }
+                        };
+                        let chunk_model = voxel_registry.get_dyn_model_mut(chunk_model_id);
+                        let chunk_voxel_min = chunk_id.chunk_pos.get_min_world_voxel_pos();
+                        let chunk_voxel_max = chunk_voxel_min
+                            .add_scalar(consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32 - 1);
+                        let clamped_min =
+                            edit.region.min.zip_map(&chunk_voxel_min, |x, y| x.max(y));
+                        let clamped_max =
+                            edit.region.max.zip_map(&chunk_voxel_max, |x, y| x.min(y));
+                        let model_min = (clamped_min - chunk_voxel_min).map(|x| x as u32);
+                        let model_max = (clamped_max - chunk_voxel_min).map(|x| x as u32);
+                        assert!(
+                            model_min
+                                .zip_map(&model_max, |min, max| min <= max)
+                                .iter()
+                                .all(|x| *x),
+                            "Clamped max should be greater than clamped min."
+                        );
+                        let model_edit = VoxelModelEdit {
+                            region: crate::voxel::voxel::VoxelModelEditRegion::Rect {
+                                min: model_min,
+                                max: model_max,
+                            },
+                            mask: VoxelModelEditMask {
+                                layers: edit
+                                    .mask
+                                    .layers
+                                    .iter()
+                                    .map(|layer| layer.as_chunk_model_mask_layer(&chunk_voxel_min))
+                                    .collect::<Vec<_>>(),
+                                mask_source: None,
+                            },
+                            operator: edit.operator.clone(),
+                        };
+                        chunk_model.set_voxel_range_impl(&model_edit);
+                        region_map.chunk_events.push(ChunkEvent {
+                            chunk_id,
+                            event_type: ChunkEventType::Updated,
+                        });
+                    }
+                }
+            }
+        }
+
+        for edit_index in finished_edit_indices.into_iter().rev() {
+            region_map.to_apply_edits.swap_remove(edit_index);
+        }
+    }
+
+    pub fn ensure_region_loaded(&mut self, region_pos: &RegionPos) {
+        if !self.is_region_loaded(region_pos) {
+            self.load_region(region_pos);
+        }
+    }
+
+    pub fn apply_voxel_edit(&mut self, edit: VoxelTerrainEdit) {
+        let region_min = RegionPos::from_world_voxel_pos(&edit.region.min);
+        let region_max = RegionPos::from_world_voxel_pos(&edit.region.max);
+        for region_x in region_min.x..=region_max.x {
+            for region_y in region_min.y..=region_max.y {
+                for region_z in region_min.z..=region_max.z {
+                    self.ensure_region_loaded(&RegionPos::new(region_x, region_y, region_z));
+                }
+            }
+        }
+        self.to_apply_edits.push(edit);
     }
 }

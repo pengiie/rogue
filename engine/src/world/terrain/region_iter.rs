@@ -1,6 +1,6 @@
 use nalgebra::{Vector2, Vector3};
 
-use crate::world::terrain::region_map::RegionPos;
+use crate::world::terrain::region_pos::RegionPos;
 
 /// Iterator that starts from a center and expands outwards for regions specifically.
 pub struct RegionIter {

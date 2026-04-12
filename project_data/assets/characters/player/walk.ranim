@@ -3,6 +3,8 @@
     {
       "track_id": {
         "entity_traversal": [
+          "hips",
+          "torso",
           "foot_left"
         ],
         "component_name": "Transform",
@@ -86,6 +88,8 @@
     {
       "track_id": {
         "entity_traversal": [
+          "hips",
+          "torso",
           "foot_right"
         ],
         "component_name": "Transform",

@@ -426,7 +426,9 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
         let mut ray = in_ray.clone();
         // Early exit if the ray doesn't intersect the bounding box of this model.
         let Some(RayAABBHitInfo {
-            t_enter: model_t, ..
+            t_enter: model_t,
+            t_min,
+            ..
         }) = ray.intersect_aabb(aabb)
         else {
             return None;
@@ -449,8 +451,10 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
         let quarter_sl = self.side_length >> 2;
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
 
-        let mut last_mask = Vector3::zeros();
-        let mut curr_ray = Ray::new(dda_pos, ray.dir);
+        let mut last_mask = t_min.map(|x| if (x - model_t).abs() < 0.0001 { 1 } else { 0 });
+        let dir_scaling = aabb.side_length() / (self.side_length as f32 * consts::voxel::VOXEL_METER_LENGTH);
+        let norm_dir = ray.dir.component_div(&dir_scaling).normalize();
+        let mut curr_ray = Ray::new(dda_pos, norm_dir);
         let mut curr_node_index = 0;
         let mut curr_height = 0;
         let mut curr_local_grid = curr_ray
@@ -494,7 +498,7 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
 
                     let is_leaf = (curr_node.leaf_mask & (1 << child_index)) > 0;
                     if is_leaf {
-                        let t_scaling = (aabb.max - aabb.min) * (1.0 / sl as f32);
+                        let t_scaling = (aabb.max - aabb.min) / (sl as f32);
                         let world_pos_hit = aabb.min + curr_ray.origin.component_mul(&t_scaling);
                         let depth_t = in_ray.origin.metric_distance(&world_pos_hit);
                         let normal = last_mask.component_mul(&ray.dir.map(|x| -x.signum() as i32));
@@ -579,14 +583,10 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
                 for y in min.y..=max.y {
                     for z in min.z..=max.z {
                         let voxel_pos = Vector3::new(x, y, z);
-                        let prev_mat = if let Some(mask_model) = &edit.mask.mask_model {
+                        let prev_mat = if let Some(mask_source) = &edit.mask.mask_source {
                             let sample_pos =
-                                voxel_pos.cast::<i32>() - mask_model.offset.cast::<i32>();
-                            if mask_model.model.in_bounds(sample_pos) {
-                                mask_model.model.get_voxel(sample_pos.map(|x| x as u32))
-                            } else {
-                                None
-                            }
+                                voxel_pos.cast::<i32>() - mask_source.offset.cast::<i32>();
+                            mask_source.source.get_voxel(sample_pos)
                         } else {
                             self.get_voxel(voxel_pos)
                         };

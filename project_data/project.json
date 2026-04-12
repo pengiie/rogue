@@ -1,6 +1,5 @@
 {
   "project_settings": {
-    "terrain_asset_path": null,
     "game_camera": "ccc6052b-8be8-4b82-91db-43b438589a65"
   },
   "materials": [
@@ -22,16 +21,41 @@
       {
         "components": [
           {
-            "name": "EntityParent",
-            "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
-            }
+            "name": "Colliders",
+            "data": [
+              {
+                "name": "CapsuleCollider",
+                "data": {
+                  "center": [
+                    0.0,
+                    0.65,
+                    0.0
+                  ],
+                  "orientation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "radius": 0.25,
+                  "half_height": 0.39999938
+                }
+              }
+            ]
           },
           {
             "name": "GameEntity",
             "data": {
-              "uuid": "67cf6043-72ee-47a9-be6a-0a36d20ae28e",
-              "name": "foot_right"
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6",
+              "name": "player"
+            }
+          },
+          {
+            "name": "PlayerController",
+            "data": {
+              "idle_animation": {
+                "asset_path": "characters::player::idle::ranim"
+              }
             }
           },
           {
@@ -39,107 +63,51 @@
             "data": {}
           },
           {
-            "name": "Transform",
+            "name": "RigidBody",
             "data": {
-              "position": [
-                0.48897433,
-                1.1,
-                -0.05740027
+              "rigid_body_type": "Kinematic",
+              "mass": 1.0,
+              "restitution": 0.5,
+              "friction": 0.7,
+              "locked_rotational_axes": [
+                false,
+                false,
+                false
               ],
-              "rotation": [
-                0.055565406,
-                0.0,
-                0.0,
-                0.99845505
-              ],
-              "scale": [
-                4.0,
-                4.0,
-                4.0
-              ]
+              "interpolation": "Interpolate"
             }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
-            "name": "EntityParent",
-            "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
-            }
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "92166663-6bd8-450e-8e60-5f987b5e834b",
-              "name": "foot_left"
-            }
-          },
-          {
-            "name": "EntityChildren",
-            "data": {}
           },
           {
             "name": "Transform",
             "data": {
               "position": [
-                -0.40552652,
-                1.1,
-                -0.06001781
-              ],
-              "rotation": [
-                -0.055565406,
-                0.0,
-                0.0,
-                0.99845505
-              ],
-              "scale": [
-                4.0,
-                4.0,
-                4.0
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
-            "name": "EntityParent",
-            "data": {
-              "uuid": "2194faed-985f-4918-9cc9-50e991ae44dd"
-            }
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "0cb97bb0-a6b4-4081-98f1-f08b0f00dfeb",
-              "name": "sword"
-            }
-          },
-          {
-            "name": "EntityChildren",
-            "data": {}
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                0.06730288,
-                -1.0277946,
-                -0.00041478872
-              ],
-              "rotation": [
-                0.0048593134,
-                -0.000024460256,
-                0.000021263957,
-                0.9999847
-              ],
-              "scale": [
+                1.4325128,
                 1.0,
-                1.0,
+                0.8348545
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
                 1.0
+              ],
+              "scale": [
+                0.25,
+                0.25,
+                0.25
+              ]
+            }
+          },
+          {
+            "name": "Animator",
+            "data": {
+              "animations": [
+                {
+                  "asset_path": "characters::player::idle::ranim"
+                },
+                {
+                  "asset_path": "characters::player::walk::ranim"
+                }
               ]
             }
           }
@@ -150,21 +118,25 @@
           {
             "name": "EntityParent",
             "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+              "uuid": "37e402b2-5bfc-494c-b15c-a4f4b27b6293"
             }
           },
           {
             "name": "GameEntity",
             "data": {
-              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
-              "name": "head"
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d",
+              "name": "torso"
             }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
           },
           {
             "name": "RenderableVoxelEntity",
             "data": {
               "model_asset_path": {
-                "asset_path": "models::player_head::rvox"
+                "asset_path": "models::player_torso::rvox"
               },
               "is_dynamic": true
             }
@@ -173,8 +145,8 @@
             "name": "Transform",
             "data": {
               "position": [
-                0.0,
-                3.4578629,
+                -0.00021743774,
+                0.3377719,
                 0.0
               ],
               "rotation": [
@@ -184,9 +156,9 @@
                 1.0
               ],
               "scale": [
-                1.25,
-                1.25,
-                1.25
+                1.0,
+                1.0,
+                1.0
               ]
             }
           }
@@ -221,19 +193,19 @@
             "data": {
               "position": [
                 0.0,
-                -0.21802521,
-                0.0
+                -1.0,
+                0.085549995
               ],
               "rotation": [
                 0.0,
-                -6.067258e-12,
-                0.0,
+                -6.067208e-12,
+                2.46656e-18,
                 1.0
               ],
               "scale": [
-                0.25,
-                0.25,
-                0.25
+                1.0,
+                1.0,
+                1.0
               ]
             }
           }
@@ -268,8 +240,8 @@
             "data": {
               "position": [
                 0.0,
-                -0.22,
-                0.0
+                -1.0,
+                -0.07767436
               ],
               "rotation": [
                 0.0,
@@ -278,55 +250,8 @@
                 1.0
               ],
               "scale": [
-                0.25,
-                0.25,
-                0.25
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "components": [
-          {
-            "name": "EntityParent",
-            "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
-            }
-          },
-          {
-            "name": "GameEntity",
-            "data": {
-              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d",
-              "name": "torso"
-            }
-          },
-          {
-            "name": "RenderableVoxelEntity",
-            "data": {
-              "model_asset_path": {
-                "asset_path": "models::player_torso::rvox"
-              },
-              "is_dynamic": false
-            }
-          },
-          {
-            "name": "Transform",
-            "data": {
-              "position": [
-                -0.00021738361,
-                1.6706848,
-                9.436028e-7
-              ],
-              "rotation": [
-                0.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "scale": [
                 1.0,
-                1.5,
+                1.0,
                 1.0
               ]
             }
@@ -361,15 +286,15 @@
             "name": "Transform",
             "data": {
               "position": [
-                0.80078447,
-                3.1904385,
-                0.18984438
+                0.8011857,
+                3.189836,
+                0.0
               ],
               "rotation": [
+                -1.754961e-8,
+                -3.259629e-9,
                 0.0,
-                -6.067258e-12,
-                0.0,
-                1.0
+                0.99730736
               ],
               "scale": [
                 1.0,
@@ -385,7 +310,7 @@
           {
             "name": "EntityParent",
             "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
             }
           },
           {
@@ -408,20 +333,114 @@
             "name": "Transform",
             "data": {
               "position": [
-                0.36890215,
-                2.356636,
-                1.3462777
+                -1.14,
+                0.0,
+                0.0
               ],
               "rotation": [
-                0.24546584,
-                0.6697469,
-                0.24479572,
-                0.6566986
+                0.0,
+                0.0,
+                0.0,
+                1.0
               ],
               "scale": [
                 1.0,
                 1.0,
                 1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "2194faed-985f-4918-9cc9-50e991ae44dd",
+              "name": "hand_right"
+            }
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "models::player_hand::rvox"
+              },
+              "is_dynamic": true
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                1.1373523,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "4ed4b63b-6bef-4ee9-987c-668dd9bb7c25",
+              "name": "head"
+            }
+          },
+          {
+            "name": "RenderableVoxelEntity",
+            "data": {
+              "model_asset_path": {
+                "asset_path": "models::player_head::rvox"
+              },
+              "is_dynamic": true
+            }
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.00021743774,
+                1.9877963,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.25,
+                1.25,
+                1.25
               ]
             }
           }
@@ -474,56 +493,16 @@
       {
         "components": [
           {
-            "name": "Colliders",
-            "data": [
-              {
-                "name": "CapsuleCollider",
-                "data": {
-                  "center": [
-                    0.0,
-                    0.65,
-                    0.0
-                  ],
-                  "orientation": [
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "radius": 0.25,
-                  "half_height": 0.39999938
-                }
-              }
-            ]
-          },
-          {
-            "name": "PlayerController",
-            "data": null
+            "name": "EntityParent",
+            "data": {
+              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6"
+            }
           },
           {
             "name": "GameEntity",
             "data": {
-              "uuid": "4f5b4a3f-5077-4fcf-932d-5e32a50f82e6",
-              "name": "player"
-            }
-          },
-          {
-            "name": "EntityChildren",
-            "data": {}
-          },
-          {
-            "name": "RigidBody",
-            "data": {
-              "rigid_body_type": "Kinematic",
-              "mass": 1.0,
-              "restitution": 0.5,
-              "friction": 0.7,
-              "locked_rotational_axes": [
-                false,
-                false,
-                false
-              ],
-              "interpolation": "Interpolate"
+              "uuid": "3deae309-593e-40d1-8301-a5c8cc53245b",
+              "name": "camera_anchor"
             }
           },
           {
@@ -531,7 +510,7 @@
             "data": {
               "position": [
                 0.0,
-                0.0,
+                3.542769,
                 0.0
               ],
               "rotation": [
@@ -541,19 +520,135 @@
                 1.0
               ],
               "scale": [
-                0.25,
-                0.25,
-                0.25
+                1.25,
+                1.25,
+                1.25
               ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
             }
           },
           {
-            "name": "Animator",
+            "name": "GameEntity",
             "data": {
-              "animations": [
-                {
-                  "asset_path": "characters::player::walk::ranim"
-                }
+              "uuid": "67cf6043-72ee-47a9-be6a-0a36d20ae28e",
+              "name": "foot_right"
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                0.48919177,
+                -0.40002334,
+                -0.057400227
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "92166663-6bd8-450e-8e60-5f987b5e834b",
+              "name": "foot_left"
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                -0.4053092,
+                -0.40002334,
+                -0.060017824
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "components": [
+          {
+            "name": "EntityParent",
+            "data": {
+              "uuid": "e46ee42e-f7ef-4017-8c68-218f20f0ad2d"
+            }
+          },
+          {
+            "name": "GameEntity",
+            "data": {
+              "uuid": "0cb97bb0-a6b4-4081-98f1-f08b0f00dfeb",
+              "name": "sword"
+            }
+          },
+          {
+            "name": "EntityChildren",
+            "data": {}
+          },
+          {
+            "name": "Transform",
+            "data": {
+              "position": [
+                -1.1390219,
+                -0.44252038,
+                -0.8820982
+              ],
+              "rotation": [
+                0.0046233702,
+                0.0014959709,
+                -0.3126127,
+                0.94986403
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
               ]
             }
           }
@@ -570,8 +665,8 @@
           {
             "name": "GameEntity",
             "data": {
-              "uuid": "2194faed-985f-4918-9cc9-50e991ae44dd",
-              "name": "hand_right"
+              "uuid": "37e402b2-5bfc-494c-b15c-a4f4b27b6293",
+              "name": "hips"
             }
           },
           {
@@ -579,27 +674,18 @@
             "data": {}
           },
           {
-            "name": "RenderableVoxelEntity",
-            "data": {
-              "model_asset_path": {
-                "asset_path": "models::player_hand::rvox"
-              },
-              "is_dynamic": false
-            }
-          },
-          {
             "name": "Transform",
             "data": {
               "position": [
-                0.3679633,
-                3.093567,
-                2.0658774
+                0.0,
+                1.2172008,
+                0.0
               ],
               "rotation": [
-                0.24225251,
-                0.66857326,
-                0.24804035,
-                0.65787494
+                0.0,
+                0.0,
+                0.0,
+                1.0
               ],
               "scale": [
                 1.0,

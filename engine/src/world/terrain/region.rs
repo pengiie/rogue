@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
-use crate::common::freelist::FreeListHandle;
 use crate::common::geometry::aabb::AABB;
 use crate::common::geometry::ray::{Ray, RayAABBHitInfo};
 use crate::common::morton;
 use crate::consts;
 use crate::voxel::voxel_registry::{VoxelModelId, VoxelModelRegistry};
-use crate::world::terrain::region_map::{ChunkLOD, RegionPos, TerrainRaycastHit};
+use crate::world::terrain::chunk_lod::ChunkLOD;
+use crate::world::terrain::region_map::{ChunkId, TerrainRaycastHit};
+use crate::world::terrain::region_pos::RegionPos;
 use nalgebra::Vector3;
 
 pub struct WorldRegion {
@@ -72,13 +73,13 @@ impl WorldRegion {
         // If if a leaf we calculate the voxel position dcepending on the leaf node intersection
         // and return with that.
         let local_pos = ray.origin - aabb.min;
-        let norm_pos = local_pos.zip_map(&aabb.side_length(), |x, y| (x / y).clamp(0.0, 0.9999));
+        let norm_pos = local_pos.zip_map(&aabb.side_length(), |x, y| (x / y).clamp(0.0, 0.99999));
         // Our scaled position from [0, bounds).
         let dda_pos = norm_pos * consts::voxel::TERRAIN_REGION_CHUNK_LENGTH as f32;
 
         let height = consts::voxel::TERRAIN_REGION_TREE_HEIGHT - 1;
         let sl = consts::voxel::TERRAIN_REGION_CHUNK_LENGTH;
-        let quarter_sl = consts::voxel::TERRAIN_REGION_CHUNK_LENGTH >> 2;
+        let quarter_sl = sl >> 2;
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
 
         let mut last_mask = Vector3::zeros();
@@ -107,6 +108,7 @@ impl WorldRegion {
                 || curr_local_grid.y > 3
                 || curr_local_grid.z > 3;
             if should_pop {
+                was_last_leaf = false;
                 if curr_height == 0 {
                     break;
                 }
@@ -164,8 +166,8 @@ impl WorldRegion {
                     }
                     let next_point = curr_anchor + unit_grid.map(|x| x.max(0) as u32);
                     let curr_t = curr_ray.intersect_point(next_point.cast::<f32>());
-                    let next_t = curr_t.min();
-                    curr_ray.advance(next_t + 0.00001);
+                    let min_t = curr_t.min();
+                    curr_ray.advance(min_t + 0.0001);
                     was_last_leaf = true;
                     continue;
                 }
@@ -184,12 +186,110 @@ impl WorldRegion {
             // Epsilon since sometimes we advance out of bounds but due to fp math it's just barely
             // off, messing up the traversal.
             curr_ray.advance(min_t + 0.0001);
+            was_last_leaf = false;
         }
 
         return None;
     }
 
-    pub fn set_leaf_active(&mut self, node_handle: u32) {}
+    pub fn get_chunk_model(&self, chunk_id: ChunkId) -> Option<VoxelModelId> {
+        let ChunkId {
+            chunk_pos,
+            chunk_lod,
+        } = chunk_id;
+        let region_pos = chunk_pos.get_region_pos();
+        let chunk_height = chunk_lod.as_tree_height();
+        let chunk_traversal = chunk_pos.get_chunk_traversal();
+
+        let mut node_idx = 0;
+        for i in 0..chunk_height {
+            let child_index = (chunk_traversal >> (i * 6)) & 0b111111;
+            let mut node_data = &self.tree.nodes[node_idx];
+            let child_bit = 1 << child_index;
+            if node_data.child_mask & child_bit == 0 {
+                return None;
+            }
+            node_idx = node_data.child_ptr().unwrap() as usize + child_index as usize;
+        }
+
+        let node_data = &self.tree.nodes[node_idx];
+        return node_data
+            .model_ptr()
+            .map(|model_ptr| self.model_handles[model_ptr as usize]);
+    }
+
+    pub fn set_chunk_model(
+        &mut self,
+        chunk_id: &ChunkId,
+        sft_id: Option<VoxelModelId>,
+    ) -> Option<VoxelModelId> {
+        let ChunkId {
+            chunk_pos,
+            chunk_lod,
+        } = chunk_id;
+        let region_pos = chunk_pos.get_region_pos();
+        let chunk_height = chunk_lod.as_tree_height();
+        let chunk_traversal = chunk_pos.get_chunk_traversal();
+
+        let mut node_idx = 0;
+        for i in 0..chunk_height {
+            let child_index = (chunk_traversal >> (i * 6)) & 0b111111;
+            let mut node_data = &mut self.tree.nodes[node_idx];
+            let child_bit = 1 << child_index;
+            if sft_id.is_some() {
+                // Ensure child bit is set and allocate child if it doesn't exist.
+                node_data.child_mask |= child_bit;
+                let child_ptr = if let Some(child_ptr) = node_data.child_ptr() {
+                    child_ptr
+                } else {
+                    let new_child_ptr = self.tree.nodes.len() as u32;
+                    self.tree.nodes[node_idx].child_ptr = new_child_ptr;
+                    for _ in 0..64 {
+                        self.tree
+                            .nodes
+                            .push(WorldRegionNode::new_empty(node_idx as u32));
+                    }
+                    new_child_ptr
+                };
+                node_idx = child_ptr as usize + child_index as usize;
+            } else {
+                if node_data.child_mask & child_bit != 0 {
+                    node_idx = node_data
+                        .child_ptr()
+                        .expect("child ptr should exist if child mask is non-zero")
+                        as usize
+                        + child_index as usize;
+                    if i == chunk_height - 1 {
+                        node_data.child_mask &= !child_bit;
+                        let leaf_node = &mut self.tree.nodes[node_idx];
+                        let old_model_ptr = leaf_node
+                            .model_ptr()
+                            .expect("if child mask is set then model should exist.");
+                        self.tree.nodes[node_idx].model_ptr = WorldRegionNode::NULL_MODEL_PTR;
+                        // TODO: Deallocate old model thing.
+                        return Some(self.model_handles[old_model_ptr as usize]);
+                    }
+                } else {
+                    // Next node child is already empty so don't need to go further.
+                    return None;
+                }
+            }
+        }
+
+        let node_data = &mut self.tree.nodes[node_idx];
+        let Some(sft_id) = sft_id else {
+            unreachable!("Deallocation should've happened in loop.");
+        };
+        let old_model_ptr = node_data.model_ptr();
+        if node_data.has_model_ptr() {
+            // TODO: Deallocate old pointer.
+        }
+        let new_model_ptr = self.model_handles.len() as u32;
+        self.model_handles.push(sft_id);
+        self.active_leaves.insert(node_idx as u32);
+        node_data.model_ptr = new_model_ptr;
+        return old_model_ptr.map(|old_model_ptr| self.model_handles[old_model_ptr as usize]);
+    }
 }
 
 #[derive(Clone)]
@@ -269,6 +369,7 @@ pub struct WorldRegionNode {
 }
 
 impl WorldRegionNode {
+    pub const NULL_MODEL_PTR: u32 = u32::MAX;
     pub fn new_empty(parent_ptr: u32) -> Self {
         Self {
             model_ptr: u32::MAX,

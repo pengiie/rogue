@@ -68,7 +68,9 @@ public struct SFT {
     // TODO: Figure out the best way to clamp right before this.side_length 
     // without floating point errors.
     let norm_grid_pos = norm_model_pos * (float3) this.side_length;
-    let norm_ray = Ray(norm_grid_pos, ray.dir, ray.inv_dir);
+    let dir_scaling = root_aabb.side_length() / (float3) this.side_length;
+    let norm_dir = ray.dir / dir_scaling;
+    let norm_ray = Ray(norm_grid_pos, norm_dir, 1.0 / norm_dir);
 
     var curr_node_idx = 0;
     uint curr_node_stack[8];
@@ -79,7 +81,7 @@ public struct SFT {
     var curr_anchor_grid = int3(0);
 
     let unit_grid = (int3) sign(ray.dir);
-    var last_mask = root_hit_info.t_enter == root_hit_info.t_min;
+    var last_mask = abs(root_hit_info.t_enter - root_hit_info.t_min) < RAY_EPSILON;
 
     var i = 0;
     while(this.in_bounds((int3) floor(curr_ray.origin)) && i < 2000) {

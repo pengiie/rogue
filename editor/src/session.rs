@@ -4,7 +4,16 @@ use std::{
     time::Duration,
 };
 
+use crate::{
+    camera_controller::{EditorCameraController, EditorCameraControllerType},
+    editor_project_settings::{EditorProjectSettings, EditorProjectSettingsData},
+    editor_settings::{UserEditorSettingsAsset, UserEditorSettingsAssetProxy},
+    game_session::EditorGameSession,
+    gizmo::EditorGizmo,
+    ui::EditorUI,
+};
 use nalgebra::Vector3;
+use rogue_engine::world::terrain::region_map::{RegionMap, TerrainRaycastHit};
 use rogue_engine::{
     animation::{animation::Animation, animation_bank::AnimationBank},
     asset::asset::{Assets, GameAssetPath},
@@ -12,7 +21,7 @@ use rogue_engine::{
     entity::ecs_world::{ECSWorld, Entity},
     event::{EventReader, Events},
     graphics::camera::{Camera, MainCamera},
-    input::{input_buffer::InputBuffer, mouse, Input},
+    input::{Input, input_buffer::InputBuffer, mouse},
     material::MaterialBank,
     physics::{physics_world::PhysicsWorld, transform::Transform},
     resource::{Res, ResMut},
@@ -25,15 +34,6 @@ use rogue_engine::{
 };
 use rogue_macros::Resource;
 use winit::event::MouseButton;
-use rogue_engine::world::terrain::region_map::{RegionMap, TerrainRaycastHit};
-use crate::{
-    camera_controller::{EditorCameraController, EditorCameraControllerType},
-    editor_project_settings::{EditorProjectSettings, EditorProjectSettingsData},
-    editor_settings::{UserEditorSettingsAsset, UserEditorSettingsAssetProxy},
-    game_session::EditorGameSession,
-    gizmo::EditorGizmo,
-    ui::EditorUI,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EditorCommandEvent {
@@ -173,6 +173,10 @@ impl EditorSession {
             EditorCameraControllerType::PanOrbit => {
                 let mouse_pos = input.mouse_position();
                 let uv = mouse_pos.component_div(&backbuffer_size);
+                if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+                    // Don't update raycast if not hovering backbuffer.
+                    return;
+                }
                 let aspect_ratio = backbuffer_size.x / backbuffer_size.y;
                 editor_camera.create_ray(editor_camera_transform, uv, aspect_ratio)
             }
@@ -183,7 +187,7 @@ impl EditorSession {
 
         session.entity_raycast =
             WorldEntities::raycast_voxel_entities(&ray, &ecs_world, &voxel_registry);
-        session.terrain_raycast = region_map.raycast_terrain(&voxel_registry, &ray, 1000.0);
+        session.terrain_raycast = region_map.raycast_terrain(&voxel_registry, &ray, 50.0);
         session.editor_camera_ray = ray;
     }
 

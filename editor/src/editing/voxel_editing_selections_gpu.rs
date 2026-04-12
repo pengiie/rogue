@@ -1,4 +1,4 @@
-use nalgebra::Vector3;
+use nalgebra::{UnitQuaternion, Vector3};
 use rogue_engine::{
     common::{
         color::Color,
@@ -57,6 +57,18 @@ impl EditorVoxelEditingSelectionsGpu {
             );
         };
 
+        let mut create_terrain_selection_obb = |min: &Vector3<i32>, max: &Vector3<i32>| -> OBB {
+            let selection_aabb_min = min.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH;
+            let selection_aabb_max =
+                (max + Vector3::new(1, 1, 1)).cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH;
+            let selection_aabb_center = (selection_aabb_min + selection_aabb_max) * 0.5;
+            OBB::new(
+                AABB::new_two_point(selection_aabb_min, selection_aabb_max),
+                UnitQuaternion::identity(),
+                Vector3::zeros(),
+            )
+        };
+
         let mut create_entity_selection_obb =
             |target_entity: Entity, min: &Vector3<i32>, max: &Vector3<i32>| -> Option<OBB> {
                 let Some((transform, renderable)) = ecs_world
@@ -100,8 +112,8 @@ impl EditorVoxelEditingSelectionsGpu {
                     );
                 }
 
-                // Draw our in progress selection, or if there isn't one, draw which voxel we are
-                // currently selecting.
+                // Draw our in progress selection, down below we show the entity and terrain
+                // selection if there is no in progress one.
                 if let Some(in_progress_selection) = &voxel_editing_selection.in_progress_selection
                 {
                     let renderable = ecs_world
@@ -117,19 +129,37 @@ impl EditorVoxelEditingSelectionsGpu {
                         ));
                 }
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                if let Some(EditorVoxelEditingSelection { min, max }) =
+                    &voxel_editing_selection.selection
+                {
+                    draw_selection(&create_terrain_selection_obb(min, max));
+                }
+
+                if let Some(in_progress_selection) = &voxel_editing_selection.in_progress_selection
+                {
+                    let (min, max) = in_progress_selection.min_max();
+                    draw_selection(&create_terrain_selection_obb(&min, &max));
+                }
+            }
             None => {}
         }
 
         if voxel_editing.selected_tool_type == EditorEditingToolType::Selection
             && voxel_editing_selection.in_progress_selection.is_none()
-            && let Some(entity_hit) = &editor_session.entity_raycast
         {
-            let hit_pos = entity_hit.model_trace.local_position.cast::<i32>();
-            if let Some(hit_model_obb) =
-                create_entity_selection_obb(entity_hit.entity, &hit_pos, &hit_pos)
-            {
-                draw_selection(&hit_model_obb);
+            if let Some(entity_hit) = &editor_session.entity_raycast {
+                let hit_pos = entity_hit.model_trace.local_position.cast::<i32>();
+                if let Some(hit_model_obb) =
+                    create_entity_selection_obb(entity_hit.entity, &hit_pos, &hit_pos)
+                {
+                    draw_selection(&hit_model_obb);
+                }
+            }
+            if let Some(terrain_hit) = &editor_session.terrain_raycast {
+                let hit_pos = terrain_hit.world_voxel_pos;
+                let selection_obb = create_terrain_selection_obb(&hit_pos, &hit_pos);
+                draw_selection(&selection_obb);
             }
         }
     }

@@ -9,6 +9,10 @@ use rogue_engine::{
         voxel::{VoxelModelEdit, VoxelModelEditMaskLayer, VoxelModelEditRegion},
         voxel_registry::VoxelModelRegistry,
     },
+    world::terrain::region_map::{
+        RegionMap, VoxelTerrainEdit, VoxelTerrainEditMask, VoxelTerrainEditMaskLayer,
+        VoxelTerrainRegion,
+    },
 };
 use rogue_macros::Resource;
 
@@ -25,11 +29,19 @@ use crate::{
 /// Handles the application of tools that performs some sort of edit, like make the pencil apply
 /// voxels to its target. Or eraser erases voxels.
 #[derive(Resource)]
-pub struct EditorVoxelEditingEditTools {}
+pub struct EditorVoxelEditingEditTools {
+    paint: EditorVoxelEditingPaintState,
+}
+
+pub struct EditorVoxelEditingPaintState {
+    is_down: bool,
+}
 
 impl EditorVoxelEditingEditTools {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            paint: EditorVoxelEditingPaintState { is_down: false },
+        }
     }
 
     pub fn update_edit_application_systems(rb: &ResourceBank) {
@@ -46,6 +58,7 @@ impl EditorVoxelEditingEditTools {
         editing_selection: Res<EditorVoxelEditingSelections>,
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         ecs_world: Res<ECSWorld>,
+        mut region_map: ResMut<RegionMap>,
         input: Res<Input>,
         editor_session: Res<EditorSession>,
         mut events: ResMut<Events>,
@@ -125,13 +138,13 @@ impl EditorVoxelEditingEditTools {
                             center: hit_pos,
                             diameter: *brush_size,
                         }],
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
                         editing.current_voxel_material(),
                     )),
                 };
-                editing.apply_edit(
+                editing.apply_entity_edit(
                     &mut voxel_registry,
                     &mut events,
                     edit,
@@ -139,7 +152,28 @@ impl EditorVoxelEditingEditTools {
                     true,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+
+                let hit_pos =
+                    raycast.world_voxel_pos + raycast.model_trace.local_normal.cast::<i32>();
+                let (brush_min, brush_max) = Self::calculate_brush_min_max(hit_pos, *brush_size);
+                let edit = VoxelTerrainEdit {
+                    region: VoxelTerrainRegion::new_rect(brush_min, brush_max),
+                    mask: VoxelTerrainEditMask {
+                        layers: vec![VoxelTerrainEditMaskLayer(VoxelModelEditMaskLayer::Sphere {
+                            center: hit_pos,
+                            diameter: *brush_size,
+                        })],
+                    },
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
+                        editing.current_voxel_material(),
+                    )),
+                };
+                editing.apply_terrain_edit(&mut region_map, &mut voxel_registry, edit, true);
+            }
             None => {
                 return;
             }
@@ -147,18 +181,28 @@ impl EditorVoxelEditingEditTools {
     }
 
     fn update_paint_tool(
+        mut edit_tools: ResMut<EditorVoxelEditingEditTools>,
         mut editing: ResMut<EditorVoxelEditing>,
         editing_selection: Res<EditorVoxelEditingSelections>,
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         ecs_world: Res<ECSWorld>,
+        mut region_map: ResMut<RegionMap>,
         input: Res<Input>,
         editor_session: Res<EditorSession>,
         mut events: ResMut<Events>,
     ) {
+        let mut save_history = false;
+        if input.is_mouse_button_pressed(mouse::Button::Left) {
+            edit_tools.paint.is_down = true;
+            save_history = true;
+        }
         if !input.is_mouse_button_down(mouse::Button::Left) {
+            edit_tools.paint.is_down = false;
+        }
+        if !edit_tools.paint.is_down {
             return;
         }
-        let save_history = input.is_mouse_button_pressed(mouse::Button::Left);
+
         let tool = editing.tools.get(&editing.selected_tool_type).unwrap();
         let EditorEditingTool::Paint { brush_size } = tool else {
             return;
@@ -201,13 +245,13 @@ impl EditorVoxelEditingEditTools {
                             },
                             VoxelModelEditMaskLayer::Presence,
                         ],
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
                         editing.current_voxel_material(),
                     )),
                 };
-                editing.apply_edit(
+                editing.apply_entity_edit(
                     &mut voxel_registry,
                     &mut events,
                     edit,
@@ -215,7 +259,35 @@ impl EditorVoxelEditingEditTools {
                     save_history,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+
+                let hit_pos = raycast.world_voxel_pos;
+                let (brush_min, brush_max) = Self::calculate_brush_min_max(hit_pos, *brush_size);
+                let edit = VoxelTerrainEdit {
+                    region: VoxelTerrainRegion::new_rect(brush_min, brush_max),
+                    mask: VoxelTerrainEditMask {
+                        layers: vec![
+                            VoxelTerrainEditMaskLayer(VoxelModelEditMaskLayer::Sphere {
+                                center: hit_pos,
+                                diameter: *brush_size,
+                            }),
+                            VoxelTerrainEditMaskLayer(VoxelModelEditMaskLayer::Presence),
+                        ],
+                    },
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
+                        editing.current_voxel_material(),
+                    )),
+                };
+                editing.apply_terrain_edit(
+                    &mut region_map,
+                    &mut voxel_registry,
+                    edit,
+                    save_history,
+                );
+            }
             None => {
                 return;
             }
@@ -228,6 +300,7 @@ impl EditorVoxelEditingEditTools {
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         ecs_world: Res<ECSWorld>,
         input: Res<Input>,
+        mut region_map: ResMut<RegionMap>,
         editor_session: Res<EditorSession>,
         mut events: ResMut<Events>,
     ) {
@@ -273,11 +346,11 @@ impl EditorVoxelEditingEditTools {
                             center: hit_pos,
                             diameter: *brush_size,
                         }],
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(None),
                 };
-                editing.apply_edit(
+                editing.apply_entity_edit(
                     &mut voxel_registry,
                     &mut events,
                     edit,
@@ -285,7 +358,25 @@ impl EditorVoxelEditingEditTools {
                     true,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+
+                let hit_pos = raycast.world_voxel_pos;
+                let (brush_min, brush_max) = Self::calculate_brush_min_max(hit_pos, *brush_size);
+                let edit = VoxelTerrainEdit {
+                    region: VoxelTerrainRegion::new_rect(brush_min, brush_max),
+                    mask: VoxelTerrainEditMask {
+                        layers: vec![VoxelTerrainEditMaskLayer(VoxelModelEditMaskLayer::Sphere {
+                            center: hit_pos,
+                            diameter: *brush_size,
+                        })],
+                    },
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(None),
+                };
+                editing.apply_terrain_edit(&mut region_map, &mut voxel_registry, edit, true);
+            }
             None => {
                 return;
             }

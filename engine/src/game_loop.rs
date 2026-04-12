@@ -14,11 +14,11 @@ use crate::voxel::baker_gpu::VoxelBakerGpu;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use crate::voxel::voxel_registry_gpu::VoxelModelRegistryGpu;
 use crate::window::time::{Instant, Time};
-use crate::world::terrain::region_map::RegionMap;
-use crate::world::world_entities_gpu::WorldEntitiesGpu;
-use crate::world::terrain::region_map_gpu::RegionMapGpu;
 use crate::world::sky::Sky;
+use crate::world::terrain::region_map::RegionMap;
+use crate::world::terrain::region_map_gpu::RegionMapGpu;
 use crate::world::world_entities::WorldEntities;
+use crate::world::world_entities_gpu::WorldEntitiesGpu;
 use crate::world::world_streaming::WorldChunkStreamer;
 
 pub fn game_loop(app: &App) {
@@ -85,10 +85,13 @@ pub fn game_loop(app: &App) {
     app.run_system(Sky::update_time);
     // Rendered terrain relative to player/camera anchor updating.
     app.run_system(WorldChunkStreamer::update);
+
     // Load any regions from disk into memory which have chunk data requested.
     app.run_system(RegionMap::update_region_loading);
-    // Update from chunk editing commands and submits chunk events.
+    // Update from chunk commands and submits chunk events.
     app.run_system(RegionMap::update_chunks);
+    // Update any terrain edits.
+    app.run_system(RegionMap::update_region_edits);
     // Marks regions which should be written based off of region events.
 
     // ==============================================

@@ -208,13 +208,13 @@ impl EditorVoxelEditingSelections {
                     region: selection.as_model_edit_region(),
                     mask: rogue_engine::voxel::voxel::VoxelModelEditMask {
                         layers: Vec::new(),
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(
                         fill_material,
                     ),
                 };
-                editing.apply_edit(
+                editing.apply_entity_edit(
                     &mut voxel_registry,
                     &mut events,
                     edit,

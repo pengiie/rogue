@@ -3,6 +3,11 @@ use std::collections::HashMap;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use crate::world::terrain::chunk_lod::ChunkLOD;
+use crate::world::terrain::region::{WorldRegion, WorldRegionNode};
+use crate::world::terrain::region_map::{ChunkEvent, ChunkEventType, RegionEvent, RegionMap};
+use crate::world::terrain::region_pos::RegionPos;
+use crate::world::terrain::region_window_gpu::TerrainRenderableWindow;
 use crate::{
     consts,
     event::{EventReader, Events},
@@ -17,9 +22,6 @@ use crate::{
         voxel_registry_gpu::{VoxelModelGpuInvalidationInfo, VoxelModelRegistryGpu},
     },
 };
-use crate::world::terrain::region::{WorldRegion, WorldRegionNode};
-use crate::world::terrain::region_map::{ChunkEvent, ChunkEventType, ChunkLOD, RegionEvent, RegionMap, RegionPos};
-use crate::world::terrain::region_window_gpu::TerrainRenderableWindow;
 
 #[derive(Resource)]
 pub struct RegionMapGpu {
@@ -184,17 +186,16 @@ impl RegionMapGpu {
                             ),
                         },
                     );
-                    voxel_registry_gpu.invalidate_gpu_model_material(
-                        VoxelModelGpuInvalidationInfo {
-                            model_id,
-                            offset: Vector3::new(0, 0, 0),
-                            size: Vector3::new(
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                            ),
-                        },
-                    );
+                    if voxel_registry_gpu.get_model_gpu_ptr(&model_id).is_some() {
+                        voxel_registry_gpu.mark_gpu_model_update(&model_id);
+                        // TODO: Remove this and figure out a nicer way to allocate the gpu models,
+                        // i dont think command buffer based is the best since it requires a two
+                        // pass thing for model updates and it'd be nicer to know if the gpu model
+                        // ptr changed when we need it.
+                        region_map_gpu
+                            .to_write_regions
+                            .push(event.chunk_id.chunk_pos.get_region_pos());
+                    }
 
                     for neighbor in event.chunk_id.neighbors() {
                         if let Some(neighbor_model_id) = region_map.get_chunk_model(&neighbor) {

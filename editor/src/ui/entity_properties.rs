@@ -3,6 +3,7 @@ use rogue_engine::{
     animation::animator::Animator,
     asset::asset::{Assets, GameAssetPath},
     common::dyn_vec::TypeInfo,
+    egui::egui_util,
     entity::{
         EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
         component::{GameComponent, RawComponentRef},
@@ -28,6 +29,7 @@ use rogue_engine::{
         voxel_registry::{VoxelModelId, VoxelModelRegistry},
     },
 };
+use rogue_game::player::player_controller::PlayerController;
 use std::{
     any::TypeId,
     collections::{HashMap, HashSet},
@@ -109,6 +111,24 @@ impl EntityPropertiesShowFns {
         s.register_component_ui::<RenderableVoxelEntity>(Self::show_renderable_voxel);
         s.register_component_ui::<RigidBody>(Self::show_rigid_body_component);
         s.register_component_ui::<Animator>(Self::show_animator_component);
+
+        // TODO: Expose the editor api as a library and then have the game code able to register
+        // editor stuff with a feature or something. Possibly just make the these show fns a global
+        // variable.
+        // Game component show fns
+        fn show_player_controller(
+            player_controller: &mut PlayerController,
+            ui: &mut egui::Ui,
+            ctx: &mut ShowComponentContext,
+        ) {
+            egui_util::game_asset_path_button(
+                ui,
+                &mut player_controller.idle_animation,
+                "Idle Animation:".to_owned(),
+                |_| {},
+            );
+        }
+        s.register_component_ui::<PlayerController>(show_player_controller);
 
         s
     }

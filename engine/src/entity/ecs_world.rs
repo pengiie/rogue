@@ -1,6 +1,6 @@
 use std::any::{Any, TypeId};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ptr::NonNull;
 use std::{collections::HashSet, ops::Deref};
 
@@ -184,6 +184,27 @@ impl ECSWorld {
         ser: D,
     ) -> Result<Self, D::Error> {
         todo!();
+    }
+
+    /// Finds the first child by BFS within the whole child tree.
+    pub fn find_first_child_by_name(&self, entity: Entity, child_name: &str) -> Option<Entity> {
+        let mut queue = VecDeque::new();
+        queue.push_back(entity);
+        while let Some(curr_entity) = queue.pop_front() {
+            let Ok(children) = self.get::<&EntityChildren>(curr_entity) else {
+                continue;
+            };
+            for child in &children.children {
+                let Ok(child_game_entity) = self.get::<&GameEntity>(*child) else {
+                    continue;
+                };
+                if &child_game_entity.name == child_name {
+                    return Some(*child);
+                }
+                queue.push_back(*child);
+            }
+        }
+        return None;
     }
 
     pub fn get_child_by_name(&self, entity: Entity, child_name: &str) -> Option<Entity> {

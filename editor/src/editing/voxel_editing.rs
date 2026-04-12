@@ -30,6 +30,7 @@ use rogue_engine::{
         },
         voxel_registry::{VoxelModelEvent, VoxelModelId, VoxelModelRegistry},
     },
+    world::terrain::region_map::{ChunkId, RegionMap, VoxelTerrainEdit},
 };
 use rogue_macros::Resource;
 use strum::{IntoDiscriminant, IntoEnumIterator, VariantArray};
@@ -88,6 +89,9 @@ pub enum EditorVoxelEditingHistoryItem {
     ModelEdit {
         model_id: VoxelModelId,
         saved_model_state: VoxelModelSFTCompressed,
+    },
+    TerrainEdit {
+        saved_chunk_states: Vec<(ChunkId, Option<VoxelModelSFTCompressed>)>,
     },
 }
 
@@ -176,6 +180,7 @@ impl EditorVoxelEditing {
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         input: Res<Input>,
         mut events: ResMut<Events>,
+        mut region_map: ResMut<RegionMap>,
     ) {
         // In the case of large models this matters cause of memory, we could move this to the disk
         // though which would help but this is fine for now.
@@ -195,6 +200,42 @@ impl EditorVoxelEditing {
                             voxel_registry.get_model_mut::<VoxelModelSFTCompressed>(model_id);
                         *sft = saved_model_state;
                         events.push(VoxelModelEvent::UpdatedModel(model_id));
+                    }
+                    EditorVoxelEditingHistoryItem::TerrainEdit { saved_chunk_states } => {
+                        for (chunk_id, saved_model_state) in saved_chunk_states {
+                            log::info!("restoring chunk {:?}", chunk_id);
+                            let region_pos = chunk_id.chunk_pos.get_region_pos();
+                            if let Some(region) = region_map.get_region_mut(&region_pos) {
+                                if let Some(saved_model_state) = saved_model_state {
+                                    if let Some(existing_chunk_model_id) =
+                                        region.get_chunk_model(chunk_id)
+                                    {
+                                        let mut sft = voxel_registry
+                                            .get_model_mut::<VoxelModelSFTCompressed>(
+                                                existing_chunk_model_id,
+                                            );
+                                        *sft = saved_model_state;
+                                        region_map.mark_chunk_updated(&chunk_id);
+                                    } else {
+                                        let new_chunk_model_id = voxel_registry
+                                            .register_voxel_model(saved_model_state, None);
+                                        region.set_chunk_model(&chunk_id, Some(new_chunk_model_id));
+                                        region_map.mark_chunk_updated(&chunk_id);
+                                    }
+                                } else {
+                                    // Set the chunk to empty, only do this if it's not already
+                                    // empty.
+                                    if region.get_chunk_model(chunk_id).is_some() {
+                                        region.set_chunk_model(&chunk_id, None);
+                                        region_map.mark_chunk_updated(&chunk_id);
+                                    }
+                                }
+                            } else {
+                                todo!(
+                                    "region load but dont load the chunk then set the chunk, idk is should usually be loaded."
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -249,8 +290,9 @@ impl EditorVoxelEditing {
             && let Some(terrain_hit) = &editor_session.terrain_raycast
             && terrain_hit.model_trace.depth_t < entity_t
         {
+            editing.is_click_consumed =
+                editing.edit_target != Some(EditorVoxelEditingTarget::Terrain);
             editing.edit_target = Some(EditorVoxelEditingTarget::Terrain);
-            editing.is_click_consumed = true;
         }
 
         for event in editing.editor_event_reader.read(&events) {
@@ -345,8 +387,53 @@ impl EditorVoxelEditing {
     //        _ => false,
     //    };
     //}
+    //
+    pub fn apply_terrain_edit(
+        &mut self,
+        region_map: &mut RegionMap,
+        voxel_registry: &mut VoxelModelRegistry,
+        edit: VoxelTerrainEdit,
+        save_history: bool,
+    ) {
+        let affected_chunks = edit.region.get_affected_chunk_models(region_map);
+        if save_history {
+            let mut saved_chunk_states = Vec::new();
+            for (chunk_id, chunk_model_id) in affected_chunks {
+                let saved_model_state = chunk_model_id.map(|model_id| {
+                    voxel_registry
+                        .get_model::<VoxelModelSFTCompressed>(model_id)
+                        .clone()
+                });
+                saved_chunk_states.push((chunk_id, saved_model_state));
+            }
+            self.history
+                .undo_buffer
+                .push_back(EditorVoxelEditingHistoryItem::TerrainEdit { saved_chunk_states });
+        } else {
+            match self.history.undo_buffer.back_mut() {
+                Some(EditorVoxelEditingHistoryItem::TerrainEdit { saved_chunk_states }) => {
+                    for (chunk_id, chunk_model_id) in affected_chunks {
+                        if saved_chunk_states
+                            .iter()
+                            .any(|(existing_chunk_id, _)| existing_chunk_id == &chunk_id)
+                        {
+                            continue;
+                        }
+                        let saved_model_state = chunk_model_id.map(|model_id| {
+                            voxel_registry
+                                .get_model::<VoxelModelSFTCompressed>(model_id)
+                                .clone()
+                        });
+                        saved_chunk_states.push((chunk_id, saved_model_state));
+                    }
+                }
+                _ => {}
+            }
+        }
+        region_map.apply_voxel_edit(edit);
+    }
 
-    pub fn apply_edit<'a>(
+    pub fn apply_entity_edit<'a>(
         &mut self,
         voxel_registry: &'a mut VoxelModelRegistry,
         events: &mut Events,

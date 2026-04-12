@@ -405,7 +405,7 @@ impl PhysicsWorld {
         for [(entity_a, collider_a), (entity_b, collider_b)] in
             &physics_world.broad_phase.collisions
         {
-            let mut query = ecs_world.query_many_mut::<&mut Transform, 2>([*entity_a, *entity_b]);
+            let mut query = ecs_world.query_many_mut::<&Transform, 2>([*entity_a, *entity_b]);
             let [Some(transform_a), Some(transform_b)] = query.get() else {
                 continue;
             };

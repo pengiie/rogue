@@ -1,0 +1,461 @@
+{
+  "tracks": [
+    {
+      "track_id": {
+        "entity_traversal": [
+          "hips",
+          "torso",
+          "hand_left"
+        ],
+        "component_name": "Transform",
+        "component_property": "position"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "x",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -1.14,
+            -1.14
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "y",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.3,
+            0.35,
+            0.3
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "z",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    },
+    {
+      "track_id": {
+        "entity_traversal": [
+          "hips",
+          "torso",
+          "hand_right"
+        ],
+        "component_name": "Transform",
+        "component_property": "position"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "x",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            1.1373523,
+            1.1373523
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "y",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.3,
+            0.35,
+            0.3
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "z",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    },
+    {
+      "track_id": {
+        "entity_traversal": [
+          "hips"
+        ],
+        "component_name": "Transform",
+        "component_property": "position"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "x",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "y",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            1.2172008,
+            1.12,
+            1.2172008
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "z",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.0,
+            0.0
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    },
+    {
+      "track_id": {
+        "entity_traversal": [
+          "hips",
+          "torso",
+          "foot_right"
+        ],
+        "component_name": "Transform",
+        "component_property": "position"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "x",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            0.48919177,
+            0.48919177
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "y",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -0.40002334,
+            -0.3,
+            -0.40002334
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "z",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -0.057400227,
+            -0.057400227
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    },
+    {
+      "track_id": {
+        "entity_traversal": [
+          "hips",
+          "torso",
+          "foot_left"
+        ],
+        "component_name": "Transform",
+        "component_property": "position"
+      },
+      "channels": [
+        {
+          "channel_type_info": {
+            "channel_name": "x",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -0.4053092,
+            -0.4053092
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "y",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 0,
+              "nanos": 500000000
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -0.40002334,
+            -0.3,
+            -0.40002334
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear",
+            "Linear"
+          ]
+        },
+        {
+          "channel_type_info": {
+            "channel_name": "z",
+            "channel_id": "f32"
+          },
+          "times": [
+            {
+              "secs": 0,
+              "nanos": 0
+            },
+            {
+              "secs": 1,
+              "nanos": 0
+            }
+          ],
+          "values": [
+            -0.060017824,
+            -0.060017824
+          ],
+          "interpolation": [
+            "Linear",
+            "Linear"
+          ]
+        }
+      ]
+    }
+  ],
+  "duration": {
+    "secs": 1,
+    "nanos": 0
+  }
+}

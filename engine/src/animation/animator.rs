@@ -48,6 +48,11 @@ impl Animator {
             .insert(animation.clone(), playback_info);
     }
 
+    pub fn is_animation_playing(&self, animation: &GameAssetPath) -> bool {
+        return self.playing_animations.contains_key(animation)
+            || self.to_play_animations.contains_key(animation);
+    }
+
     pub fn update_animators_system(
         ecs_world: ResMut<ECSWorld>,
         time: Res<Time>,
@@ -64,12 +69,27 @@ impl Animator {
                 }
             }
 
-            let mut to_end_animations = Vec::new();
-            for (animation_path, playing_animation) in &mut animator.playing_animations {
+            let mut to_remove_from_to_play = Vec::new();
+            for (animation_path, playback_info) in &animator.to_play_animations {
                 let Some(animation) = animation_bank.get_animation_by_path(animation_path) else {
                     continue;
                 };
-                if !playing_animation.update_playback_playhead(animation, time.delta_time()) {
+                animator.playing_animations.insert(
+                    animation_path.clone(),
+                    AnimatorPlayingAnimation::new(animation, playback_info.clone()),
+                );
+                to_remove_from_to_play.push(animation_path.clone());
+            }
+            for animation_path in to_remove_from_to_play {
+                animator.to_play_animations.remove(&animation_path);
+            }
+
+            let mut to_end_animations = Vec::new();
+            for (animation_path, playing_animation) in &mut animator.playing_animations {
+                let animation = animation_bank
+                    .get_animation_by_path(animation_path)
+                    .unwrap();
+                if playing_animation.update_playback_playhead(animation, time.delta_time()) {
                     to_end_animations.push(animation_path.clone());
                     continue;
                 }

@@ -11,10 +11,16 @@ use rogue_engine::{
     voxel::{
         attachment::Attachment,
         sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelModelEdit, VoxelModelEditMaskLayer, VoxelModelEditRegion},
+        voxel::{
+            VoxelModelEdit, VoxelModelEditMask, VoxelModelEditMaskLayer,
+            VoxelModelEditMaskModelSource, VoxelModelEditMaskSource,
+            VoxelModelEditMaskSourceMethods, VoxelModelEditMaskTerrainSource, VoxelModelEditRegion,
+            VoxelModelImpl, VoxelModelImplMethods,
+        },
         voxel_registry::{VoxelModelId, VoxelModelRegistry},
         voxel_registry_gpu::VoxelModelRegistryGpu,
     },
+    world::terrain::region_map::RegionMap,
 };
 use rogue_macros::Resource;
 
@@ -95,9 +101,6 @@ impl EditorVoxelEditingPreview {
                 let renderable = ecs_world
                     .get::<&RenderableVoxelEntity>(*target_entity)
                     .expect("Target entity should have a renderable model attached.");
-                if !renderable.is_dynamic() {
-                    return;
-                }
                 let entity_model_id = renderable
                     .voxel_model_id()
                     .expect("Target entity should have a voxel model");
@@ -150,7 +153,7 @@ impl EditorVoxelEditingPreview {
                             center: preview_center,
                             diameter: *brush_size,
                         }],
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
                         editing.current_voxel_material(),
@@ -173,7 +176,63 @@ impl EditorVoxelEditingPreview {
                     preview_model_id,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                //
+                // Very similar to terrain paint but without the presence mask.
+                //
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+                let hit_pos =
+                    raycast.world_voxel_pos + raycast.model_trace.local_normal.cast::<i32>();
+
+                preview.show_preview = true;
+
+                let preview_model = voxel_registry.get_dyn_model_mut(preview_model_id);
+                let preview_model_side_length = preview_model.length();
+                let preview_center = (preview_model_side_length / 2).cast::<i32>();
+                let (brush_min, brush_max) = EditorVoxelEditingEditTools::calculate_brush_min_max(
+                    preview_center,
+                    *brush_size,
+                );
+
+                // We render the preview at the preview models center, so if we hit voxel (0,0,0),
+                // then we render the preview with its min corner at half the voxel length in world
+                // space. With this same logic, we apply the same offset when sampling the terrain
+                // mask for the preview model edit.
+                preview.preview_model_transform = Transform {
+                    position: hit_pos.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH,
+                    rotation: nalgebra::UnitQuaternion::identity(),
+                    scale: Vector3::new(1.0, 1.0, 1.0),
+                };
+
+                let brush_edit_rect = VoxelModelEditRegion::saturate_rect(
+                    brush_min,
+                    brush_max,
+                    preview_model_side_length,
+                );
+                let mask = VoxelModelEditMask {
+                    layers: vec![VoxelModelEditMaskLayer::Sphere {
+                        center: preview_center,
+                        diameter: *brush_size,
+                    }],
+                    mask_source: None,
+                };
+
+                let edit = VoxelModelEdit {
+                    region: brush_edit_rect,
+                    mask,
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
+                        editing.current_voxel_material(),
+                    )),
+                };
+                preview_model.clear();
+                preview_model.set_voxel_range_impl(&edit);
+                EditorVoxelEditingPreviewGpu::update_preview_model_gpu(
+                    &mut voxel_registry_gpu,
+                    preview_model_id,
+                );
+            }
             None => {
                 return;
             }
@@ -185,6 +244,7 @@ impl EditorVoxelEditingPreview {
         mut preview: ResMut<EditorVoxelEditingPreview>,
         mut voxel_registry: ResMut<VoxelModelRegistry>,
         mut voxel_registry_gpu: ResMut<VoxelModelRegistryGpu>,
+        region_map: Res<RegionMap>,
         editor_session: Res<EditorSession>,
         ecs_world: ResMut<ECSWorld>,
     ) {
@@ -233,6 +293,9 @@ impl EditorVoxelEditingPreview {
                     preview_model_side_length,
                 );
 
+                let mask_model_source = VoxelModelEditMaskModelSource {
+                    model: entity_model,
+                };
                 let edit = VoxelModelEdit {
                     region: brush_edit_rect,
                     mask: rogue_engine::voxel::voxel::VoxelModelEditMask {
@@ -243,8 +306,8 @@ impl EditorVoxelEditingPreview {
                             },
                             VoxelModelEditMaskLayer::Presence,
                         ],
-                        mask_model: Some(rogue_engine::voxel::voxel::VoxelModelEditMaskModel {
-                            model: entity_model,
+                        mask_source: Some(rogue_engine::voxel::voxel::VoxelModelEditMaskSource {
+                            source: &mask_model_source,
                             // I wrote this at one point and now i can't remember why this even
                             // works, but i'll take it.
                             offset: (preview_center - hit_pos).map(|x| x as u32),
@@ -273,7 +336,76 @@ impl EditorVoxelEditingPreview {
                     preview_model_id,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+                let hit_pos = raycast.world_voxel_pos;
+
+                preview.show_preview = true;
+
+                let preview_model = voxel_registry.get_dyn_model(preview_model_id);
+                let preview_model_side_length = preview_model.length();
+                let preview_center = (preview_model_side_length / 2).cast::<i32>();
+                let (brush_min, brush_max) = EditorVoxelEditingEditTools::calculate_brush_min_max(
+                    preview_center,
+                    *brush_size,
+                );
+
+                // We render the preview at the preview models center, so if we hit voxel (0,0,0),
+                // then we render the preview with its min corner at half the voxel length in world
+                // space. With this same logic, we apply the same offset when sampling the terrain
+                // mask for the preview model edit.
+                preview.preview_model_transform = Transform {
+                    position: hit_pos.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH,
+                    rotation: nalgebra::UnitQuaternion::identity(),
+                    scale: Vector3::new(1.0, 1.0, 1.0),
+                };
+
+                let brush_edit_rect = VoxelModelEditRegion::saturate_rect(
+                    brush_min,
+                    brush_max,
+                    preview_model_side_length,
+                );
+                let (terrain_min, terrain_max) =
+                    EditorVoxelEditingEditTools::calculate_brush_min_max(hit_pos, *brush_size);
+                let mut terrain_mask_source =
+                    VoxelModelEditMaskTerrainSource::from_voxel_min_max(terrain_min, terrain_max);
+                let preview_model = terrain_mask_source.populate_from_registry(
+                    &mut voxel_registry,
+                    &region_map,
+                    preview_model_id,
+                );
+                let relative_hit_pos =
+                    hit_pos - terrain_mask_source.chunk_min().get_min_world_voxel_pos();
+                let mask = VoxelModelEditMask {
+                    layers: vec![
+                        VoxelModelEditMaskLayer::Sphere {
+                            center: preview_center,
+                            diameter: *brush_size,
+                        },
+                        VoxelModelEditMaskLayer::Presence,
+                    ],
+                    mask_source: Some(VoxelModelEditMaskSource {
+                        source: &terrain_mask_source,
+                        offset: (preview_center - relative_hit_pos).map(|x| x as u32),
+                    }),
+                };
+
+                let edit = VoxelModelEdit {
+                    region: brush_edit_rect,
+                    mask,
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
+                        editing.current_voxel_material(),
+                    )),
+                };
+                preview_model.clear();
+                preview_model.set_voxel_range_impl(&edit);
+                EditorVoxelEditingPreviewGpu::update_preview_model_gpu(
+                    &mut voxel_registry_gpu,
+                    preview_model_id,
+                );
+            }
             None => {
                 return;
             }
@@ -295,6 +427,8 @@ impl EditorVoxelEditingPreview {
             return;
         };
 
+        const ERASER_COLOR: &str = "#EE2244";
+        const ERASER_ALPHA: f32 = 0.2;
         match &editing.edit_target {
             Some(EditorVoxelEditingTarget::Entity(target_entity)) => {
                 let Some(raycast) = &editor_session.entity_raycast else {
@@ -340,11 +474,11 @@ impl EditorVoxelEditingPreview {
                             center: preview_center,
                             diameter: *brush_size,
                         }],
-                        mask_model: None,
+                        mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
                         rogue_engine::voxel::voxel::VoxelMaterialData::Baked {
-                            color: Color::new_srgba_hex("#EE2244", 0.2),
+                            color: Color::new_srgba_hex(ERASER_COLOR, ERASER_ALPHA),
                         },
                     )),
                 };
@@ -367,7 +501,64 @@ impl EditorVoxelEditingPreview {
                     preview_model_id,
                 );
             }
-            Some(EditorVoxelEditingTarget::Terrain) => {}
+            Some(EditorVoxelEditingTarget::Terrain) => {
+                //
+                // Literally same as pencil tool but different material.
+                //
+                let Some(raycast) = &editor_session.terrain_raycast else {
+                    return;
+                };
+                let hit_pos = raycast.world_voxel_pos;
+
+                preview.show_preview = true;
+
+                let preview_model = voxel_registry.get_dyn_model_mut(preview_model_id);
+                let preview_model_side_length = preview_model.length();
+                let preview_center = (preview_model_side_length / 2).cast::<i32>();
+                let (brush_min, brush_max) = EditorVoxelEditingEditTools::calculate_brush_min_max(
+                    preview_center,
+                    *brush_size,
+                );
+
+                // We render the preview at the preview models center, so if we hit voxel (0,0,0),
+                // then we render the preview with its min corner at half the voxel length in world
+                // space. With this same logic, we apply the same offset when sampling the terrain
+                // mask for the preview model edit.
+                preview.preview_model_transform = Transform {
+                    position: hit_pos.cast::<f32>() * consts::voxel::VOXEL_METER_LENGTH,
+                    rotation: nalgebra::UnitQuaternion::identity(),
+                    scale: Vector3::new(1.0, 1.0, 1.0),
+                };
+
+                let brush_edit_rect = VoxelModelEditRegion::saturate_rect(
+                    brush_min,
+                    brush_max,
+                    preview_model_side_length,
+                );
+                let mask = VoxelModelEditMask {
+                    layers: vec![VoxelModelEditMaskLayer::Sphere {
+                        center: preview_center,
+                        diameter: *brush_size,
+                    }],
+                    mask_source: None,
+                };
+
+                let edit = VoxelModelEdit {
+                    region: brush_edit_rect,
+                    mask,
+                    operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
+                        rogue_engine::voxel::voxel::VoxelMaterialData::Baked {
+                            color: Color::new_srgba_hex(ERASER_COLOR, ERASER_ALPHA),
+                        },
+                    )),
+                };
+                preview_model.clear();
+                preview_model.set_voxel_range_impl(&edit);
+                EditorVoxelEditingPreviewGpu::update_preview_model_gpu(
+                    &mut voxel_registry_gpu,
+                    preview_model_id,
+                );
+            }
             None => {
                 return;
             }

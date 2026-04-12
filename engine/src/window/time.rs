@@ -44,6 +44,10 @@ impl Time {
         self.start_time
     }
 
+    pub fn curr_time(&self) -> Instant {
+        self.last_time
+    }
+
     pub fn fps(&self) -> u32 {
         f32::floor(1.0 / self.delta_time.as_secs_f32()) as u32
     }

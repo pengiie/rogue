@@ -1,14 +1,14 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
+use rogue_engine::world::terrain::region_map::RegionMap;
 use rogue_engine::{
     common::geometry::ray::Ray,
     entity::ecs_world::ECSWorld,
-    input::{keyboard::Key, Input},
+    input::{Input, keyboard::Key},
     physics::{physics_world::PhysicsWorld, rigid_body::RigidBody, transform::Transform},
     resource::{Res, ResMut},
     voxel::voxel_registry::VoxelModelRegistry,
     window::{time::Time, window::Window},
 };
-use rogue_engine::world::terrain::region_map::RegionMap;
 use rogue_macros::game_component;
 
 use crate::player::player_controller::PlayerController;
@@ -50,6 +50,10 @@ impl PlayerCameraController {
         region_map: Res<RegionMap>,
         voxel_registry: Res<VoxelModelRegistry>,
     ) {
+        // TODO: Rn I borrow my archetype which like is okay in this case cause it works but like also
+        // can be unpredictable from a development pov, maybe would be good to do borrowing
+        // on a per entity level for single/disjoint entity get queries and for iterative queries
+        // we can borrow on the archetype-level.
         let Some((camera_entity, (camera_transform, controller))) = ecs_world
             .query::<(&mut Transform, &mut PlayerCameraController)>()
             .into_iter()
@@ -71,14 +75,26 @@ impl PlayerCameraController {
         controller.euler = Vector2::new(look_at.x, look_at.y);
         let target_rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), controller.euler.y)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -controller.euler.x);
-        let anchor_pos = player_transform.position + Vector3::y() * 0.63;
+
+        let head_entity = ecs_world
+            .find_first_child_by_name(player_entity, "camera_anchor")
+            .expect("Head entity should exist for camera anchor.");
+        let head_world_transform = ecs_world.get_world_transform(
+            head_entity,
+            &ecs_world.get::<&Transform>(head_entity).unwrap(),
+        );
+        let anchor_pos = head_world_transform.position;
+
         let ray = Ray::new(anchor_pos, target_rot.transform_vector(&-Vector3::z()));
         // Raycast needs more testing first.
-        //let raycast = region_map.raycast_terrain(&voxel_registry, &ray, controller.distance);
-        //let raycast_t = raycast.as_ref().map_or(controller.distance, |hit| {
-        //    (hit.model_trace.depth_t - 1.0).clamp(0.0, controller.distance)
-        //});
-        let mut target_pos = anchor_pos + ray.dir * controller.distance;
+        let raycast = region_map.raycast_terrain(&voxel_registry, &ray, controller.distance);
+        /// How close the camera can be to the terrain.
+        const CAMERA_TERRAIN_DISTANCE_BUFFER: f32 = 0.2;
+        let raycast_t = raycast.as_ref().map_or(controller.distance, |hit| {
+            (hit.model_trace.depth_t - CAMERA_TERRAIN_DISTANCE_BUFFER)
+                .clamp(0.0, controller.distance)
+        });
+        let mut target_pos = anchor_pos + ray.dir * raycast_t;
         //if let Some(raycast) = raycast {}
         camera_transform.position = camera_transform.position.lerp(&target_pos, 1.0);
         camera_transform.rotation = target_rot;

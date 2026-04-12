@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 use crate::graphics::backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId};
 use crate::graphics::device::DeviceResource;
-use crate::world::terrain::region_map::RegionPos;
+use crate::world::terrain::region_pos::RegionPos;
 
 // Flat array of chunks which acts as a sliding window as the player.
 pub struct TerrainRenderableWindow {

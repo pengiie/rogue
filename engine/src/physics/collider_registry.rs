@@ -13,7 +13,7 @@ use crate::physics::{
     collider_component::EntityColliders,
     transform::Transform,
 };
-use crate::world::terrain::region_map::RegionPos;
+use crate::world::terrain::region_pos::RegionPos;
 use crate::common::{
     dyn_vec::{DynVecCloneable, TypeInfoCloneable},
     vtable,

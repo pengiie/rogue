@@ -9,10 +9,12 @@ use crate::{
     resource::ResMut,
 };
 use nalgebra::Vector3;
+use crate::world::terrain::chunk_lod::ChunkLOD;
 use crate::world::terrain::region_map::{
-    ChunkEvent, ChunkEventType, ChunkId, ChunkLOD, RegionEvent,
-    RegionMap, RegionPos,
+    ChunkEvent, ChunkEventType, ChunkId, RegionEvent,
+    RegionMap,
 };
+use crate::world::terrain::region_pos::RegionPos;
 
 pub struct WorldStreamingOptions {
     pub origin_region: RegionPos,

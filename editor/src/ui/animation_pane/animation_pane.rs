@@ -374,6 +374,7 @@ impl AnimationPane {
 
         ui.vertical(|ui| {
             ui.style_mut().spacing.item_spacing.y = 0.0;
+            let mut visited_track_entities = HashSet::new();
             for track in &animation.tracks {
                 if !track.track_id.matches_prefix(
                     entity_traversal,
@@ -427,6 +428,10 @@ impl AnimationPane {
                     );
                 } else {
                     let next_entity_name = &track.track_id.entity_traversal[entity_traversal.len()];
+                    if visited_track_entities.contains(next_entity_name) {
+                        continue;
+                    }
+                    visited_track_entities.insert(next_entity_name.clone());
                     ui.horizontal(|ui| {
                         rendered_tracks.push(RenderedTrack {
                             entity_traversal: entity_traversal.clone(),

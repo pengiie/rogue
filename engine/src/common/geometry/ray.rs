@@ -166,7 +166,10 @@ impl Ray {
     }
 
     pub fn intersect_point(&self, point: Vector3<f32>) -> Vector3<f32> {
-        return self.inv_dir.component_mul(&(point - self.origin));
+        return self
+            .inv_dir
+            .component_mul(&(point - self.origin))
+            .map(|x| if x.is_infinite() { 1000000.00 } else { x });
     }
 
     /// Returns the t-value to advance to the AABB, only in the positive direction.

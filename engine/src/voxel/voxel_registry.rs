@@ -470,4 +470,50 @@ impl VoxelModelRegistry {
         // Safety: We iterate and populdate each element 0..N.
         return dyn_refs.map(|dyn_ref| unsafe { dyn_ref.assume_init() });
     }
+
+    pub fn get_dyn_model_mut_disjoint_vec<'a>(
+        &'a mut self,
+        ids: Vec<VoxelModelId>,
+    ) -> Vec<&'a mut dyn VoxelModelImplMethods> {
+        let mut unique_ids = HashSet::new();
+        for id in &ids {
+            let new_entry = unique_ids.insert(id);
+            assert!(
+                new_entry,
+                "Id {:?} is not unique and ids must be disjoint",
+                ids
+            );
+        }
+
+        let mut dyn_refs = (0..ids.len())
+            .map(|_| MaybeUninit::uninit())
+            .collect::<Vec<_>>();
+        for i in 0..ids.len() {
+            let id = &ids[i];
+            let info = self
+                .voxel_model_info
+                .get(id.handle)
+                .expect("Given id doesn't exist.");
+            let data = self
+                .voxel_model_data
+                .get_mut(&info.model_type_id)
+                .expect("Given id doesn't exist since its type id doesnt exist in the data vec.");
+            // Safety: We assert the ids are disjoint.
+            let data_ptr =
+                unsafe { data.get_mut_bytes(info.index as usize) }.as_mut_ptr() as *mut u8;
+            let vtable_ptr = self
+                .voxel_model_types
+                .get(&info.model_type_id)
+                .expect("Type should exist")
+                .model_impl_vtable;
+            // Safety: Dyn ref is just a fat pointer with ptr to data and ptr to the vtable.
+            dyn_refs[i] = unsafe { std::mem::transmute((data_ptr, vtable_ptr)) };
+        }
+
+        // Safety: We iterate and populdate each element 0..ids.len().
+        return dyn_refs
+            .into_iter()
+            .map(|dyn_ref| unsafe { dyn_ref.assume_init() })
+            .collect();
+    }
 }
