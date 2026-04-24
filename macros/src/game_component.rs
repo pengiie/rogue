@@ -108,27 +108,27 @@ pub fn impl_game_component_attr(attr: TokenStream, input: TokenStream) -> TokenS
         let field_ty = &field.ty;
         let field_name = &field.ident;
         quote! {
-            #crate_name::animation::animation::AnimationPropertyTypeInfo::new::<#field_ty>(stringify!(#field_name).to_owned())
+            #crate_name::animation::animation_property::AnimationPropertyTypeInfo::new::<#field_ty>(stringify!(#field_name).to_owned())
         }
     });
     let animation_property_get_arms = animation_properties.iter().map(|field| {
         let field_name = &field.ident;
         let field_ty = &field.ty;
         quote! {
-            stringify!(#field_name) => &mut self.#field_name as &mut dyn #crate_name::animation::animation::AnimationPropertyMethods,
+            stringify!(#field_name) => &mut self.#field_name as &mut dyn #crate_name::animation::animation_property::AnimationPropertyMethods,
         }
     });
 
     let animation_properties_impl = if !animation_properties.is_empty() {
         quote! {
-            fn animation_properties() -> Vec<#crate_name::animation::animation::AnimationPropertyTypeInfo> {
+            fn animation_properties() -> Vec<#crate_name::animation::animation_property::AnimationPropertyTypeInfo> {
                 vec![
                     #(#animation_property_type_infos),*
                 ]
             }
 
 
-            fn get_animation_property(&mut self, property: &str) -> &mut dyn #crate_name::animation::animation::AnimationPropertyMethods {
+            fn get_animation_property(&mut self, property: &str) -> &mut dyn #crate_name::animation::animation_property::AnimationPropertyMethods {
                 match property {
                     #(#animation_property_get_arms)*
                     _ => panic!("No animation property named {}", property),

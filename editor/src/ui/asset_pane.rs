@@ -10,6 +10,7 @@ use crate::ui::{EditorCommand, asset_properties_pane::AssetPropertiesPane, pane:
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default = "AssetsPane::new")]
 pub struct AssetsPane {
+    #[serde(skip)]
     root_folder: AssetFolder,
 }
 
@@ -17,6 +18,7 @@ pub struct AssetsPane {
 #[serde(default = "AssetFolder::default")]
 struct AssetFolder {
     folder_absolute_path: PathBuf,
+    folder_relative_path: PathBuf,
     open: bool,
 
     #[serde(skip)]
@@ -30,6 +32,7 @@ impl AssetFolder {
     pub fn default() -> Self {
         Self {
             folder_absolute_path: PathBuf::new(),
+            folder_relative_path: PathBuf::new(),
             needs_reload: true,
             files: Vec::new(),
             folders: Vec::new(),
@@ -39,9 +42,10 @@ impl AssetFolder {
 }
 
 impl AssetFolder {
-    pub fn new(folder_path: PathBuf, open: bool) -> Self {
+    pub fn new(folder_path: PathBuf, relative_path: PathBuf, open: bool) -> Self {
         Self {
             folder_absolute_path: folder_path,
+            folder_relative_path: relative_path,
             needs_reload: true,
             files: Vec::new(),
             folders: Vec::new(),
@@ -75,7 +79,11 @@ impl AssetFolder {
                     });
                 } else if path.is_dir() {
                     if !present_folders.contains(&path) {
-                        self.folders.push(AssetFolder::new(path.clone(), false));
+                        self.folders.push(AssetFolder::new(
+                            path.clone(),
+                            relative_path.to_path_buf(),
+                            false,
+                        ));
                     }
                     new_folders.insert(path);
                 }
@@ -105,7 +113,22 @@ impl AssetFolder {
                             .unwrap()
                             .to_string_lossy()
                     );
-                    let label_response = ui.label(folder_str);
+                    let folder_path_str = folder.folder_absolute_path.to_string_lossy().to_string();
+                    let folder_dnd_source_id =
+                        egui::Id::new(format!("{}_dnd_source", folder_path_str));
+                    let folder_game_asset_path =
+                        GameAssetPath::from_relative_dir(&folder.folder_relative_path);
+                    let label_response = ui
+                        .dnd_drag_source::<GameAssetPath, _>(
+                            folder_dnd_source_id,
+                            folder_game_asset_path,
+                            |ui| ui.add(egui::Label::new(folder_str)),
+                        )
+                        .response;
+                    if label_response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                    }
+
                     if label_response.clicked() || rect_response.clicked() {
                         folder.open = !folder.open;
                     }
@@ -138,7 +161,8 @@ impl AssetFolder {
                         game_asset_path.clone(),
                         |ui| ui.add(egui::Label::new(rich_text)),
                     )
-                    .response;
+                    .response
+                    .interact(egui::Sense::click());
                 if label.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -162,13 +186,13 @@ struct AssetItem {
 impl AssetsPane {
     pub fn new() -> Self {
         Self {
-            root_folder: AssetFolder::new(PathBuf::new(), false),
+            root_folder: AssetFolder::new(PathBuf::new(), PathBuf::new(), false),
         }
     }
 
     pub fn update_root_folder(&mut self, folder_path: PathBuf) {
         if self.root_folder.folder_absolute_path != folder_path {
-            self.root_folder = AssetFolder::new(folder_path.clone(), true);
+            self.root_folder = AssetFolder::new(folder_path.clone(), PathBuf::new(), true);
         }
         self.root_folder.open = true;
         self.root_folder.try_reload(&folder_path);

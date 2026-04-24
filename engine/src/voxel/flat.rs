@@ -20,15 +20,21 @@ use super::{
     },
     voxel_allocator::{VoxelDataAllocation, VoxelDataAllocator},
 };
-use crate::common::geometry::ray::Ray;
-use crate::common::geometry::{aabb::AABB, ray::RayAABBHitInfo};
-use crate::graphics::{
-    device::{DeviceResource, GfxDevice},
-    gpu_allocator::{Allocation, GpuBufferAllocator},
+use crate::{common::geometry::ray::Ray, material::model_material_map::ModelMaterialMap};
+use crate::{
+    common::geometry::{aabb::AABB, ray::RayAABBHitInfo},
+    material::material_gpu::MaterialBankGpu,
 };
 use crate::{
     common::{bitset::Bitset, morton::morton_decode},
     consts,
+};
+use crate::{
+    graphics::{
+        device::{DeviceResource, GfxDevice},
+        gpu_allocator::{Allocation, GpuBufferAllocator},
+    },
+    material::material_bank::MaterialBank,
 };
 
 /// A float 1D array representing a 3D voxel region.
@@ -37,6 +43,7 @@ pub struct VoxelModelFlat {
     pub attachment_data: AttachmentMap<Vec<u32>>,
     pub attachment_presence_data: AttachmentMap<Bitset>,
     pub attachment_map: AttachmentInfoMap,
+    pub material_map: ModelMaterialMap,
     pub presence_data: Bitset,
     pub side_length: Vector3<u32>,
     pub volume: usize,
@@ -71,6 +78,7 @@ impl VoxelModelFlat {
             attachment_data,
             attachment_presence_data,
             attachment_map: AttachmentMap::new(),
+            material_map: ModelMaterialMap::new(),
             side_length: length,
             volume,
             update_tracker: 0,
@@ -815,6 +823,8 @@ impl VoxelModelGpuImplMethods for VoxelModelFlatGpu {
     fn update_gpu_objects(
         &mut self,
         device: &mut GfxDevice,
+        material_bank: &MaterialBank,
+        material_bank_gpu: &MaterialBankGpu,
         allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImplMethods,
     ) -> bool {

@@ -75,6 +75,10 @@ impl EditorVoxelEditingEditTools {
             return;
         };
 
+        let Some(voxel_material) = editing.current_voxel_material() else {
+            return;
+        };
+
         match &editing.edit_target {
             Some(EditorVoxelEditingTarget::Entity(target_entity)) => {
                 let valid_raycast_hit = &editor_session
@@ -141,7 +145,7 @@ impl EditorVoxelEditingEditTools {
                         mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
-                        editing.current_voxel_material(),
+                        voxel_material,
                     )),
                 };
                 editing.apply_entity_edit(
@@ -169,7 +173,7 @@ impl EditorVoxelEditingEditTools {
                         })],
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
-                        editing.current_voxel_material(),
+                        voxel_material,
                     )),
                 };
                 editing.apply_terrain_edit(&mut region_map, &mut voxel_registry, edit, true);
@@ -205,6 +209,10 @@ impl EditorVoxelEditingEditTools {
 
         let tool = editing.tools.get(&editing.selected_tool_type).unwrap();
         let EditorEditingTool::Paint { brush_size } = tool else {
+            return;
+        };
+
+        let Some(voxel_material) = editing.current_voxel_material() else {
             return;
         };
 
@@ -248,7 +256,7 @@ impl EditorVoxelEditingEditTools {
                         mask_source: None,
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
-                        editing.current_voxel_material(),
+                        voxel_material,
                     )),
                 };
                 editing.apply_entity_edit(
@@ -278,7 +286,7 @@ impl EditorVoxelEditingEditTools {
                         ],
                     },
                     operator: rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(Some(
-                        editing.current_voxel_material(),
+                        voxel_material,
                     )),
                 };
                 editing.apply_terrain_edit(

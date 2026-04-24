@@ -1,27 +1,8 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel},
 };
 
-use nalgebra::{Vector2, Vector4};
-use rogue_engine::{
-    animation::animation_bank::AnimationBank,
-    asset::asset::Assets,
-    debug::debug_renderer::DebugRenderer,
-    egui::Egui,
-    entity::ecs_world::ECSWorld,
-    event::Events,
-    graphics::camera::MainCamera,
-    material::MaterialBank,
-    physics::physics_world::{self, PhysicsWorld},
-    resource::{Res, ResMut, Resource},
-    voxel::voxel_registry::VoxelModelRegistry,
-    window::window::Window,
-    world::{renderable::rt_pass::WorldRTPass, sky::Sky},
-};
-use rogue_macros::Resource;
-use serde_with::serde_as;
-use rogue_engine::world::terrain::region_map::RegionMap;
 use crate::{
     animation_preview::EditorAnimationPreviewer,
     editing::voxel_editing::EditorVoxelEditing,
@@ -45,6 +26,25 @@ use crate::{
     },
     world::generator::WorldGenerator,
 };
+use nalgebra::{Vector2, Vector4};
+use rogue_engine::material::material_bank::MaterialBank;
+use rogue_engine::world::terrain::region_map::RegionMap;
+use rogue_engine::{
+    animation::animation_bank::AnimationBank,
+    asset::asset::Assets,
+    debug::debug_renderer::DebugRenderer,
+    egui::Egui,
+    entity::ecs_world::ECSWorld,
+    event::Events,
+    graphics::camera::MainCamera,
+    physics::physics_world::{self, PhysicsWorld},
+    resource::{Res, ResMut, Resource},
+    voxel::voxel_registry::VoxelModelRegistry,
+    window::window::Window,
+    world::{renderable::rt_pass::WorldRTPass, sky::Sky},
+};
+use rogue_macros::Resource;
+use serde_with::serde_as;
 
 /// Context that we pass down to every component so we don't have 10 argument functions.
 pub struct EditorUIContext<'a> {
@@ -91,6 +91,7 @@ pub type FilePickerFn = Box<dyn FnOnce(EditorUIContext<'_>, PathBuf)>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilePickerType {
     OpenFile,
+    PickFolder,
     CreateFile,
 }
 
@@ -164,7 +165,12 @@ impl EditorFilePicker {
                 if let Some(callback) = self.file_picker_callback.take()
                     && let Some(file) = file
                 {
-                    if !file.exists() && self.file_picker_type == Some(FilePickerType::OpenFile) {
+                    if !file.exists()
+                        && matches!(
+                            self.file_picker_type,
+                            Some(FilePickerType::OpenFile) | Some(FilePickerType::PickFolder)
+                        )
+                    {
                         log::error!(
                             "File picker tried to open path {:?} which does not exist.",
                             file
@@ -230,6 +236,7 @@ impl EditorFilePicker {
                 let file = match picker_type {
                     FilePickerType::OpenFile => file_picker.pick_file(),
                     FilePickerType::CreateFile => file_picker.save_file(),
+                    FilePickerType::PickFolder => file_picker.pick_folder(),
                 };
                 let _ = sender.send(file);
             });

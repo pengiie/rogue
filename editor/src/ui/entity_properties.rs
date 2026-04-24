@@ -1,17 +1,25 @@
-use nalgebra::Vector3;
+use crate::{
+    editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
+    editor_transform_euler::EditorTransformEuler,
+    session::{EditorCommandEvent, EditorSession},
+    ui::{
+        EditorCommand, EditorCommands, EditorUIContext, FilePickerType,
+        create_voxel_model_dialog::{CreateVoxelModelDialogCreateInfo, create_voxel_model_dialog},
+        pane::{EditorUIPane, EditorUIPaneMethods},
+        resize_model_dialog::{ResizeVoxelModelDialogCreateInfo, resize_voxel_model_dialog_cmd},
+    },
+};
 use rogue_engine::{
     animation::animator::Animator,
     asset::asset::{Assets, GameAssetPath},
-    common::dyn_vec::TypeInfo,
+    audio::AudioPlayer,
     egui::egui_util,
     entity::{
-        EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity,
-        component::{GameComponent, RawComponentRef},
-        ecs_world::{ECSWorld, EntityCommandEvent},
+        EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity, component::GameComponent,
+        ecs_world::EntityCommandEvent,
     },
     event::Events,
     graphics::camera::Camera,
-    material::MaterialId,
     physics::{
         box_collider::BoxCollider,
         capsule_collider::CapsuleCollider,
@@ -23,9 +31,7 @@ use rogue_engine::{
         transform::Transform,
     },
     voxel::{
-        attachment::Attachment,
-        sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelModelEdit, VoxelModelEditRegion, VoxelModelImplMethods},
+        voxel::VoxelModelImplMethods,
         voxel_registry::{VoxelModelId, VoxelModelRegistry},
     },
 };
@@ -34,18 +40,6 @@ use std::{
     any::TypeId,
     collections::{HashMap, HashSet},
     fmt::Display,
-};
-
-use crate::{
-    editing::voxel_editing::{EditorVoxelEditing, EditorVoxelEditingTarget},
-    editor_transform_euler::EditorTransformEuler,
-    session::{EditorCommandEvent, EditorSession},
-    ui::{
-        EditorCommand, EditorCommands, EditorDialog, EditorUIContext, FilePickerType,
-        create_voxel_model_dialog::{CreateVoxelModelDialogCreateInfo, create_voxel_model_dialog},
-        pane::{EditorUIPane, EditorUIPaneMethods},
-        resize_model_dialog::{ResizeVoxelModelDialogCreateInfo, resize_voxel_model_dialog_cmd},
-    },
 };
 
 pub struct ShowComponentContext<'a> {
@@ -111,6 +105,7 @@ impl EntityPropertiesShowFns {
         s.register_component_ui::<RenderableVoxelEntity>(Self::show_renderable_voxel);
         s.register_component_ui::<RigidBody>(Self::show_rigid_body_component);
         s.register_component_ui::<Animator>(Self::show_animator_component);
+        s.register_component_ui::<AudioPlayer>(Self::show_audio_player_component);
 
         // TODO: Expose the editor api as a library and then have the game code able to register
         // editor stuff with a feature or something. Possibly just make the these show fns a global
@@ -481,6 +476,62 @@ impl EntityPropertiesShowFns {
                 ui.label("None selected");
             }
             _ => {}
+        }
+    }
+
+    fn show_audio_player_component(
+        audio_player: &mut AudioPlayer,
+        ui: &mut egui::Ui,
+        ctx: &mut ShowComponentContext,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label("Audio clips:");
+            if ui.button("Create").clicked() {
+                let mut new_sound_name = "new_sound".to_owned();
+                let mut i = 1;
+                while audio_player.sounds.contains_key(&new_sound_name) {
+                    i += 1;
+                    new_sound_name = format!("new_soucd_{}", i);
+                }
+                audio_player.sounds.insert(new_sound_name, None);
+            }
+        });
+
+        let mut to_replace = Vec::new();
+        for (name, path) in audio_player.sounds.iter_mut() {
+            ui.horizontal(|ui| {
+                let edit_id = egui::Id::new(format!("audio_clip_name_{}", name));
+                let name = name.clone();
+                let name_initial = name.clone();
+                let mut edit_temp = ui.data_mut(move |data| {
+                    data.get_temp_mut_or_insert_with(edit_id, move || name_initial)
+                        .clone()
+                });
+                let text_edit = egui::TextEdit::singleline(&mut edit_temp)
+                    .desired_width(100.0)
+                    .show(ui);
+                if text_edit.response.gained_focus() {
+                    edit_temp.clone_from(&name);
+                }
+                if text_edit.response.lost_focus() {
+                    if edit_temp != name {
+                        to_replace.push((name.clone(), edit_temp.clone()));
+                    }
+                }
+
+                ui.data_mut(|data| data.insert_temp(edit_id, edit_temp));
+
+                egui_util::game_asset_path_button(ui, path, "".to_owned(), |_| {});
+            });
+        }
+
+        for (old_name, new_name) in to_replace {
+            if audio_player.sounds.contains_key(&new_name) {
+                continue;
+            }
+            if let Some(path) = audio_player.sounds.remove(&old_name) {
+                audio_player.sounds.insert(new_name, path);
+            }
         }
     }
 

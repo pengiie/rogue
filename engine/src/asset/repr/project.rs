@@ -5,7 +5,9 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::material::MaterialBankDeserializer;
+use crate::material::material_bank::{
+    MaterialBank, MaterialBankDeserializer, MaterialBankMaterialsDeserializer,
+};
 
 use crate::asset::{
     asset::{AssetPath, Assets},
@@ -17,7 +19,7 @@ use crate::entity::{
     ecs_world::{ECSWorld, Entity, ProjectSceneEntitiesVisitor},
 };
 use crate::graphics::camera::MainCamera;
-use crate::material::{Material, MaterialBank};
+use crate::material::MaterialAsset;
 use crate::physics::physics_world::PhysicsWorld;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use crate::world::terrain::region_map::RegionMap;
@@ -89,7 +91,7 @@ impl ProjectAsset {
         ))?;
         let mut de = serde_json::Deserializer::from_str(&json_text.contents);
 
-        const FIELDS: [&str; 3] = ["materials", "project_settings", "scene"];
+        const FIELDS: [&str; 3] = ["material_bank", "project_settings", "scene"];
         Ok(de.deserialize_struct(
             "project",
             &FIELDS,
@@ -132,7 +134,7 @@ impl serde::Serialize for ProjectSerializer<'_> {
         let mut s = ser.serialize_struct("project", 2)?;
         s.serialize_field("project_settings", &self.project_settings);
 
-        s.serialize_field("materials", &self.material_bank);
+        s.serialize_field("material_bank", &self.material_bank);
 
         let entity_uuid_map = self
             .ecs_world
@@ -163,7 +165,7 @@ struct ProjectVisitor {
 enum ProjectField {
     ProjectSettings,
     Scene,
-    Materials,
+    MaterialBank,
 }
 
 impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
@@ -213,9 +215,9 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
                     };
                     map.next_value_seed(visitor)?;
                 }
-                ProjectField::Materials => {
+                ProjectField::MaterialBank => {
                     if visited_materials {
-                        return Err(serde::de::Error::duplicate_field("materials"));
+                        return Err(serde::de::Error::duplicate_field("material_bank"));
                     }
                     visited_materials = true;
                     map.next_value_seed(MaterialBankDeserializer {
@@ -229,7 +231,7 @@ impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
             .ok_or_else(|| serde::de::Error::missing_field("project_settings"))?;
 
         if !visited_materials {
-            log::error!("Project is missing materials field parsing");
+            log::error!("Project is missing material_bank field parsing");
         }
         if !visited_scene {
             log::error!("Project is missing scene field while parsing");

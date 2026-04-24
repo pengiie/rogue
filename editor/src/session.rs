@@ -21,8 +21,7 @@ use rogue_engine::{
     entity::ecs_world::{ECSWorld, Entity},
     event::{EventReader, Events},
     graphics::camera::{Camera, MainCamera},
-    input::{Input, input_buffer::InputBuffer, mouse},
-    material::MaterialBank,
+    input::{input_buffer::InputBuffer, mouse, Input},
     physics::{physics_world::PhysicsWorld, transform::Transform},
     resource::{Res, ResMut},
     voxel::{
@@ -34,6 +33,7 @@ use rogue_engine::{
 };
 use rogue_macros::Resource;
 use winit::event::MouseButton;
+use rogue_engine::material::material_bank::MaterialBank;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EditorCommandEvent {

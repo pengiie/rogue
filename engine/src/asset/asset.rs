@@ -819,27 +819,34 @@ pub enum AssetPathType {
 )]
 pub struct GameAssetPath {
     pub asset_path: String,
+    #[serde(default)]
+    pub is_dir: bool,
 }
 
 impl GameAssetPath {
     /// Expects a path of the form dir::file_name::extension.
-    pub fn new(path: &str) -> Option<Self> {
+    pub fn new(path: &str, is_dir: bool) -> Option<Self> {
         let path_regex: Regex = Regex::new(r"^[a-zA-Z0-9_-]+(::[a-zA-Z0-9_-]+)*$").unwrap();
         if !path_regex.is_match(&path) {
             return None;
         }
 
-        Some(unsafe { Self::new_unchecked(path) })
+        Some(unsafe { Self::new_unchecked(path, is_dir) })
     }
 
     /// Same as `new` but does not check the path to see if it is valid.
-    pub unsafe fn new_unchecked(path: &str) -> Self {
+    pub unsafe fn new_unchecked(path: &str, is_dir: bool) -> Self {
         Self {
             asset_path: path.to_string(),
+            is_dir,
         }
     }
 
     pub fn as_file_asset_path(&self, project_dir: &Path) -> AssetPath {
+        assert!(
+            !self.is_dir,
+            "Cannot get file asset path for a directory asset path."
+        );
         let rel = self.as_relative_path();
         let full_path = project_dir.join("./assets").join(rel);
         AssetPath {
@@ -850,6 +857,25 @@ impl GameAssetPath {
 
     pub fn extension(&self) -> &str {
         self.asset_path.split("::").last().unwrap()
+    }
+
+    pub fn from_relative_dir(path: &Path) -> Self {
+        let mut s = String::new();
+        let last_i = path.components().count() - 1;
+        for (i, p) in path.iter().enumerate() {
+            let p = p.to_string_lossy().to_string();
+            s.push_str(&p);
+            if i < last_i {
+                s.push_str("::");
+            }
+        }
+        Self::new(&s, true).unwrap_or_else(|| {
+            panic!(
+                "Invalid relative path for asset: {}, created {}",
+                path.to_string_lossy(),
+                s,
+            )
+        })
     }
 
     pub fn from_relative_path(path: &Path) -> Self {
@@ -872,7 +898,7 @@ impl GameAssetPath {
                 s.push_str("::");
             }
         }
-        Self::new(&s).unwrap_or_else(|| {
+        Self::new(&s, false).unwrap_or_else(|| {
             panic!(
                 "Invalid relative path for asset: {}, created {}",
                 path.to_string_lossy(),
@@ -887,6 +913,31 @@ impl GameAssetPath {
             .strip_prefix(".")
             .unwrap()
             .to_owned()
+    }
+
+    pub fn as_relative_dir_path_str(&self) -> String {
+        assert!(
+            self.is_dir,
+            "Cannot get relative directory path for a file asset path."
+        );
+        self.as_relative_dir_path()
+            .to_string_lossy()
+            .strip_prefix(".")
+            .unwrap()
+            .to_owned()
+    }
+
+    pub fn as_relative_dir_path(&self) -> PathBuf {
+        assert!(
+            self.is_dir,
+            "Cannot get relative directory path for a file asset path."
+        );
+        let mut strs = self.asset_path.split("::");
+        let mut path = PathBuf::from("./");
+        while let Some(str) = strs.next() {
+            path = path.join(str);
+        }
+        path
     }
 
     pub fn as_relative_path(&self) -> PathBuf {
@@ -933,14 +984,14 @@ impl AssetPath {
 
     pub fn new_project_file(project_dir: PathBuf) -> Self {
         Self {
-            asset_path: Some(unsafe { GameAssetPath::new_unchecked("project::json") }),
+            asset_path: Some(unsafe { GameAssetPath::new_unchecked("project::json", false) }),
             path: project_dir.join("project.json"),
         }
     }
 
     /// Searches in the editor/runtime required assets that are project independent.
     pub fn new_binary_dir(path: impl AsRef<str>) -> Self {
-        let path = GameAssetPath::new(path.as_ref()).unwrap();
+        let path = GameAssetPath::new(path.as_ref(), false).unwrap();
         Self {
             asset_path: Some(path.clone()),
             path: Self::into_file_path(&path.asset_path, Path::new("./assets/")),
@@ -949,7 +1000,7 @@ impl AssetPath {
 
     /// Searches in the projects assets directory for the editor and runtime.
     pub fn new_project_dir(project_dir: PathBuf, path: impl AsRef<str>) -> Self {
-        let path = GameAssetPath::new(path.as_ref()).unwrap();
+        let path = GameAssetPath::new(path.as_ref(), false).unwrap();
         let path_buf = Self::into_file_path(&path.asset_path, &project_dir.join("../../../assets"));
         Self {
             asset_path: Some(path),
@@ -958,7 +1009,7 @@ impl AssetPath {
     }
 
     pub fn new_terrain_dir(terrain_dir: PathBuf, path: impl AsRef<str>) -> Self {
-        let path = GameAssetPath::new(path.as_ref()).unwrap();
+        let path = GameAssetPath::new(path.as_ref(), false).unwrap();
         let path_buf = Self::into_file_path(&path.asset_path, &terrain_dir);
         Self {
             asset_path: Some(path),
@@ -968,7 +1019,7 @@ impl AssetPath {
 
     /// Searches in the projects assets directory for the editor and runtime.
     pub fn new_game_assets_dir(assets_dir: PathBuf, path: impl AsRef<str>) -> Self {
-        let path = GameAssetPath::new(path.as_ref()).expect("Failed to parse asset_path");
+        let path = GameAssetPath::new(path.as_ref(), false).expect("Failed to parse asset_path");
         let path_buf = Self::into_file_path(&path.asset_path, &assets_dir);
         Self {
             asset_path: Some(path),
@@ -1003,7 +1054,7 @@ impl AssetPath {
             }
         }
         Self {
-            asset_path: Some(unsafe { GameAssetPath::new_unchecked(&s) }),
+            asset_path: Some(unsafe { GameAssetPath::new_unchecked(&s, false) }),
             path: path.to_owned(),
         }
     }

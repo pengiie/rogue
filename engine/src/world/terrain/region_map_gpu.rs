@@ -1,11 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use crate::material::material_bank::MaterialBank;
+use crate::material::material_gpu::MaterialBankGpu;
+use crate::voxel::voxel_registry::VoxelModelRegistry;
+use crate::voxel::voxel_registry_gpu::GpuModelAllocationContext;
 use crate::world::terrain::chunk_lod::ChunkLOD;
 use crate::world::terrain::region::{WorldRegion, WorldRegionNode};
-use crate::world::terrain::region_map::{ChunkEvent, ChunkEventType, RegionEvent, RegionMap};
+use crate::world::terrain::region_map::{
+    ChunkEvent, ChunkEventType, ChunkId, RegionEvent, RegionMap,
+};
 use crate::world::terrain::region_pos::RegionPos;
 use crate::world::terrain::region_window_gpu::TerrainRenderableWindow;
 use crate::{
@@ -27,7 +33,9 @@ use crate::{
 pub struct RegionMapGpu {
     region_event_reader: EventReader<RegionEvent>,
     chunk_event_reader: EventReader<ChunkEvent>,
-    to_write_regions: Vec<RegionPos>,
+
+    pending_write_regions: HashSet<RegionPos>,
+    pending_write_chunks: HashSet<ChunkId>,
 
     region_window: TerrainRenderableWindow,
 
@@ -40,7 +48,8 @@ impl RegionMapGpu {
         Self {
             region_event_reader: EventReader::new(),
             chunk_event_reader: EventReader::new(),
-            to_write_regions: Vec::new(),
+            pending_write_regions: HashSet::new(),
+            pending_write_chunks: HashSet::new(),
             region_gpu_allocations: HashMap::new(),
             region_data_buffer: GpuBufferAllocator::new(
                 device,
@@ -57,9 +66,23 @@ impl RegionMapGpu {
         mut region_map_gpu: ResMut<RegionMapGpu>,
         mut device: ResMut<DeviceResource>,
         mut region_map: ResMut<RegionMap>,
+        material_bank: Res<MaterialBank>,
+        material_bank_gpu: Res<MaterialBankGpu>,
+        voxel_registry: Res<VoxelModelRegistry>,
         mut voxel_registry_gpu: ResMut<VoxelModelRegistryGpu>,
+        mut baker_gpu: ResMut<VoxelBakerGpu>,
+        events: Res<Events>,
     ) {
-        region_map_gpu.write_region_render_data(&mut device, &region_map, &voxel_registry_gpu);
+        region_map_gpu.write_region_render_data(
+            &mut device,
+            &region_map,
+            &material_bank,
+            &material_bank_gpu,
+            &voxel_registry,
+            &mut voxel_registry_gpu,
+            &events,
+            &mut baker_gpu,
+        );
         region_map_gpu.region_window.update_gpu_objects(&mut device);
         region_map_gpu.region_window.write_render_data(&mut device);
     }
@@ -95,10 +118,11 @@ impl RegionMapGpu {
             child_mask,
         } in &region.tree.nodes
         {
-            let model_handle =
-                (*model_ptr != u32::MAX).then(|| &region.model_handles[*model_ptr as usize]);
+            let model_handle = (*model_ptr != u32::MAX)
+                .then(|| region.chunk_handles[*model_ptr as usize].model_id)
+                .flatten();
             let gpu_model_ptr = model_handle
-                .map(|handle| voxel_registry_gpu.get_model_gpu_ptr(handle))
+                .map(|handle| voxel_registry_gpu.get_model_gpu_ptr(&handle))
                 .flatten()
                 .unwrap_or(0xFFFF_FFFF);
             bytes.extend_from_slice(&gpu_model_ptr.to_le_bytes());
@@ -113,9 +137,145 @@ impl RegionMapGpu {
         &mut self,
         device: &mut DeviceResource,
         region_map: &RegionMap,
-        voxel_registry_gpu: &VoxelModelRegistryGpu,
+        material_bank: &MaterialBank,
+        material_bank_gpu: &MaterialBankGpu,
+        voxel_registry: &VoxelModelRegistry,
+        voxel_registry_gpu: &mut VoxelModelRegistryGpu,
+        events: &Events,
+        baker_gpu: &mut VoxelBakerGpu,
     ) {
-        for region_pos in self.to_write_regions.drain(..) {
+        // Handle region events.
+        for event in self.region_event_reader.read(events) {
+            self.pending_write_regions.insert(event.region_pos);
+        }
+
+        for event in self.chunk_event_reader.read(&events) {
+            match event.event_type {
+                ChunkEventType::Loaded | ChunkEventType::Updated => {
+                    let Some(model_id) = region_map.get_chunk_model(&event.chunk_id) else {
+                        continue;
+                    };
+                    self.pending_write_chunks.insert(event.chunk_id);
+                    //baker_gpu.create_chunk_bake_request(
+                    //    event.chunk_id,
+                    //    crate::voxel::baker_gpu::ModelBakeRequest {
+                    //        offset: Vector3::new(0, 0, 0),
+                    //        size: Vector3::new(
+                    //            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //        ),
+                    //    },
+                    //);
+                    //for neighbor in event.chunk_id.neighbors() {
+                    //    if let Some(neighbor_model_id) = region_map.get_chunk_model(&neighbor) {
+                    //        voxel_registry_gpu.invalidate_gpu_model_material(
+                    //            VoxelModelGpuInvalidationInfo {
+                    //                model_id: neighbor_model_id,
+                    //                offset: Vector3::new(0, 0, 0),
+                    //                size: Vector3::new(
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                ),
+                    //            },
+                    //        );
+                    //        baker_gpu.create_chunk_bake_request(
+                    //            neighbor,
+                    //            crate::voxel::baker_gpu::ModelBakeRequest {
+                    //                offset: Vector3::new(0, 0, 0),
+                    //                size: Vector3::new(
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                    //                ),
+                    //            },
+                    //        );
+                    //    }
+                    //}
+                }
+                ChunkEventType::Unloaded => {}
+            }
+        }
+
+        let mut finished_write_chunks = HashSet::new();
+        for chunk_id in &self.pending_write_chunks {
+            let region_pos = chunk_id.chunk_pos.get_region_pos();
+            if (!self.region_window.contains_region(region_pos)) {
+                finished_write_chunks.insert(*chunk_id);
+                continue;
+            }
+
+            let Some(voxel_model_id) = region_map.get_chunk_model(chunk_id) else {
+                // Chunk could have been unloaded while we were trying to allocate it.
+                finished_write_chunks.insert(*chunk_id);
+                continue;
+            };
+            let success = voxel_registry_gpu.allocate_or_update_model(
+                &mut GpuModelAllocationContext {
+                    device,
+                    registry: voxel_registry,
+                    material_bank: material_bank,
+                    material_bank_gpu: material_bank_gpu,
+                },
+                voxel_model_id,
+            );
+
+            if success {
+                finished_write_chunks.insert(*chunk_id);
+                self.pending_write_regions.insert(region_pos);
+
+                baker_gpu.create_chunk_bake_request(
+                    *chunk_id,
+                    crate::voxel::baker_gpu::ModelBakeRequest {
+                        offset: Vector3::new(0, 0, 0),
+                        size: Vector3::new(
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                            consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                        ),
+                    },
+                );
+                for neighbor in chunk_id.neighbors() {
+                    if let Some(neighbor_model_id) = region_map.get_chunk_model(&neighbor) {
+                        voxel_registry_gpu.invalidate_gpu_model_material(
+                            &mut GpuModelAllocationContext {
+                                device,
+                                registry: voxel_registry,
+                                material_bank: material_bank,
+                                material_bank_gpu: material_bank_gpu,
+                            },
+                            VoxelModelGpuInvalidationInfo {
+                                model_id: neighbor_model_id,
+                                offset: Vector3::new(0, 0, 0),
+                                size: Vector3::new(
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                ),
+                            },
+                        );
+                        baker_gpu.create_chunk_bake_request(
+                            neighbor,
+                            crate::voxel::baker_gpu::ModelBakeRequest {
+                                offset: Vector3::new(0, 0, 0),
+                                size: Vector3::new(
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                    consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
+                                ),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        for chunk_id in finished_write_chunks {
+            self.pending_write_chunks.remove(&chunk_id);
+        }
+
+        // Regions which had atleast one of their chunks updated.
+        for region_pos in self.pending_write_regions.drain() {
             if !self.region_window.contains_region(region_pos) {
                 // Region is outside our render distance.
                 continue;
@@ -169,87 +329,6 @@ impl RegionMapGpu {
         // towards the registry doesn't affect the baking, that is manual so the registry doesn't
         // need to know about where the voxel model is from. And so in that case we just just
         // listen to the chunk event
-        for event in region_map_gpu.chunk_event_reader.read(&events) {
-            match event.event_type {
-                ChunkEventType::Loaded | ChunkEventType::Updated => {
-                    let Some(model_id) = region_map.get_chunk_model(&event.chunk_id) else {
-                        continue;
-                    };
-                    baker_gpu.create_chunk_bake_request(
-                        event.chunk_id,
-                        crate::voxel::baker_gpu::ModelBakeRequest {
-                            offset: Vector3::new(0, 0, 0),
-                            size: Vector3::new(
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                            ),
-                        },
-                    );
-                    if voxel_registry_gpu.get_model_gpu_ptr(&model_id).is_some() {
-                        voxel_registry_gpu.mark_gpu_model_update(&model_id);
-                        // TODO: Remove this and figure out a nicer way to allocate the gpu models,
-                        // i dont think command buffer based is the best since it requires a two
-                        // pass thing for model updates and it'd be nicer to know if the gpu model
-                        // ptr changed when we need it.
-                        region_map_gpu
-                            .to_write_regions
-                            .push(event.chunk_id.chunk_pos.get_region_pos());
-                    }
-
-                    for neighbor in event.chunk_id.neighbors() {
-                        if let Some(neighbor_model_id) = region_map.get_chunk_model(&neighbor) {
-                            voxel_registry_gpu.invalidate_gpu_model_material(
-                                VoxelModelGpuInvalidationInfo {
-                                    model_id: neighbor_model_id,
-                                    offset: Vector3::new(0, 0, 0),
-                                    size: Vector3::new(
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                    ),
-                                },
-                            );
-                            baker_gpu.create_chunk_bake_request(
-                                neighbor,
-                                crate::voxel::baker_gpu::ModelBakeRequest {
-                                    offset: Vector3::new(0, 0, 0),
-                                    size: Vector3::new(
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                        consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
-                                    ),
-                                },
-                            );
-                        }
-                    }
-                }
-                ChunkEventType::Unloaded => {}
-            }
-        }
-
-        // Handle region events.
-        for event in region_map_gpu.region_event_reader.read(&events) {
-            region_map_gpu.to_write_regions.push(event.region_pos);
-        }
-
-        for region_pos in &region_map_gpu.to_write_regions {
-            if !region_map_gpu.region_window.contains_region(*region_pos) {
-                // Region is outside our render distance.
-                continue;
-            }
-
-            let region_data = region_map
-                .get_region(&region_pos)
-                .expect("If the region is in `to_write_regions` then it should be loaded");
-            for model in &region_data.model_handles {
-                if let Some(gpu_model_ptr) = voxel_registry_gpu.get_model_gpu_ptr(model) {
-                    // Model is already on the GPU, nothing to do.
-                    continue;
-                }
-                voxel_registry_gpu.load_gpu_model(*model);
-            }
-        }
     }
 
     pub fn region_data_buffer(&self) -> &ResourceId<Buffer> {

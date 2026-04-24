@@ -1,6 +1,7 @@
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use rogue_engine::animation::animator::Animator;
 use rogue_engine::asset::asset::GameAssetPath;
+use rogue_engine::audio::{AudioPlayer, PlaySoundInfo};
 use rogue_engine::common::geometry::ray::Ray;
 use rogue_engine::consts;
 use rogue_engine::input::gamepad;
@@ -90,15 +91,17 @@ impl PlayerController {
         mut window: ResMut<Window>,
         time: Res<Time>,
     ) {
-        let Some((entity, (mut transform, rigid_body, controller, animator))) = ecs_world
-            .query_mut::<(
-                &mut Transform,
-                &RigidBody,
-                &mut PlayerController,
-                &mut Animator,
-            )>()
-            .into_iter()
-            .next()
+        let Some((entity, (mut transform, rigid_body, controller, animator, audio_player))) =
+            ecs_world
+                .query_mut::<(
+                    &mut Transform,
+                    &RigidBody,
+                    &mut PlayerController,
+                    &mut Animator,
+                    &mut AudioPlayer,
+                )>()
+                .into_iter()
+                .next()
         else {
             return;
         };
@@ -153,6 +156,16 @@ impl PlayerController {
             || input.is_controller_button_pressed(gamepad::Button::East);
         if did_input_jump {
             controller.input_state.last_jump = Some(time.curr_time());
+        }
+
+        if input.is_controller_button_pressed(gamepad::Button::West) {
+            audio_player.play_sound(
+                "footstep",
+                PlaySoundInfo {
+                    speed: 1.0,
+                    pitch_shift: 1.0,
+                },
+            );
         }
 
         // Update animation.

@@ -27,9 +27,8 @@ impl GameEntity {
 
     /// Keeps the name, appending/incrementing a number suffix.
     /// Creates a new Uuid.
-    pub fn duplicate(&self) -> Self {
-        let name = format!("{} copy", self.name);
-
+    pub fn duplicate(&self, new_name: Option<String>) -> Self {
+        let mut name = new_name.unwrap_or_else(|| self.name.clone());
         Self {
             uuid: uuid::Uuid::new_v4(),
             name,

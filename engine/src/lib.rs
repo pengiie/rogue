@@ -21,6 +21,7 @@ pub mod resource;
 pub mod settings;
 pub mod system;
 pub mod task;
+pub mod ui;
 pub mod util;
 pub mod voxel;
 pub mod window;

@@ -1,6 +1,10 @@
-use rogue_engine::world::sky::Sky;
+use rogue_engine::{
+    asset::asset::GameAssetPath,
+    egui::egui_util,
+    world::{sky::Sky, terrain::region_map::RegionMapCommandEvent},
+};
 
-use crate::ui::pane::EditorUIPane;
+use crate::ui::{EditorCommand, FilePickerType, pane::EditorUIPane};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct WorldPane;
@@ -26,7 +30,33 @@ impl WorldPane {
                     ui.checkbox(&mut enabled, "");
                     ctx.world_generator.paused = !enabled;
                 });
-                ui.horizontal(|ui| ui.label("Terrain: "));
+                ui.horizontal(|ui| {
+                    let save_path = ctx.region_map.disk.as_ref().map(|disk| disk.regions_dir());
+                    ui.label("Terrain:");
+                    let (res, new_path) =
+                        ui.dnd_drop_zone::<GameAssetPath, _>(egui::Frame::new(), |ui| {
+                            let asset_title = match save_path {
+                                Some(path) => path.as_relative_dir_path_str(),
+                                None => "None".to_string(),
+                            };
+                            ui.menu_button(asset_title, |ui| {
+                                if ui
+                                    .add_enabled(save_path.is_some(), egui::Button::new("Save"))
+                                    .clicked()
+                                {
+                                    ctx.events.push(RegionMapCommandEvent::Save);
+                                    ui.close_menu();
+                                }
+                            });
+                        });
+                    if let Some(new_path) = new_path
+                        && save_path != Some(&*new_path)
+                    {
+                        ctx.events.push(RegionMapCommandEvent::SetRegionsDir {
+                            region_dir: (*new_path).clone(),
+                        });
+                    }
+                });
             });
         egui::CollapsingHeader::new("Sky")
             .default_open(true)

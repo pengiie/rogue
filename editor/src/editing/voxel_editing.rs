@@ -1,40 +1,5 @@
 use std::collections::{HashMap, VecDeque};
 
-use nalgebra::{Isometry3, UnitQuaternion, Vector2, Vector3};
-use rogue_engine::{
-    common::{
-        color::{Color, ColorSpaceSrgb, ColorSrgba},
-        geometry::ray::Ray,
-    },
-    consts,
-    debug::debug_renderer::{DebugRenderer, DebugShapeFlags},
-    entity::{
-        RenderableVoxelEntity,
-        ecs_world::{ECSWorld, Entity},
-    },
-    event::{EventReader, Events},
-    input::{
-        Input,
-        keyboard::{self, Key},
-        mouse,
-    },
-    material::MaterialId,
-    physics::transform::Transform,
-    resource::{Res, ResMut, ResourceBank},
-    voxel::{
-        attachment::Attachment,
-        sft_compressed::VoxelModelSFTCompressed,
-        voxel::{
-            VoxelMaterialData, VoxelModelEdit, VoxelModelEditMask, VoxelModelEditMaskLayer,
-            VoxelModelEditOperator, VoxelModelEditRegion, VoxelModelImpl,
-        },
-        voxel_registry::{VoxelModelEvent, VoxelModelId, VoxelModelRegistry},
-    },
-    world::terrain::region_map::{ChunkId, RegionMap, VoxelTerrainEdit},
-};
-use rogue_macros::Resource;
-use strum::{IntoDiscriminant, IntoEnumIterator, VariantArray};
-
 use crate::{
     editing::{
         voxel_editing_color_picker::EditorVoxelEditingColorPicker,
@@ -45,6 +10,30 @@ use crate::{
     },
     session::{EditorEvent, EditorSession},
 };
+use nalgebra::Vector3;
+use rogue_engine::material::{material_bank::MaterialId, model_material_map::ModelMaterialMap};
+use rogue_engine::{
+    common::color::ColorSrgba,
+    entity::{
+        RenderableVoxelEntity,
+        ecs_world::{ECSWorld, Entity},
+    },
+    event::{EventReader, Events},
+    input::{
+        Input,
+        keyboard::{self},
+        mouse,
+    },
+    resource::{Res, ResMut, ResourceBank},
+    voxel::{
+        sft_compressed::VoxelModelSFTCompressed,
+        voxel::{VoxelMaterialData, VoxelModelEdit, VoxelModelEditMaskLayer},
+        voxel_registry::{VoxelModelEvent, VoxelModelId, VoxelModelRegistry},
+    },
+    world::terrain::region_map::{ChunkId, RegionMap, VoxelTerrainEdit},
+};
+use rogue_macros::Resource;
+use strum::{IntoDiscriminant, IntoEnumIterator};
 
 struct EditorVoxelSelection {
     min: Vector3<u32>,
@@ -125,7 +114,7 @@ pub struct EditorVoxelEditing {
     pub selected_tool_type: EditorEditingToolType,
     pub editing_material: EditorEditingMaterial,
     pub color: ColorSrgba,
-    pub material: MaterialId,
+    pub material: Option<MaterialId>,
 
     pub edit_target: Option<EditorVoxelEditingTarget>,
     /// True if can't change the edit target.
@@ -153,7 +142,7 @@ impl EditorVoxelEditing {
             selected_tool_type: EditorEditingToolType::Pencil,
             editing_material: EditorEditingMaterial::Color,
             color: ColorSrgba::new(1.0, 0.0, 1.0, 1.0),
-            material: MaterialId::null(),
+            material: None,
             draw_entity_bounds: false,
 
             edit_target: None,
@@ -224,7 +213,7 @@ impl EditorVoxelEditing {
                                 } else {
                                     // Set the chunk to empty, only do this if it's not already
                                     // empty.
-                                    if region.get_chunk_model(chunk_id).is_some() {
+                                    if region.get_chunk_data(chunk_id).is_some() {
                                         region.set_chunk_model(&chunk_id, None);
                                         region_map.mark_chunk_updated(&chunk_id);
                                     }
@@ -456,10 +445,10 @@ impl EditorVoxelEditing {
         events.push(VoxelModelEvent::UpdatedModel(model_id))
     }
 
-    pub fn current_voxel_material(&self) -> VoxelMaterialData {
+    pub fn current_voxel_material(&self) -> Option<VoxelMaterialData> {
         match self.editing_material {
-            EditorEditingMaterial::Color => VoxelMaterialData::Baked { color: self.color },
-            EditorEditingMaterial::Material => VoxelMaterialData::Unbaked(self.material.index()),
+            EditorEditingMaterial::Color => Some(VoxelMaterialData::Baked { color: self.color }),
+            EditorEditingMaterial::Material => self.material.map(VoxelMaterialData::Unbaked),
         }
     }
 }

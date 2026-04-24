@@ -6,13 +6,19 @@ use std::{
 
 use nalgebra::Vector3;
 use rand::{Rng, SeedableRng};
+use rogue_engine::material::{
+    material_bank::{MaterialBank, MaterialId},
+    model_material_map::ModelMaterialMap,
+};
+use rogue_engine::world::terrain::chunk_lod::ChunkLOD;
+use rogue_engine::world::terrain::chunk_pos::ChunkPos;
+use rogue_engine::world::terrain::region::RegionTree;
+use rogue_engine::world::terrain::region_map::{ChunkId, RegionMap};
 use rogue_engine::{
-    asset::asset::GameAssetPath
-    ,
+    asset::asset::GameAssetPath,
     consts,
     event::{EventReader, Events},
-    input::{keyboard::Key, Input},
-    material::{MaterialBank, MaterialUpdateEvent},
+    input::{Input, keyboard::Key},
     noise::{
         fbm::{Fbm, FbmOptions},
         perlin::PerlinNoise,
@@ -20,21 +26,13 @@ use rogue_engine::{
     resource::{Res, ResMut},
     task::tasks::Tasks,
     voxel::{
-        attachment::Attachment,
-        flat::VoxelModelFlat
-        ,
-        sft_compressed::VoxelModelSFTCompressed,
-        voxel::VoxelMaterialData,
-        voxel_registry::VoxelModelRegistry,
+        attachment::Attachment, flat::VoxelModelFlat, sft_compressed::VoxelModelSFTCompressed,
+        voxel::VoxelMaterialData, voxel_registry::VoxelModelRegistry,
     },
     world::world_streaming::ChunkStreamEvent,
 };
 use rogue_macros::Resource;
 use wide::CmpGt;
-use rogue_engine::world::terrain::chunk_lod::ChunkLOD;
-use rogue_engine::world::terrain::chunk_pos::ChunkPos;
-use rogue_engine::world::terrain::region::RegionTree;
-use rogue_engine::world::terrain::region_map::{ChunkId, RegionMap};
 
 struct GeneratorMaterials;
 
@@ -61,8 +59,6 @@ pub struct WorldGenerator {
     generated_chunk_recv: std::sync::mpsc::Receiver<GeneratedChunkData>,
     generated_chunk_send: std::sync::mpsc::Sender<GeneratedChunkData>,
 
-    update_material_event_reader: EventReader<MaterialUpdateEvent>,
-
     pub paused: bool,
 }
 
@@ -84,9 +80,7 @@ impl WorldGenerator {
             generated_chunk_recv,
             generated_chunk_send,
 
-            update_material_event_reader: EventReader::new(),
-
-            paused: false,
+            paused: true,
         }
     }
 
@@ -109,20 +103,16 @@ impl WorldGenerator {
             generator.paused = !generator.paused;
         }
 
-        for event in generator.update_material_event_reader.read(&events) {
-            generator.chunk_generator = None;
-        }
-
         if generator.chunk_generator.is_none() {
             if !generator.requested_materials {
                 generator.requested_materials = true;
                 for material in GeneratorMaterials::MATERIALS {
-                    material_bank
-                        .request_material(GameAssetPath::from_relative_path(Path::new(material)));
+                    //material_bank
+                    //    .request_material(GameAssetPath::from_relative_path(Path::new(material)));
                 }
             }
 
-            let mut all_loaded = true;
+            let mut all_loaded = false;
             for material in GeneratorMaterials::MATERIALS {
                 if material_bank
                     .asset_path_map
@@ -211,7 +201,8 @@ pub struct ChunkGenerator {
     sample_offset: Vector3<f32>,
     height_noise: Fbm<PerlinNoise>,
     density_noise: Fbm<PerlinNoise>,
-    material_map: HashMap<String, u32>,
+    model_material_map: ModelMaterialMap,
+    material_name_map: HashMap<String, MaterialId>,
 }
 
 impl ChunkGenerator {
@@ -223,17 +214,15 @@ impl ChunkGenerator {
             (rng.next_u32() % 25600) as f32 * 0.01,
         );
 
-        let mut material_map = HashMap::new();
+        let mut material_map = ModelMaterialMap::new();
+        let mut material_name_map = HashMap::new();
         for material in GeneratorMaterials::MATERIALS {
-            material_map.insert(
-                material.to_owned(),
-                material_bank
-                    .asset_path_map
-                    .get(&GameAssetPath::from_relative_path(Path::new(material)))
-                    .clone()
-                    .unwrap()
-                    .index(),
-            );
+            let Some(material_id) = material_bank.find_first_material_by_name(material) else {
+                log::warn!("Failed to find EditorGenerator material '{}'", material);
+                continue;
+            };
+            material_map.push(material_id);
+            material_name_map.insert(material.to_owned(), material_id);
         }
 
         Self {
@@ -254,7 +243,8 @@ impl ChunkGenerator {
                     gain: 0.5,
                 },
             ),
-            material_map,
+            model_material_map: material_map,
+            material_name_map,
         }
     }
 
@@ -289,12 +279,18 @@ impl ChunkGenerator {
     }
 
     pub fn sample_material(&self, world_voxel_pos: Vector3<f32>, density: f32, height: f32) -> u64 {
-        let mut material_id = 0;
+        let mut material_id = None;
         if density < 0.1 {
-            material_id = *self.material_map.get(GeneratorMaterials::GRASS).unwrap();
+            material_id = self.material_name_map.get(GeneratorMaterials::GRASS);
+        } else {
+            material_id = self.material_name_map.get(GeneratorMaterials::DIRT);
         }
-        material_id = *self.material_map.get(GeneratorMaterials::DIRT).unwrap();
-        return VoxelMaterialData::Unbaked(material_id).encode();
+        let Some(material_id) = material_id else {
+            panic!(
+                "Generator missing material? oops. we shouldn't be running then or populate with backup.."
+            );
+        };
+        return VoxelMaterialData::Unbaked(*material_id).encode(&self.model_material_map);
     }
 
     pub fn sample_chunk_shaping(&self, world_chunk_pos: ChunkPos, lod: ChunkLOD) -> (f32, f32) {

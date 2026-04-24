@@ -185,7 +185,10 @@ impl EditorVoxelEditingSelections {
         let fill_material = if input.is_key_pressed(Key::Delete) {
             None
         } else if input.is_key_pressed(Key::F) {
-            Some(editing.current_voxel_material())
+            let Some(voxel_material) = editing.current_voxel_material() else {
+                return;
+            };
+            Some(voxel_material)
         } else {
             unreachable!()
         };

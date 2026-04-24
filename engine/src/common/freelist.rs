@@ -204,6 +204,23 @@ impl<T> FreeList<T> {
             .unwrap_or(false);
     }
 
+    pub fn has_value_index(&self, index: u32) -> bool {
+        return self
+            .data
+            .get(index as usize)
+            .map(|n| !n.is_null())
+            .unwrap_or(false);
+    }
+
+    /// Doesn't check generation
+    pub fn get_by_index(&self, index: u32) -> Option<&T> {
+        if !self.has_value_index(index) {
+            return None;
+        }
+        let r = unsafe { self.data[index as usize].data.assume_init_ref() };
+        return Some(r.deref());
+    }
+
     pub fn get(&self, handle: FreeListHandle<T>) -> Option<&T> {
         if !self.has_value(handle) {
             return None;

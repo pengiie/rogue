@@ -8,9 +8,11 @@ use std::{
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
-use crate::world::terrain::region::{RegionTree, WorldRegion, WorldRegionNode};
-use crate::world::terrain::region_asset::WorldRegionAsset;
-use crate::world::terrain::region_pos::RegionPos;
+use crate::world::terrain::{region::WorldChunkData, region_pos::RegionPos};
+use crate::world::terrain::{
+    region::{RegionTree, WorldRegion, WorldRegionNode},
+    region_map_disk::RegionMapDisk,
+};
 use crate::{
     asset::asset::GameAssetPath,
     common::geometry::ray::RayDDA,
@@ -62,7 +64,8 @@ pub enum ChunkEventType {
 
 #[derive(Clone, Debug)]
 pub enum RegionMapCommandEvent {
-    SetTerrainAssetPath { asset_path: GameAssetPath },
+    SetRegionsDir { region_dir: GameAssetPath },
+    Save,
 }
 
 pub struct VoxelTerrainRegion {
@@ -92,10 +95,11 @@ impl VoxelTerrainRegion {
                         chunk_lod: ChunkLOD::FULL_RES_LOD,
                     };
                     let region_pos = chunk_pos.get_region_pos();
-                    let chunk_model = region_map
+                    let chunk_data = region_map
                         .get_region(&region_pos)
-                        .and_then(|region| region.get_chunk_model(chunk_id));
-                    affected_chunks.push((chunk_id, chunk_model));
+                        .and_then(|region| region.get_chunk_data(chunk_id));
+                    let chunk_model_id = chunk_data.and_then(|data| data.model_id);
+                    affected_chunks.push((chunk_id, chunk_model_id));
                 }
             }
         }
@@ -184,6 +188,7 @@ pub struct RegionMap {
     /// Regions that are in the process of loading, waiting on
     /// `Assets` to finish processing the region asset.
     pub loading_regions: HashMap<RegionPos, LoadingRegion>,
+    pub loading_chunks: HashMap<ChunkId, ()>,
 
     pub region_events: Vec<RegionEvent>,
     pub chunk_events: Vec<ChunkEvent>,
@@ -194,7 +199,7 @@ pub struct RegionMap {
 
     pub used_materials: HashSet<GameAssetPath>,
 
-    pub save_dir: Option<GameAssetPath>,
+    pub disk: Option<RegionMapDisk>,
 }
 
 impl RegionMap {
@@ -202,6 +207,7 @@ impl RegionMap {
         Self {
             regions: HashMap::new(),
             loading_regions: HashMap::new(),
+            loading_chunks: HashMap::new(),
 
             region_events: Vec::new(),
             chunk_events: Vec::new(),
@@ -209,7 +215,7 @@ impl RegionMap {
 
             to_set_chunk_sfts: HashMap::new(),
             to_apply_edits: Vec::new(),
-            save_dir: None,
+            disk: None,
             used_materials: HashSet::new(),
         }
     }
@@ -303,9 +309,10 @@ impl RegionMap {
                 as usize;
             node_idx = child_ptr + child_index as usize;
         }
-        region.tree.nodes[node_idx]
+        let chunk_data = region.tree.nodes[node_idx]
             .model_ptr()
-            .map(|model_ptr| region.model_handles[model_ptr as usize])
+            .map(|model_ptr| &region.chunk_handles[model_ptr as usize]);
+        return chunk_data.and_then(|data| data.model_id);
     }
 
     /// Enqueues the chunk to be set, will be applied before rendering.
@@ -327,7 +334,7 @@ impl RegionMap {
         let mut region = regions
             .get_mut(&chunk_id.chunk_pos.get_region_pos())
             .expect("Region should exist to set chunk.");
-        return region.set_chunk_model(chunk_id, sft_id);
+        todo!();
     }
 
     pub fn is_region_loaded(&self, region_pos: &RegionPos) -> bool {
@@ -372,6 +379,35 @@ impl RegionMap {
         }
     }
 
+    pub fn update_process_commands(
+        mut region_map: ResMut<RegionMap>,
+        mut assets: ResMut<Assets>,
+        mut events: ResMut<Events>,
+    ) {
+        let region_map = &mut region_map as &mut RegionMap;
+        for event in region_map.command_event_render.read(&events) {
+            match event {
+                RegionMapCommandEvent::SetRegionsDir { region_dir } => {}
+                RegionMapCommandEvent::Save => {
+                    if let Some(save_dir) = &region_map.disk {
+                        let assets_dir = assets
+                            .project_assets_dir()
+                            .expect("Project dir should exist if save dir exists.");
+                        for (region_pos, region) in &region_map.regions {
+                            let region_path = AssetPath::new_game_assets_dir(
+                                assets_dir.clone(),
+                                format!(
+                                    "region_{}_{}_{}",
+                                    region_pos.x, region_pos.y, region_pos.z
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn update_region_loading(
         mut region_map: ResMut<RegionMap>,
         mut assets: ResMut<Assets>,
@@ -394,39 +430,44 @@ impl RegionMap {
                 continue;
             }
 
-            let Some(asset_handle) = asset_handle else {
-                let region_path = AssetPath::new_game_assets_dir(
-                    assets_dir.clone(),
-                    format!("region_{}_{}_{}", region_pos.x, region_pos.y, region_pos.z),
-                );
-                *asset_handle = Some(assets.load_asset::<WorldRegionAsset>(region_path));
-                continue;
-            };
-
             let mut make_empty_region = true;
-            match assets.get_asset_status(&asset_handle) {
-                AssetStatus::InProgress => {}
-                AssetStatus::Saved => unreachable!(),
-                AssetStatus::Loaded => {
-                    make_empty_region = false;
-                    todo!(
-                        "Write loading region data from asset into region map and add to loaded regions list"
-                    );
-                }
-                AssetStatus::NotFound => {
-                    make_empty_region = true;
-                }
-                AssetStatus::Error(error) => {
-                    log::error!(
-                        "Error while loading region {} {} {}. Error: {}",
-                        region_pos.x,
-                        region_pos.y,
-                        region_pos.z,
-                        error
-                    );
-                    make_empty_region = true;
-                }
+            if let Some(disk) = &region_map.disk {
+                //make_empty_region = false;
+                //let Some(asset_handle) = asset_handle else {
+                //    let region_path = AssetPath::new_game_assets_dir(
+                //        assets_dir.clone(),
+                //        format!("region_{}_{}_{}", region_pos.x, region_pos.y, region_pos.z),
+                //    );
+                //    *asset_handle = Some(assets.load_asset::<WorldRegionAsset>(region_path));
+                //    continue;
+                //};
+                //match assets.get_asset_status(&asset_handle) {
+                //    AssetStatus::InProgress => {
+                //        continue;
+                //    }
+                //    AssetStatus::Saved => unreachable!(),
+                //    AssetStatus::Loaded => {
+                //        make_empty_region = false;
+                //        todo!(
+                //            "Write loading region data from asset into region map and add to loaded regions list"
+                //        );
+                //    }
+                //    AssetStatus::NotFound => {
+                //        make_empty_region = true;
+                //    }
+                //    AssetStatus::Error(error) => {
+                //        log::error!(
+                //            "Error while loading region {} {} {}. Error: {}",
+                //            region_pos.x,
+                //            region_pos.y,
+                //            region_pos.z,
+                //            error
+                //        );
+                //        make_empty_region = true;
+                //    }
+                //}
             }
+
             if make_empty_region {
                 region_map
                     .regions
@@ -516,8 +557,14 @@ impl RegionMap {
                             .regions
                             .get_mut(&region_pos)
                             .expect("Region should be loaded.");
-                        let chunk_model_id = match region.get_chunk_model(chunk_id) {
-                            Some(model_id) => model_id,
+                        let chunk_model_id = match region.get_chunk_data(chunk_id) {
+                            Some(WorldChunkData {
+                                model_id: Some(d), ..
+                            }) => todo!(),
+                            // TODO: Enqueue edits for each chunk?
+                            Some(WorldChunkData { model_id: None, .. }) => unreachable!(
+                                "We check that all the regions and chunks touched by the edit are loaded."
+                            ),
                             None => {
                                 let mut empty_chunk_model = VoxelModelSFTCompressed::new_empty(
                                     consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH,
@@ -525,7 +572,10 @@ impl RegionMap {
                                 empty_chunk_model.initialize_attachment_buffers(&Attachment::BMAT);
                                 let voxel_model_id =
                                     voxel_registry.register_voxel_model(empty_chunk_model, None);
-                                let res = region.set_chunk_model(&chunk_id, Some(voxel_model_id));
+                                let res = region.set_chunk_data(
+                                    &chunk_id,
+                                    Some(WorldChunkData::new_with_model(voxel_model_id)),
+                                );
                                 assert!(
                                     res.is_none(),
                                     "WorldRegion::get_chunk_model returned None so there shouldn't be an existing model, chunk id {:?}",
@@ -590,6 +640,27 @@ impl RegionMap {
         if !self.is_region_loaded(region_pos) {
             self.load_region(region_pos);
         }
+    }
+
+    pub fn ensure_chunk_loaded(&mut self, chunk_id: &ChunkId) {
+        let region_pos = chunk_id.chunk_pos.get_region_pos();
+        let Some(region) = self.regions.get(&region_pos) else {
+            self.load_region(&region_pos);
+            return;
+        };
+        let Some(chunk_data) = region.get_chunk_data(*chunk_id) else {
+            // Region exists but chunk not in tree means its empty.
+            return;
+        };
+        if chunk_data.model_id.is_some() {
+            // Chunk exists but has no model means its empty.
+            return;
+        }
+        assert!(
+            chunk_data.chunk_data_io_ptr.is_some(),
+            "Existing chunk without a model should habe an io ptr to load the data/model from."
+        );
+        self.loading_chunks.insert(*chunk_id, ());
     }
 
     pub fn apply_voxel_edit(&mut self, edit: VoxelTerrainEdit) {

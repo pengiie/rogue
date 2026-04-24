@@ -10,9 +10,32 @@ use crate::world::terrain::region_map::{ChunkId, TerrainRaycastHit};
 use crate::world::terrain::region_pos::RegionPos;
 use nalgebra::Vector3;
 
+#[derive(Clone)]
+pub struct WorldChunkData {
+    /// Pointer within the region file where the chunk data for this chunk is stored.
+    pub chunk_data_io_ptr: Option<u64>,
+    pub model_id: Option<VoxelModelId>,
+}
+
+impl WorldChunkData {
+    pub fn new_with_model(model_id: VoxelModelId) -> Self {
+        Self {
+            model_id: Some(model_id),
+            chunk_data_io_ptr: None,
+        }
+    }
+
+    pub fn from_io_ptr(io_ptr: u64) -> Self {
+        Self {
+            model_id: None,
+            chunk_data_io_ptr: Some(io_ptr),
+        }
+    }
+}
+
 pub struct WorldRegion {
     pub tree: RegionTree,
-    pub model_handles: Vec<VoxelModelId>,
+    pub chunk_handles: Vec<WorldChunkData>,
     /// Acts as our refcount, points to leaves/pseudo-leaves which have their model
     /// loaded, they may also not have a model but still count as loaded since we know their
     /// representation.
@@ -27,7 +50,7 @@ impl WorldRegion {
         active_leaves.insert(0);
         Self {
             tree: RegionTree::new_empty(),
-            model_handles: Vec::new(),
+            chunk_handles: Vec::new(),
             active_leaves,
             ref_count: 0,
             region_pos: pos,
@@ -145,23 +168,26 @@ impl WorldRegion {
                     }
                 } else {
                     if let Some(model_ptr) = curr_node.model_ptr() {
-                        let model_id = self.model_handles[model_ptr as usize];
-                        let min = aabb.min
-                            + curr_anchor.cast::<f32>() * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
-                        let max = min.map(|x| x + consts::voxel::TERRAIN_CHUNK_METER_LENGTH);
-                        let chunk_aabb = &AABB::new_two_point(min, max);
-                        if let Some(model_trace) = voxel_registry
-                            .get_dyn_model(model_id)
-                            .trace(&in_ray, chunk_aabb)
-                        {
-                            let world_voxel_pos = (*self.region_pos.into_chunk_pos()
-                                + curr_anchor.cast::<i32>())
-                                * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32
-                                + model_trace.local_position.cast::<i32>();
-                            return Some(TerrainRaycastHit {
-                                world_voxel_pos,
-                                model_trace,
-                            });
+                        let chunk_data = &self.chunk_handles[model_ptr as usize];
+                        if let Some(model_id) = &chunk_data.model_id {
+                            let min = aabb.min
+                                + curr_anchor.cast::<f32>()
+                                    * consts::voxel::TERRAIN_CHUNK_METER_LENGTH;
+                            let max = min.map(|x| x + consts::voxel::TERRAIN_CHUNK_METER_LENGTH);
+                            let chunk_aabb = &AABB::new_two_point(min, max);
+                            if let Some(model_trace) = voxel_registry
+                                .get_dyn_model(*model_id)
+                                .trace(&in_ray, chunk_aabb)
+                            {
+                                let world_voxel_pos = (*self.region_pos.into_chunk_pos()
+                                    + curr_anchor.cast::<i32>())
+                                    * consts::voxel::TERRAIN_CHUNK_VOXEL_LENGTH as i32
+                                    + model_trace.local_position.cast::<i32>();
+                                return Some(TerrainRaycastHit {
+                                    world_voxel_pos,
+                                    model_trace,
+                                });
+                            }
                         }
                     }
                     let next_point = curr_anchor + unit_grid.map(|x| x.max(0) as u32);
@@ -193,6 +219,56 @@ impl WorldRegion {
     }
 
     pub fn get_chunk_model(&self, chunk_id: ChunkId) -> Option<VoxelModelId> {
+        self.get_chunk_data(chunk_id)
+            .and_then(|chunk_data| chunk_data.model_id.clone())
+    }
+
+    pub fn set_chunk_model(&mut self, chunk_id: &ChunkId, model_id: Option<VoxelModelId>) {
+        if model_id.is_none() {
+            self.set_chunk_data(chunk_id, None);
+            return;
+        }
+
+        if let Some(chunk_data) = self.get_chunk_data_mut(*chunk_id) {
+            chunk_data.model_id = model_id;
+            return;
+        } else {
+            self.set_chunk_data(
+                chunk_id,
+                Some(WorldChunkData {
+                    model_id,
+                    chunk_data_io_ptr: None,
+                }),
+            );
+        }
+    }
+
+    pub fn get_chunk_data_mut(&mut self, chunk_id: ChunkId) -> Option<&mut WorldChunkData> {
+        let ChunkId {
+            chunk_pos,
+            chunk_lod,
+        } = chunk_id;
+        let region_pos = chunk_pos.get_region_pos();
+        let chunk_height = chunk_lod.as_tree_height();
+        let chunk_traversal = chunk_pos.get_chunk_traversal();
+
+        let mut node_idx = 0;
+        for i in 0..chunk_height {
+            let child_index = (chunk_traversal >> (i * 6)) & 0b111111;
+            let mut node_data = &self.tree.nodes[node_idx];
+            let child_bit = 1 << child_index;
+            if node_data.child_mask & child_bit == 0 {
+                return None;
+            }
+            node_idx = node_data.child_ptr().unwrap() as usize + child_index as usize;
+        }
+
+        let node_data = &self.tree.nodes[node_idx];
+        let model_ptr = node_data.model_ptr()?;
+        return Some(&mut self.chunk_handles[model_ptr as usize]);
+    }
+
+    pub fn get_chunk_data(&self, chunk_id: ChunkId) -> Option<&WorldChunkData> {
         let ChunkId {
             chunk_pos,
             chunk_lod,
@@ -215,14 +291,14 @@ impl WorldRegion {
         let node_data = &self.tree.nodes[node_idx];
         return node_data
             .model_ptr()
-            .map(|model_ptr| self.model_handles[model_ptr as usize]);
+            .map(|model_ptr| &self.chunk_handles[model_ptr as usize]);
     }
 
-    pub fn set_chunk_model(
+    pub fn set_chunk_data(
         &mut self,
         chunk_id: &ChunkId,
-        sft_id: Option<VoxelModelId>,
-    ) -> Option<VoxelModelId> {
+        chunk_data: Option<WorldChunkData>,
+    ) -> Option<WorldChunkData> {
         let ChunkId {
             chunk_pos,
             chunk_lod,
@@ -236,7 +312,7 @@ impl WorldRegion {
             let child_index = (chunk_traversal >> (i * 6)) & 0b111111;
             let mut node_data = &mut self.tree.nodes[node_idx];
             let child_bit = 1 << child_index;
-            if sft_id.is_some() {
+            if chunk_data.is_some() {
                 // Ensure child bit is set and allocate child if it doesn't exist.
                 node_data.child_mask |= child_bit;
                 let child_ptr = if let Some(child_ptr) = node_data.child_ptr() {
@@ -267,7 +343,15 @@ impl WorldRegion {
                             .expect("if child mask is set then model should exist.");
                         self.tree.nodes[node_idx].model_ptr = WorldRegionNode::NULL_MODEL_PTR;
                         // TODO: Deallocate old model thing.
-                        return Some(self.model_handles[old_model_ptr as usize]);
+                        const DUMMY_CHUNK_DATA: WorldChunkData = WorldChunkData {
+                            model_id: None,
+                            chunk_data_io_ptr: None,
+                        };
+                        let mut old_chunk_data = std::mem::replace(
+                            &mut self.chunk_handles[old_model_ptr as usize],
+                            DUMMY_CHUNK_DATA,
+                        );
+                        return Some(old_chunk_data);
                     }
                 } else {
                     // Next node child is already empty so don't need to go further.
@@ -277,18 +361,19 @@ impl WorldRegion {
         }
 
         let node_data = &mut self.tree.nodes[node_idx];
-        let Some(sft_id) = sft_id else {
+        let Some(sft_id) = chunk_data else {
             unreachable!("Deallocation should've happened in loop.");
         };
         let old_model_ptr = node_data.model_ptr();
         if node_data.has_model_ptr() {
             // TODO: Deallocate old pointer.
         }
-        let new_model_ptr = self.model_handles.len() as u32;
-        self.model_handles.push(sft_id);
+        let new_model_ptr = self.chunk_handles.len() as u32;
+        self.chunk_handles.push(sft_id);
         self.active_leaves.insert(node_idx as u32);
         node_data.model_ptr = new_model_ptr;
-        return old_model_ptr.map(|old_model_ptr| self.model_handles[old_model_ptr as usize]);
+        return old_model_ptr
+            .map(|old_model_ptr| self.chunk_handles[old_model_ptr as usize].clone());
     }
 }
 

@@ -1,13 +1,11 @@
 use std::{any::TypeId, cell::Cell, collections::HashMap, ptr::NonNull};
 
-use crate::animation::animation::{
-    AnimationPropertyMethods, AnimationPropertyTypeInfo, GameComponentAnimationChannelData,
-};
 use crate::common::dyn_vec::TypeInfo;
 use crate::entity::{archetype::ComponentArchetype, ecs_world::Entity, query::QueryItemRef};
 use crate::physics::collider_registry::ColliderRegistry;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use rogue_macros::generate_tuples;
+use crate::animation::animation_property::{AnimationPropertyMethods, AnimationPropertyTypeInfo};
 
 #[derive(Clone)]
 pub struct GameComponentType {

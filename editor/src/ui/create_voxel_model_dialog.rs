@@ -1,18 +1,12 @@
-use nalgebra::Vector3;
-use rogue_engine::{
-    asset::asset::GameAssetPath,
-    entity::{RenderableVoxelEntity, ecs_world::Entity},
-    material::MaterialId,
-    voxel::{
-        attachment::Attachment,
-        sft_compressed::VoxelModelSFTCompressed,
-        voxel::{VoxelMaterialData, VoxelModelEdit, VoxelModelImpl},
-    },
-};
-
 use crate::{
     session::EditorCommandEvent,
     ui::{EditorCommand, EditorDialog, EditorUIContext, FilePickerType},
+};
+use rogue_engine::material::material_bank::MaterialAssetId;
+use rogue_engine::{
+    asset::asset::GameAssetPath,
+    entity::{RenderableVoxelEntity, ecs_world::Entity},
+    voxel::{attachment::Attachment, sft_compressed::VoxelModelSFTCompressed},
 };
 
 pub struct CreateVoxelModelDialogCreateInfo {
@@ -30,7 +24,7 @@ enum CreateModelPreset {
 struct NewModelDialogState {
     side_length: u32,
     preset: CreateModelPreset,
-    material: MaterialId,
+    material: MaterialAssetId,
 }
 
 fn create_voxel_model_dialog_show_fn(
@@ -44,9 +38,9 @@ fn create_voxel_model_dialog_show_fn(
             w.get_temp_mut_or_insert_with(id, || {
                 let default_material = ctx
                     .material_bank
-                    .contains_material(&MaterialId::new(0, 0))
-                    .then_some(MaterialId::new(0, 0))
-                    .unwrap_or(MaterialId::null());
+                    .contains_material(&MaterialAssetId::new(0, 0))
+                    .then_some(MaterialAssetId::new(0, 0))
+                    .unwrap_or(MaterialAssetId::null());
                 NewModelDialogState {
                     side_length: 16,
                     preset: CreateModelPreset::Solid,

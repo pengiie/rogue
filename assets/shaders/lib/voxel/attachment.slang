@@ -96,6 +96,30 @@ public struct CompressedVoxelMaterial {
   public bool need_normal_baking() {
     return (this.a & 0x40000000) > 0 || this.needs_material_baking();
   }
+
+  public uint get_material_index() {
+    return this.b & 0xFFFF;
+  }
+
+  [mutating]
+  public uint set_material_index(uint index) {
+    this.b &= 0xFFFF0000;
+    this.b |= (index & 0xFFFF);
+    return this.b;
+  }
+
+  [mutating]
+  public void try_convert_material_ptr<T>(T lut) where T: IMaterialLUT {
+    if (!this.needs_material_baking()) {
+      return;
+    }
+    let material_ptr = lut.get_material_ptr(this.get_material_index());
+    this.set_material_index(material_ptr);
+  }
+}
+
+public interface IMaterialLUT {
+  uint get_material_ptr(uint material_index);
 }
 
 public struct BMaterial {

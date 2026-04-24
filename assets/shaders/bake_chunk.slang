@@ -42,15 +42,15 @@ void main(uint id: SV_DispatchThreadID) {
   // Each voxel gets its own unique dither.
   random::init(world_voxel_pos);
   normal = normalize(dither(normal, exp2(-8.0)));
-  var bmat_data: voxel::BakedVoxelMaterial;
+  var baked_data: voxel::BakedVoxelMaterial;
   if (mat_comp.needs_material_baking()) {
-    let mat = MaterialBank.get_material(mat_comp.b & 0xFFFF);
-    bmat_data = mat.into_bmat((int3) local_voxel_pos, normal);
+    let mat = MaterialBank.get_material(mat_comp.get_material_index());
+    baked_data = mat.into_bmat((int3) local_voxel_pos, normal);
   } else {
-    bmat_data = voxel::BakedVoxelMaterial.decode(mat_comp);
-    bmat_data.normal = normal;
+    baked_data = voxel::BakedVoxelMaterial.decode(mat_comp);
+    baked_data.normal = normal;
   }
-  voxel::Terrain.get().set_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos, bmat_data.encode());
+  voxel::Terrain.get().set_voxel_material(u_shader.chunk_pos, u_shader.chunk_height, local_voxel_pos, baked_data.encode());
 }
 
 float3 calculate_normal(int3 world_voxel_pos, int voxel_length) {

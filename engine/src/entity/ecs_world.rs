@@ -11,10 +11,11 @@ use uuid::Uuid;
 use super::{
     EntityChildren, EntityParent, GameEntity, RenderableVoxelEntity, scripting::ScriptableEntity,
 };
-use crate::animation::animation::AnimationPropertyTypeInfo;
+use crate::animation::animation_property::AnimationPropertyTypeInfo;
 use crate::animation::animator::Animator;
 use crate::asset::repr::game_entity::{WorldGameComponentAsset, WorldGameEntityAsset};
 use crate::asset::repr::project::ProjectSceneDeserializeContext;
+use crate::audio::AudioPlayer;
 use crate::common::dyn_vec::TypeInfo;
 use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::common::geometry::obb::OBB;
@@ -99,6 +100,7 @@ impl ECSWorld {
         ecs.register_game_component::<RigidBody>();
         ecs.register_game_component::<EntityColliders>();
         ecs.register_game_component::<Animator>();
+        ecs.register_game_component::<AudioPlayer>();
 
         ecs
     }
@@ -802,7 +804,7 @@ impl ECSWorld {
         self.entities.has_value(entity)
     }
 
-    pub fn duplicate(
+    pub fn duplicate_entity(
         &mut self,
         entity: Entity,
         new_parent_entity: Option<Entity>,
@@ -818,6 +820,10 @@ impl ECSWorld {
         // If new_parent_entity is a parent entity that is also being duplicated, the components
         // won't be ready yet, this is for existing entities not a part of the recursive
         // duplication process.
+        let is_child_duplicate = new_parent_entity.is_some()
+            && self
+                .get::<&mut EntityChildren>(new_parent_entity.unwrap())
+                .is_err();
         if let Some(new_parent_entity) = new_parent_entity
             && let Ok(mut new_parent_entity_children) =
                 self.get::<&mut EntityChildren>(new_parent_entity)
@@ -829,7 +835,7 @@ impl ECSWorld {
         let mut new_children = Vec::new();
         if let Ok(children) = self.get::<&EntityChildren>(entity).map(|c| c.clone()) {
             for child in &children.children {
-                let new_child = self.duplicate(*child, Some(new_entity_id), clone_ctx);
+                let new_child = self.duplicate_entity(*child, Some(new_entity_id), clone_ctx);
                 new_children.push(new_child);
             }
         }
@@ -885,7 +891,8 @@ impl ECSWorld {
                         let game_entity_component = unsafe {
                             &*std::mem::transmute::<*const u8, *const GameEntity>(*src_data)
                         };
-                        let new_game_entity = game_entity_component.duplicate();
+                        let new_name = if !is_child_duplicate { Some(format!("{} (Copy)", game_entity_component.name))} else {None};
+                        let new_game_entity = game_entity_component.duplicate(new_name);
                         unsafe { (clone_dst as *mut GameEntity).write(new_game_entity) };
                     }
                     id if id == std::any::TypeId::of::<EntityChildren>() => {

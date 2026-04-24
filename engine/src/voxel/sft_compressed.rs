@@ -5,12 +5,13 @@ use nalgebra::Vector3;
 use super::{
     attachment::{Attachment, AttachmentId, AttachmentInfoMap},
     flat::VoxelModelFlat,
-    sft::VoxelModelSFT,
     sft_compressed_gpu::VoxelModelSFTCompressedGpu,
-    sft_gpu::VoxelModelSFTGpu,
     voxel::{VoxelModelImpl, VoxelModelImplMethods},
 };
-use crate::{common::geometry::ray::Ray, voxel::voxel::VoxelModelEditRegion};
+use crate::{
+    common::geometry::ray::Ray, material::model_material_map::ModelMaterialMap,
+    voxel::voxel::VoxelModelEditRegion,
+};
 use crate::{common::morton, consts};
 use crate::{
     common::{color::Color, geometry::ray::RayAABBHitInfo},
@@ -81,6 +82,7 @@ impl SFTAttachmentLookupNodeCompressed {
 pub struct VoxelModelSFTCompressed {
     pub side_length: u32,
     pub attachment_map: AttachmentInfoMap,
+    pub material_map: ModelMaterialMap,
 
     pub node_data: Vec<SFTNodeCompressed>,
     pub attachment_lookup_data: AttachmentMap<Vec<SFTAttachmentLookupNodeCompressed>>,
@@ -102,6 +104,7 @@ impl VoxelModelSFTCompressed {
             attachment_lookup_data: AttachmentMap::new(),
             attachment_raw_data: AttachmentMap::new(),
             attachment_map: AttachmentMap::new(),
+            material_map: ModelMaterialMap::new(),
             update_tracker: 0,
         }
     }
@@ -203,7 +206,7 @@ impl VoxelModelSFTCompressed {
             .unwrap();
         let attachment_exists = bmat_lookup_node.attachment_mask & child_bit > 0;
         if material.is_some() {
-            let comp_mat = material.unwrap().encode();
+            let comp_mat = material.unwrap().encode(&self.material_map);
 
             curr_node.child_mask |= child_bit;
             curr_node.leaf_mask |= child_bit;
@@ -363,7 +366,7 @@ impl VoxelModelSFTCompressed {
         let b = bmat_attachment_data
             [data_ptr + attachment_offset * Attachment::BMAT.size() as usize + 1]
             as u64;
-        return Some(VoxelMaterialData::decode((b << 32) | a));
+        return Some(VoxelMaterialData::decode((b << 32) | a, &self.material_map));
     }
 }
 
@@ -452,7 +455,8 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
         let unit_grid = ray.dir.map(|x| x.signum() as i32);
 
         let mut last_mask = t_min.map(|x| if (x - model_t).abs() < 0.0001 { 1 } else { 0 });
-        let dir_scaling = aabb.side_length() / (self.side_length as f32 * consts::voxel::VOXEL_METER_LENGTH);
+        let dir_scaling =
+            aabb.side_length() / (self.side_length as f32 * consts::voxel::VOXEL_METER_LENGTH);
         let norm_dir = ray.dir.component_div(&dir_scaling).normalize();
         let mut curr_ray = Ray::new(dda_pos, norm_dir);
         let mut curr_node_index = 0;
@@ -598,6 +602,11 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
                             crate::voxel::voxel::VoxelModelEditOperator::Replace(
                                 voxel_material_data,
                             ) => {
+                                if let Some(VoxelMaterialData::Unbaked(material_id)) =
+                                    voxel_material_data
+                                {
+                                    self.material_map.ensure_global_material_exists(material_id);
+                                }
                                 self.update_tracker += 1;
                                 self.set_voxel(Vector3::new(x, y, z), voxel_material_data.as_ref());
                             }
@@ -626,94 +635,94 @@ impl VoxelModelImpl for VoxelModelSFTCompressed {
     }
 }
 
-impl From<&VoxelModelSFT> for VoxelModelSFTCompressed {
-    fn from(sft: &VoxelModelSFT) -> Self {
-        let mut compressed = VoxelModelSFTCompressed::new_empty(sft.side_length);
-        for (_, attachment) in sft.attachment_map.iter() {
-            compressed.initialize_attachment_buffers(attachment);
-        }
-
-        let mut stack = vec![(
-            &sft.root_node,
-            /*curr_compressed_node*/ 0,
-            /*curr_child_iter*/ 0,
-        )];
-        compressed.node_data.push(SFTNodeCompressed::new_empty());
-        while !stack.is_empty() {
-            let (curr_node, compressed_node_idx, curr_child_iter) = stack.last_mut().unwrap();
-            // Allocate space for this nodes children, and initialize
-            // this nodes info along with the attachment data for this node's leaves.
-            if *curr_child_iter == 0 {
-                let children_allocation_index = compressed.node_data.len();
-                // This is already allocated since the root node always exist and we allocate
-                // room any children with the resize below.
-                compressed.node_data[*compressed_node_idx as usize] = SFTNodeCompressed {
-                    child_ptr: children_allocation_index as u32,
-                    child_mask: curr_node.child_mask,
-                    leaf_mask: curr_node.leaf_mask,
-                };
-                compressed.node_data.resize(
-                    children_allocation_index + curr_node.children.len(),
-                    SFTNodeCompressed::new_empty(),
-                );
-
-                // Set attachment info for the current node.
-                if let Some(attachment_data) = &curr_node.attachment_data {
-                    for (attachment_id, (attachment_mask, attachment_data)) in
-                        attachment_data.iter()
-                    {
-                        if attachment_mask.count_ones() as usize != attachment_data.len() {
-                            assert_eq!(
-                                attachment_mask.count_ones() as usize,
-                                attachment_data.len()
-                            );
-                        }
-                        let compressed_raw_data = compressed
-                            .attachment_raw_data
-                            .get_mut(attachment_id)
-                            .unwrap();
-                        let raw_data_ptr = compressed_raw_data.len();
-                        compressed_raw_data.extend_from_slice(&attachment_data);
-
-                        let compressed_lookup_data = compressed
-                            .attachment_lookup_data
-                            .get_mut(attachment_id)
-                            .unwrap();
-                        compressed_lookup_data.resize(
-                            (*compressed_node_idx as usize + 1).max(compressed_lookup_data.len()),
-                            SFTAttachmentLookupNodeCompressed::new_empty(),
-                        );
-                        compressed_lookup_data[*compressed_node_idx] =
-                            SFTAttachmentLookupNodeCompressed {
-                                data_ptr: raw_data_ptr as u32,
-                                attachment_mask: *attachment_mask,
-                            };
-                    }
-                }
-            }
-
-            if *curr_child_iter == curr_node.children.len() {
-                stack.pop();
-                continue;
-            }
-
-            let curr_compressed_node = &compressed.node_data[*compressed_node_idx];
-            let compressed_child_ptr = curr_compressed_node.child_ptr as usize + *curr_child_iter;
-            let next_child_node_ptr = &curr_node.children[*curr_child_iter];
-            *curr_child_iter += 1;
-            stack.push((next_child_node_ptr, compressed_child_ptr, 0));
-        }
-
-        for (attachment_id, lookup_data) in compressed.attachment_lookup_data.iter_mut() {
-            lookup_data.resize(
-                compressed.node_data.len(),
-                SFTAttachmentLookupNodeCompressed::new_empty(),
-            );
-        }
-
-        return compressed;
-    }
-}
+//impl From<&VoxelModelSFT> for VoxelModelSFTCompressed {
+//    fn from(sft: &VoxelModelSFT) -> Self {
+//        let mut compressed = VoxelModelSFTCompressed::new_empty(sft.side_length);
+//        for (_, attachment) in sft.attachment_map.iter() {
+//            compressed.initialize_attachment_buffers(attachment);
+//        }
+//
+//        let mut stack = vec![(
+//            &sft.root_node,
+//            /*curr_compressed_node*/ 0,
+//            /*curr_child_iter*/ 0,
+//        )];
+//        compressed.node_data.push(SFTNodeCompressed::new_empty());
+//        while !stack.is_empty() {
+//            let (curr_node, compressed_node_idx, curr_child_iter) = stack.last_mut().unwrap();
+//            // Allocate space for this nodes children, and initialize
+//            // this nodes info along with the attachment data for this node's leaves.
+//            if *curr_child_iter == 0 {
+//                let children_allocation_index = compressed.node_data.len();
+//                // This is already allocated since the root node always exist and we allocate
+//                // room any children with the resize below.
+//                compressed.node_data[*compressed_node_idx as usize] = SFTNodeCompressed {
+//                    child_ptr: children_allocation_index as u32,
+//                    child_mask: curr_node.child_mask,
+//                    leaf_mask: curr_node.leaf_mask,
+//                };
+//                compressed.node_data.resize(
+//                    children_allocation_index + curr_node.children.len(),
+//                    SFTNodeCompressed::new_empty(),
+//                );
+//
+//                // Set attachment info for the current node.
+//                if let Some(attachment_data) = &curr_node.attachment_data {
+//                    for (attachment_id, (attachment_mask, attachment_data)) in
+//                        attachment_data.iter()
+//                    {
+//                        if attachment_mask.count_ones() as usize != attachment_data.len() {
+//                            assert_eq!(
+//                                attachment_mask.count_ones() as usize,
+//                                attachment_data.len()
+//                            );
+//                        }
+//                        let compressed_raw_data = compressed
+//                            .attachment_raw_data
+//                            .get_mut(attachment_id)
+//                            .unwrap();
+//                        let raw_data_ptr = compressed_raw_data.len();
+//                        compressed_raw_data.extend_from_slice(&attachment_data);
+//
+//                        let compressed_lookup_data = compressed
+//                            .attachment_lookup_data
+//                            .get_mut(attachment_id)
+//                            .unwrap();
+//                        compressed_lookup_data.resize(
+//                            (*compressed_node_idx as usize + 1).max(compressed_lookup_data.len()),
+//                            SFTAttachmentLookupNodeCompressed::new_empty(),
+//                        );
+//                        compressed_lookup_data[*compressed_node_idx] =
+//                            SFTAttachmentLookupNodeCompressed {
+//                                data_ptr: raw_data_ptr as u32,
+//                                attachment_mask: *attachment_mask,
+//                            };
+//                    }
+//                }
+//            }
+//
+//            if *curr_child_iter == curr_node.children.len() {
+//                stack.pop();
+//                continue;
+//            }
+//
+//            let curr_compressed_node = &compressed.node_data[*compressed_node_idx];
+//            let compressed_child_ptr = curr_compressed_node.child_ptr as usize + *curr_child_iter;
+//            let next_child_node_ptr = &curr_node.children[*curr_child_iter];
+//            *curr_child_iter += 1;
+//            stack.push((next_child_node_ptr, compressed_child_ptr, 0));
+//        }
+//
+//        for (attachment_id, lookup_data) in compressed.attachment_lookup_data.iter_mut() {
+//            lookup_data.resize(
+//                compressed.node_data.len(),
+//                SFTAttachmentLookupNodeCompressed::new_empty(),
+//            );
+//        }
+//
+//        return compressed;
+//    }
+//}
 
 #[derive(Clone)]
 enum SFTFlatNode {
@@ -759,6 +768,7 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
             (0..=height).map(|_| Vec::new()).collect::<Vec<_>>();
 
         let attachment_info_map = flat.attachment_map.clone();
+        let material_map = flat.material_map.clone();
 
         // Under-estimate with 64 voxel per leaf node. This assumes each voxel perfectly fills
         // up a leaf node but realistically the voxels will be sparse and there are internal
@@ -862,19 +872,20 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
                                     curr_lookup_node.data_ptr = attachment_ptr as u32;
                                 }
                             } else {
-                                assert!(id != SFTFlatNode::NULL_MATERIAL_INDEX);
-                                let dst_raw_data =
-                                    attachment_raw_data.get_mut(Attachment::BMAT_ID).unwrap();
-                                let attachment_ptr = dst_raw_data.len() as u32;
-                                let data = VoxelMaterialData::Unbaked(id).encode();
-                                dst_raw_data.push((data >> 32) as u32);
-                                dst_raw_data.push((data & 0xFFFF_FFFF) as u32);
+                                unreachable!()
+                                //assert!(id != SFTFlatNode::NULL_MATERIAL_INDEX);
+                                //let dst_raw_data =
+                                //    attachment_raw_data.get_mut(Attachment::BMAT_ID).unwrap();
+                                //let attachment_ptr = dst_raw_data.len() as u32;
+                                //let data = VoxelMaterialData::Unbaked(id).encode(&material_map);
+                                //dst_raw_data.push((data >> 32) as u32);
+                                //dst_raw_data.push((data & 0xFFFF_FFFF) as u32);
 
-                                let mut curr_lookup_node =
-                                new_attachment_map.get_mut(
-                                    Attachment::BMAT_ID).expect("Flat voxel builtin attachment is not present in the attachment info map when it should be.");
-                                curr_lookup_node.attachment_mask |= child_bit;
-                                curr_lookup_node.data_ptr = attachment_ptr;
+                                //let mut curr_lookup_node =
+                                //new_attachment_map.get_mut(
+                                //    Attachment::BMAT_ID).expect("Flat voxel builtin attachment is not present in the attachment info map when it should be.");
+                                //curr_lookup_node.attachment_mask |= child_bit;
+                                //curr_lookup_node.data_ptr = attachment_ptr;
                             }
                         }
                         SFTFlatNode::Child((child_node, child_lookup_nodes)) => {
@@ -934,6 +945,7 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
                 return VoxelModelSFTCompressed {
                     side_length: length,
                     attachment_map: attachment_info_map,
+                    material_map: ModelMaterialMap::new(),
                     node_data: vec![SFTNodeCompressed {
                         child_ptr: u32::MAX,
                         child_mask: u64::MAX,
@@ -993,6 +1005,7 @@ impl From<&VoxelModelFlat> for VoxelModelSFTCompressed {
         return VoxelModelSFTCompressed {
             side_length: length,
             attachment_map: attachment_info_map,
+            material_map: ModelMaterialMap::new(),
             node_data,
             attachment_lookup_data,
             attachment_raw_data,

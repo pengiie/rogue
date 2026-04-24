@@ -7,6 +7,8 @@ use rogue_macros::Resource;
 use crate::graphics::backend::{Buffer, ResourceId};
 use crate::graphics::device::DeviceResource;
 use crate::graphics::gpu_allocator::GpuBufferAllocator;
+use crate::material::material_bank::MaterialBank;
+use crate::material::material_gpu::MaterialBankGpu;
 use crate::resource::{Res, ResMut};
 use crate::voxel::baker_gpu::{ModelBakeRequest, VoxelBakerGpu};
 use crate::voxel::sft_compressed::VoxelModelSFTCompressed;
@@ -56,6 +58,13 @@ pub struct VoxelModelRegistryGpu {
     to_update_models: Vec<VoxelModelId>,
 }
 
+pub struct GpuModelAllocationContext<'a> {
+    pub registry: &'a VoxelModelRegistry,
+    pub device: &'a mut DeviceResource,
+    pub material_bank: &'a MaterialBank,
+    pub material_bank_gpu: &'a MaterialBankGpu,
+}
+
 impl VoxelModelRegistryGpu {
     pub const VOXEL_MODEL_INFO_ALLOCATOR_INITIAL_SIZE: u64 = 64 * 1024 * 1024; // 8 MB
 
@@ -94,15 +103,137 @@ impl VoxelModelRegistryGpu {
         self.to_update_models.push(*voxel_model_id);
     }
 
-    /// Mainly just used for invalidating materials which need to be calculated but not marking a
-    /// whole update, TODO: I think i can combine tihis with to_update_models and make the update
-    /// range optional but idk its really a different operation.
     pub fn invalidate_gpu_model_material(
         &mut self,
+        ctx: &mut GpuModelAllocationContext<'_>,
         invalidation_info: VoxelModelGpuInvalidationInfo,
     ) {
         assert!(!invalidation_info.model_id.is_null());
-        self.to_invalidate_models.push(invalidation_info);
+        let Some(gpu_model_info) = self.gpu_models.get_mut(&invalidation_info.model_id) else {
+            return;
+        };
+
+        let GpuModelAllocationContext {
+            registry, device, ..
+        } = ctx;
+
+        // Invalidation doesn't require any allocations or new materials, it only rewrites the
+        // unbaked material data so materials can be baked again due o normals possibly changing.
+        // TODO: Maybe materials could be deallocated in the meantime so the models gpu material
+        // ptrs are stale, this shouldn't ever happen though but could be a good assert to check.
+        gpu_model_info.gpu_model.mark_for_invalidation();
+        //let model = registry.get_dyn_model(invalidation_info.model_id);
+        //gpu_model_info
+        //    .gpu_model
+        //    .write_gpu_updates(device, &mut self.voxel_data_allocator, model);
+    }
+
+    /// Returns true if allocated or updated successfully, false if the model is waiting on some
+    /// material data on the gpu or couldn't be allocated successfully.
+    pub fn allocate_or_update_model(
+        &mut self,
+        ctx: &mut GpuModelAllocationContext<'_>,
+        model_id: VoxelModelId,
+    ) -> bool {
+        let GpuModelAllocationContext {
+            registry,
+            device,
+            material_bank,
+            material_bank_gpu,
+        } = ctx;
+
+        // Instantiate gpu model instance if it doesn't exist already.
+        if !self.gpu_models.contains_key(&model_id) {
+            let model_info = registry
+                .voxel_model_info
+                .get(model_id.handle)
+                .expect("Voxel model id not found in the registry");
+            let side_length = registry.get_dyn_model(model_id).length();
+            let construct_fn = self
+                .gpu_model_construct_fns
+                .get(&model_info.model_type_id)
+                .expect("Voxel model doesn't have gpu repr registered");
+
+            self.gpu_models.insert(
+                model_id,
+                VoxelModelGpuInfo {
+                    gpu_model: construct_fn(),
+                    gpu_model_ptr: None,
+                },
+            );
+        }
+
+        let type_id = registry
+            .voxel_model_info
+            .get(model_id.handle)
+            .expect("Voxel model id not found in the registry")
+            .model_type_id;
+        let gpu_model_info = self
+            .gpu_models
+            .get_mut(&model_id)
+            .expect("Voxel model gpu info not found for model id");
+
+        // Allocate any necessary buffers the model needs for its representation.
+        let model = registry.get_dyn_model(model_id);
+        let mut needs_info_allocation = gpu_model_info.gpu_model.update_gpu_objects(
+            device,
+            material_bank,
+            material_bank_gpu,
+            &mut self.voxel_data_allocator,
+            model,
+        );
+
+        let model_gpu_schema = *self
+            .gpu_model_schemas
+            .get(&type_id)
+            .expect("Voxel model doesn't have gpu repr registered");
+        let Some(model_info_gpu_repr) = gpu_model_info.gpu_model.aggregate_model_info() else {
+            log::warn!(
+                "Voxel model with id {:?} is not ready to have its gpu representation written",
+                model_id
+            );
+            // Model buffers are not allocated yet or material data isn't ready.
+            return false;
+        };
+
+        // If the model doesn't exist, ensure we allocate.
+        needs_info_allocation |= gpu_model_info.gpu_model_ptr.is_none();
+
+        if needs_info_allocation {
+            if let Some(old_ptr) = gpu_model_info.gpu_model_ptr {
+                // TODO: Deallocate old info.
+                log::debug!(
+                    "New allocation requested with old ptr pointing at {}",
+                    old_ptr
+                );
+            }
+            let allocation_size = (model_info_gpu_repr.len() + 1) as u64 * 4;
+            let info_allocation = self
+                .voxel_model_info_allocator
+                .allocate(allocation_size)
+                .expect("Failed to allocate voxel model info gpu buffer");
+            let mut data = vec![model_gpu_schema];
+            data.extend_from_slice(&model_info_gpu_repr);
+            self.voxel_model_info_allocator.write_allocation_data(
+                device,
+                &info_allocation,
+                bytemuck::cast_slice(&data),
+            );
+            gpu_model_info.gpu_model_ptr = Some(info_allocation.start_index_stride_dword() as u32);
+        }
+
+        // Write model render data, models have their own update tracking state within
+        // to determine what to write.
+        let gpu_model_info = self
+            .gpu_models
+            .get_mut(&model_id)
+            .expect("Voxel model gpu info not found for model id");
+        let model = registry.get_dyn_model(model_id);
+        gpu_model_info
+            .gpu_model
+            .write_gpu_updates(device, &mut self.voxel_data_allocator, model);
+
+        return true;
     }
 
     pub fn write_render_data(
@@ -111,150 +242,150 @@ impl VoxelModelRegistryGpu {
         mut device: ResMut<DeviceResource>,
         mut baker: ResMut<VoxelBakerGpu>,
     ) {
-        let registry_gpu = &mut *registry_gpu;
-        // Allocate any new gpu models that have been requested.
-        for model_id in registry_gpu.to_allocate_models.drain(..) {
-            if registry_gpu.gpu_models.contains_key(&model_id) {
-                continue;
-            }
+        //let registry_gpu = &mut *registry_gpu;
+        //// Allocate any new gpu models that have been requested.
+        //for model_id in registry_gpu.to_allocate_models.drain(..) {
+        //    if registry_gpu.gpu_models.contains_key(&model_id) {
+        //        continue;
+        //    }
 
-            let model_info = registry
-                .voxel_model_info
-                .get(model_id.handle)
-                .expect("Voxel model id not found in the registry");
-            let side_length = registry.get_dyn_model(model_id).length();
-            let construct_fn = registry_gpu
-                .gpu_model_construct_fns
-                .get(&model_info.model_type_id)
-                .expect("Voxel model doesn't have gpu repr registered");
+        //    let model_info = registry
+        //        .voxel_model_info
+        //        .get(model_id.handle)
+        //        .expect("Voxel model id not found in the registry");
+        //    let side_length = registry.get_dyn_model(model_id).length();
+        //    let construct_fn = registry_gpu
+        //        .gpu_model_construct_fns
+        //        .get(&model_info.model_type_id)
+        //        .expect("Voxel model doesn't have gpu repr registered");
 
-            let old = registry_gpu.gpu_models.insert(
-                model_id,
-                VoxelModelGpuInfo {
-                    gpu_model: construct_fn(),
-                    gpu_model_ptr: None,
-                },
-            );
-            assert!(
-                old.is_none(),
-                "Gpu model already exists for model id which should means the model was allocated twice."
-            );
-            // New gpu model so info and data needs to be allocated.
-            registry_gpu.to_update_models.push(model_id);
-        }
+        //    let old = registry_gpu.gpu_models.insert(
+        //        model_id,
+        //        VoxelModelGpuInfo {
+        //            gpu_model: construct_fn(),
+        //            gpu_model_ptr: None,
+        //        },
+        //    );
+        //    assert!(
+        //        old.is_none(),
+        //        "Gpu model already exists for model id which should means the model was allocated twice."
+        //    );
+        //    // New gpu model so info and data needs to be allocated.
+        //    registry_gpu.to_update_models.push(model_id);
+        //}
 
-        let mut non_ready_models = Vec::new();
-        let mut to_write_models = HashSet::with_capacity(
-            registry_gpu.to_invalidate_models.len() + registry_gpu.to_update_models.len(),
-        );
+        //let mut non_ready_models = Vec::new();
+        //let mut to_write_models = HashSet::with_capacity(
+        //    registry_gpu.to_invalidate_models.len() + registry_gpu.to_update_models.len(),
+        //);
 
-        let mut invalidated_model_id = HashSet::new();
-        // Any models which need their normals recalculated or had their material changed in some
-        // way need only their raw attachment data re-uploaded.
-        for VoxelModelGpuInvalidationInfo {
-            model_id,
-            offset,
-            size,
-        } in registry_gpu.to_invalidate_models.drain(..)
-        {
-            if invalidated_model_id.contains(&model_id) {
-                continue;
-            }
-            invalidated_model_id.insert(model_id);
-            let Some(gpu_model_info) = registry_gpu.gpu_models.get_mut(&model_id) else {
-                continue;
-            };
-            // This only flags the gpu model for invalidation next render write.
-            gpu_model_info.gpu_model.mark_for_invalidation();
-            to_write_models.insert(model_id);
-        }
+        //let mut invalidated_model_id = HashSet::new();
+        //// Any models which need their normals recalculated or had their material changed in some
+        //// way need only their raw attachment data re-uploaded.
+        //for VoxelModelGpuInvalidationInfo {
+        //    model_id,
+        //    offset,
+        //    size,
+        //} in registry_gpu.to_invalidate_models.drain(..)
+        //{
+        //    if invalidated_model_id.contains(&model_id) {
+        //        continue;
+        //    }
+        //    invalidated_model_id.insert(model_id);
+        //    let Some(gpu_model_info) = registry_gpu.gpu_models.get_mut(&model_id) else {
+        //        continue;
+        //    };
+        //    // This only flags the gpu model for invalidation next render write.
+        //    gpu_model_info.gpu_model.mark_for_invalidation();
+        //    to_write_models.insert(model_id);
+        //}
 
-        // Any models which have had their data updated in a constructive or destructive way which
-        // may cause an allocation needs to have their buffers re-updated and gpu model info
-        // rewritten if there are any new allocations. This initializes/updates the gpu_model_ptr for the
-        // gpu model.
-        for model_id in registry_gpu.to_update_models.drain(..) {
-            let type_id = registry
-                .voxel_model_info
-                .get(model_id.handle)
-                .expect("Voxel model id not found in the registry")
-                .model_type_id;
-            let gpu_model_info = registry_gpu
-                .gpu_models
-                .get_mut(&model_id)
-                .expect("Voxel model gpu info not found for model id");
+        //// Any models which have had their data updated in a constructive or destructive way which
+        //// may cause an allocation needs to have their buffers re-updated and gpu model info
+        //// rewritten if there are any new allocations. This initializes/updates the gpu_model_ptr for the
+        //// gpu model.
+        //for model_id in registry_gpu.to_update_models.drain(..) {
+        //    let type_id = registry
+        //        .voxel_model_info
+        //        .get(model_id.handle)
+        //        .expect("Voxel model id not found in the registry")
+        //        .model_type_id;
+        //    let gpu_model_info = registry_gpu
+        //        .gpu_models
+        //        .get_mut(&model_id)
+        //        .expect("Voxel model gpu info not found for model id");
 
-            let model = registry.get_dyn_model(model_id);
-            // Allocate any necessary buffers the model needs for its representation.
-            let mut needs_info_allocation = gpu_model_info.gpu_model.update_gpu_objects(
-                &mut device,
-                &mut registry_gpu.voxel_data_allocator,
-                model,
-            );
+        //    let model = registry.get_dyn_model(model_id);
+        //    // Allocate any necessary buffers the model needs for its representation.
+        //    let mut needs_info_allocation = gpu_model_info.gpu_model.update_gpu_objects(
+        //        &mut device,
+        //        &mut registry_gpu.voxel_data_allocator,
+        //        model,
+        //    );
 
-            let model_gpu_schema = *registry_gpu
-                .gpu_model_schemas
-                .get(&type_id)
-                .expect("Voxel model doesn't have gpu repr registered");
-            let Some(model_info_gpu_repr) = gpu_model_info.gpu_model.aggregate_model_info() else {
-                log::warn!(
-                    "Voxel model with id {:?} is not ready to have its gpu representation written",
-                    model_id
-                );
-                // Model buffers are not allocated yet.
-                non_ready_models.push(model_id);
-                continue;
-            };
+        //    let model_gpu_schema = *registry_gpu
+        //        .gpu_model_schemas
+        //        .get(&type_id)
+        //        .expect("Voxel model doesn't have gpu repr registered");
+        //    let Some(model_info_gpu_repr) = gpu_model_info.gpu_model.aggregate_model_info() else {
+        //        log::warn!(
+        //            "Voxel model with id {:?} is not ready to have its gpu representation written",
+        //            model_id
+        //        );
+        //        // Model buffers are not allocated yet.
+        //        non_ready_models.push(model_id);
+        //        continue;
+        //    };
 
-            to_write_models.insert(model_id);
-            needs_info_allocation |= gpu_model_info.gpu_model_ptr.is_none();
+        //    to_write_models.insert(model_id);
+        //    needs_info_allocation |= gpu_model_info.gpu_model_ptr.is_none();
 
-            if needs_info_allocation {
-                if let Some(old_ptr) = gpu_model_info.gpu_model_ptr {
-                    // TODO: Deallocate old info.
-                    log::debug!(
-                        "New allocation requested with old ptr pointing at {}",
-                        old_ptr
-                    );
-                }
-                let allocation_size = (model_info_gpu_repr.len() + 1) as u64 * 4;
-                let info_allocation = registry_gpu
-                    .voxel_model_info_allocator
-                    .allocate(allocation_size)
-                    .expect("Failed to allocate voxel model info gpu buffer");
-                let mut data = vec![model_gpu_schema];
-                data.extend_from_slice(&model_info_gpu_repr);
-                registry_gpu
-                    .voxel_model_info_allocator
-                    .write_allocation_data(
-                        &mut device,
-                        &info_allocation,
-                        bytemuck::cast_slice(&data),
-                    );
-                gpu_model_info.gpu_model_ptr =
-                    Some(info_allocation.start_index_stride_dword() as u32);
-            }
-        }
+        //    if needs_info_allocation {
+        //        if let Some(old_ptr) = gpu_model_info.gpu_model_ptr {
+        //            // TODO: Deallocate old info.
+        //            log::debug!(
+        //                "New allocation requested with old ptr pointing at {}",
+        //                old_ptr
+        //            );
+        //        }
+        //        let allocation_size = (model_info_gpu_repr.len() + 1) as u64 * 4;
+        //        let info_allocation = registry_gpu
+        //            .voxel_model_info_allocator
+        //            .allocate(allocation_size)
+        //            .expect("Failed to allocate voxel model info gpu buffer");
+        //        let mut data = vec![model_gpu_schema];
+        //        data.extend_from_slice(&model_info_gpu_repr);
+        //        registry_gpu
+        //            .voxel_model_info_allocator
+        //            .write_allocation_data(
+        //                &mut device,
+        //                &info_allocation,
+        //                bytemuck::cast_slice(&data),
+        //            );
+        //        gpu_model_info.gpu_model_ptr =
+        //            Some(info_allocation.start_index_stride_dword() as u32);
+        //    }
+        //}
 
-        // Write any gpu render data the model needs updated, the model instance is responsible for
-        // tracking what data in the model needs to be updated, which can be influenced by voxel
-        // edits or material invalidation requests.
-        for model_id in to_write_models {
-            let gpu_model_info = registry_gpu
-                .gpu_models
-                .get_mut(&model_id)
-                .expect("Voxel model gpu info not found for model id");
-            let model = registry.get_dyn_model(model_id);
-            gpu_model_info.gpu_model.write_gpu_updates(
-                &mut device,
-                &mut registry_gpu.voxel_data_allocator,
-                model,
-            );
-        }
+        //// Write any gpu render data the model needs updated, the model instance is responsible for
+        //// tracking what data in the model needs to be updated, which can be influenced by voxel
+        //// edits or material invalidation requests.
+        //for model_id in to_write_models {
+        //    let gpu_model_info = registry_gpu
+        //        .gpu_models
+        //        .get_mut(&model_id)
+        //        .expect("Voxel model gpu info not found for model id");
+        //    let model = registry.get_dyn_model(model_id);
+        //    gpu_model_info.gpu_model.write_gpu_updates(
+        //        &mut device,
+        //        &mut registry_gpu.voxel_data_allocator,
+        //        model,
+        //    );
+        //}
 
-        for model_id in non_ready_models {
-            registry_gpu.to_update_models.push(model_id);
-        }
+        //for model_id in non_ready_models {
+        //    registry_gpu.to_update_models.push(model_id);
+        //}
     }
 
     pub fn voxel_model_info_buffer(&self) -> &ResourceId<Buffer> {

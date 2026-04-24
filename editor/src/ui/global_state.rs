@@ -1,6 +1,14 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-use rogue_engine::asset::asset::GameAssetPath;
+use rogue_engine::{
+    asset::asset::GameAssetPath,
+    event::Events,
+    graphics::backend::{Image, ResourceId},
+    material::{
+        material_bank::{MaterialAssetId, MaterialBank},
+        material_gpu::MaterialBankGpu,
+    },
+};
 
 use crate::ui::entity_properties::EntityPropertiesShowFns;
 
@@ -9,6 +17,9 @@ use crate::ui::entity_properties::EntityPropertiesShowFns;
 pub struct GlobalStateEditorUI {
     #[serde(skip)]
     show_fns: EntityPropertiesShowFns,
+    #[serde(skip)]
+    material_textures: EditorMaterialTextures,
+
     pub selected_asset: Option<GameAssetPath>,
 }
 
@@ -17,6 +28,7 @@ impl GlobalStateEditorUI {
         Self {
             show_fns: EntityPropertiesShowFns::new(),
             selected_asset: None,
+            material_textures: EditorMaterialTextures::new(),
         }
     }
 
@@ -34,5 +46,25 @@ impl GlobalStateEditorUI {
 impl Default for GlobalStateEditorUI {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct EditorMaterialTextures {
+    pub material_textures: HashMap<MaterialAssetId, egui::TextureId>,
+}
+
+impl EditorMaterialTextures {
+    pub fn new() -> Self {
+        Self {
+            material_textures: HashMap::new(),
+        }
+    }
+
+    pub fn update_material_textures(
+        &mut self,
+        material_bank: &MaterialBank,
+        material_bank_gpu: &MaterialBankGpu,
+        events: &Events,
+    ) {
     }
 }

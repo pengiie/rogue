@@ -11,6 +11,7 @@ pub mod entity_hierarchy;
 pub mod entity_properties;
 pub mod global_state;
 pub mod material_picker;
+pub mod material_selection_dialog;
 pub mod materials_pane;
 pub mod pane;
 pub mod resize_model_dialog;

@@ -183,7 +183,7 @@ impl EntityHierarchyUI {
                         .get::<&EntityParent>(entity_id)
                         .map(|p| p.parent())
                         .ok();
-                    ctx.session.selected_entity = Some(ctx.ecs_world.duplicate(
+                    ctx.session.selected_entity = Some(ctx.ecs_world.duplicate_entity(
                         entity_id,
                         existing_parent,
                         &mut GameComponentCloneContext {

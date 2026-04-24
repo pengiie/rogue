@@ -19,7 +19,7 @@ public struct SFTLeafInfo {
 }
 
 // Traces the same way as the THC, better as existing early on solid chunks.
-public struct SFT {
+public struct SFT : IMaterialLUT {
   // Pointer to the voxel_model_info region.
   uint voxel_model_ptr; 
   // Side length in voxels.
@@ -49,6 +49,11 @@ public struct SFT {
     return global_grid.x >= 0 && global_grid.y >= 0 && 
            global_grid.z >= 0 && global_grid.x < this.side_length && 
            global_grid.y < this.side_length && global_grid.z < this.side_length;
+  }
+
+  public uint get_material_ptr(uint material_index) {
+    let material_id_ptr = this.voxel_model_ptr + 3 + (consts::VOXEL_ATTACHMENT_COUNT * 2) + material_index + 1;
+    return u_frame.voxel.model_info_data.Load<uint>(material_id_ptr << 2);
   }
 
   public RayModelTest trace(Ray in_ray, AABB root_aabb) {
@@ -450,6 +455,7 @@ public struct SFT {
     var comp_mat = CompressedVoxelMaterial();
     comp_mat.b = bmaterial_data_ptr.load(0);
     comp_mat.a = bmaterial_data_ptr.load(1);
+    comp_mat.try_convert_material_ptr(this);
     return comp_mat;
   }
 
@@ -472,6 +478,7 @@ public struct SFT {
     if (bmaterial_data_ptr_opt == none) {
       return;
     }
+
     let bmaterial_data_ptr = bmaterial_data_ptr_opt.value;
     bmaterial_data_ptr.store(0, comp_mat.b);
     bmaterial_data_ptr.store(1, comp_mat.a);
@@ -491,5 +498,7 @@ public struct SFT {
   //  ptmaterial_data.store(0, compressed_ptmaterial);
   //}
 }
+
+
 
 }  // namespace voxel

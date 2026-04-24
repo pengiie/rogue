@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rogue_engine::{
     asset::asset::{AssetPath, GameAssetPath},
-    material::{Material, MaterialTextureType},
+    material::{MaterialAsset, MaterialTextureType},
 };
 
 use crate::ui::{EditorCommand, FilePickerType, pane::EditorUIPane};
@@ -57,13 +57,13 @@ impl AssetPropertiesPane {
     ) {
         let asset_handle = ctx
             .assets
-            .get_asset_handle::<Material>(&asset_path)
+            .get_asset_handle::<MaterialAsset>(&asset_path)
             .unwrap_or_else(|| {
-                let handle = ctx.assets.load_asset::<Material>(asset_path);
+                let handle = ctx.assets.load_asset::<MaterialAsset>(asset_path);
                 ctx.assets.wait_until_all_loaded();
                 handle
             });
-        let Some(material_asset) = ctx.assets.get_asset::<Material>(&asset_handle) else {
+        let Some(material_asset) = ctx.assets.get_asset::<MaterialAsset>(&asset_handle) else {
             ui.label("Failed to load material asset.");
             return;
         };
@@ -86,7 +86,7 @@ impl AssetPropertiesPane {
                         // if applicable.
                         let asset_path = GameAssetPath::from_relative_path(&asset_path);
                         ctx.assets
-                            .get_asset_mut::<Material>(&asset_handle)
+                            .get_asset_mut::<MaterialAsset>(&asset_handle)
                             .unwrap()
                             .color_texture = Some(asset_path.clone());
                         if let Some(material_id) = ctx

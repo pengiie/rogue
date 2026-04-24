@@ -22,8 +22,6 @@ use crate::{
 pub struct Animator {
     pub animations: HashSet<GameAssetPath>,
     #[serde(skip)]
-    animation_handles: HashMap<GameAssetPath, AnimationId>,
-    #[serde(skip)]
     pub playing_animations: HashMap<GameAssetPath, AnimatorPlayingAnimation>,
     #[serde(skip)]
     to_play_animations: HashMap<GameAssetPath, AnimatorPlayAnimationInfo>,
@@ -33,7 +31,6 @@ impl Animator {
     pub fn new() -> Self {
         Self {
             animations: HashSet::new(),
-            animation_handles: HashMap::new(),
             playing_animations: HashMap::new(),
             to_play_animations: HashMap::new(),
         }

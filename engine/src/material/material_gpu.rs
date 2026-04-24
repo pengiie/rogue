@@ -3,10 +3,6 @@ use std::collections::{HashMap, HashSet};
 use nalgebra::Vector2;
 use rogue_macros::Resource;
 
-use crate::asset::{
-    asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
-    repr::image::ImageAsset,
-};
 use crate::common::freelist::{FreeList, FreeListHandle};
 use crate::event::{EventReader, Events};
 use crate::graphics::{
@@ -17,14 +13,19 @@ use crate::graphics::{
     },
     device::DeviceResource,
 };
-use crate::material::{
-    MaterialBank, MaterialCreateEvent, MaterialId, MaterialSamplerOptions, MaterialTextureType,
-    MaterialUpdateEvent,
-};
+use crate::material::material_bank::{MaterialBank, MaterialBankEvent, MaterialId};
+use crate::material::{MaterialSamplerOptions, MaterialTextureType};
 use crate::resource::{Res, ResMut};
+use crate::{
+    asset::{
+        asset::{AssetHandle, AssetPath, AssetStatus, Assets, GameAssetPath},
+        repr::image::ImageAsset,
+    },
+    material::material_bank::MaterialAssetId,
+};
 
 struct MaterialDescriptor {
-    material_id: MaterialId,
+    material_asset_id: MaterialAssetId,
     color_texture_index: Option<MaterialGpuTextureId>,
     color_sampler_index: Option<MaterialGpuSamplerId>,
 }
@@ -49,14 +50,14 @@ pub struct MaterialBankGpu {
 
     // Buffer and free list match in terms of indices.
     material_descriptors: FreeList<MaterialDescriptor>,
+
     material_descriptor_buffer: Option<ResourceId<Buffer>>,
     /// Materials who should have their descriptor written in the gpu buffer.
     /// Happens when a material is first registered or its texture/sampler changes.
-    loading_materials: HashSet<MaterialId>,
-    material_map: HashMap<MaterialId, FreeListHandle<MaterialDescriptor>>,
+    loading_materials: HashSet<MaterialAssetId>,
+    material_map: HashMap<MaterialAssetId, FreeListHandle<MaterialDescriptor>>,
 
-    material_create_event_reader: EventReader<MaterialCreateEvent>,
-    material_update_event_reader: EventReader<MaterialUpdateEvent>,
+    material_bank_event_reader: EventReader<MaterialBankEvent>,
 }
 
 impl MaterialBankGpu {
@@ -75,14 +76,8 @@ impl MaterialBankGpu {
 
             material_map: HashMap::new(),
 
-            material_create_event_reader: EventReader::new(),
-            material_update_event_reader: EventReader::new(),
+            material_bank_event_reader: EventReader::new(),
         }
-    }
-
-    pub fn is_material_loaded(&self, material_id: MaterialId) -> bool {
-        self.material_map.contains_key(&material_id)
-            && !self.loading_materials.contains(&material_id)
     }
 
     fn get_or_create_sampler_static(
@@ -105,6 +100,12 @@ impl MaterialBankGpu {
         let sampler_index = material_samplers.push(sampler);
         options_to_sampler_map.insert(options.clone(), sampler_index);
         sampler_index
+    }
+
+    pub fn get_material_gpu_ptr(&self, material_id: &MaterialAssetId) -> Option<u32> {
+        self.material_map
+            .get(material_id)
+            .map(|descriptor_id| descriptor_id.index() as u32)
     }
 
     pub fn get_or_load_texture_static(
@@ -215,101 +216,25 @@ impl MaterialBankGpu {
         }
 
         // Load and register any new project materials for the gpu representation
-        for event in material_bank_gpu.material_create_event_reader.read(&events) {
-            let Some(material) = material_bank.materials.get(event.material_id) else {
-                // Material no longer exists in the material bank.
-                continue;
-            };
-            if material_bank_gpu
-                .material_map
-                .contains_key(&event.material_id)
-            {
-                panic!(
-                    "Got creation event for material id {:?} twice which shouldn't happen. {:?}, {:?}",
-                    event.material_id, material.name, material.asset_path
-                );
-            }
+        for event in material_bank_gpu.material_bank_event_reader.read(&events) {
+            match event {
+                MaterialBankEvent::AssetCreated(material_id) => {
+                    let Some(material) = material_bank.materials.get(*material_id) else {
+                        // Material no longer exists in the material bank.
+                        continue;
+                    };
+                    if material_bank_gpu.material_map.contains_key(material_id) {
+                        panic!(
+                            "Got creation event for material id {:?} twice which shouldn't happen. {:?}, {:?}",
+                            material_id, material.name, material.asset_path
+                        );
+                    }
 
-            // Register the gpu material.
-            let material_descriptor_id = material_bank_gpu.material_descriptors.next_free_handle();
-            let color_texture_id = material.color_texture.as_ref().map(|color_texture_path| {
-                Self::get_or_load_texture_static(
-                    &mut material_bank_gpu.asset_to_texture_map,
-                    &mut material_bank_gpu.loading_textures,
-                    &mut material_bank_gpu.material_textures,
-                    &material_bank,
-                    &mut device,
-                    &mut assets,
-                    color_texture_path,
-                    material_descriptor_id,
-                )
-            });
-            let sampler_id = (material.color_texture.is_some()).then(|| {
-                Self::get_or_create_sampler_static(
-                    &mut material_bank_gpu.options_to_sampler_map,
-                    &mut material_bank_gpu.material_samplers,
-                    &mut device,
-                    &MaterialSamplerOptions {},
-                )
-            });
-
-            // Create descriptor.
-            let descriptor = MaterialDescriptor {
-                material_id: event.material_id,
-                color_texture_index: color_texture_id,
-                color_sampler_index: sampler_id,
-            };
-            assert_eq!(
-                material_descriptor_id,
-                material_bank_gpu.material_descriptors.push(descriptor)
-            );
-            material_bank_gpu
-                .material_map
-                .insert(event.material_id, material_descriptor_id);
-            // Mark for gpu update when textures are ready.
-            material_bank_gpu
-                .loading_materials
-                .insert(event.material_id);
-        }
-
-        // Update any existing material with changed textures.
-        for event in material_bank_gpu.material_update_event_reader.read(&events) {
-            log::info!(
-                "Got material update event for material id {:?} for texture type {:?}",
-                event.material_id,
-                event.updated_texture_type
-            );
-            let Some(material) = material_bank.materials.get(event.material_id) else {
-                // Material no longer exists in the material bank.
-                continue;
-            };
-            let Some(material_descriptor_id) =
-                material_bank_gpu.material_map.get(&event.material_id)
-            else {
-                panic!(
-                    "GPU side material descriptor should exist by this materials registration event."
-                );
-            };
-
-            let material_descriptor = material_bank_gpu
-                .material_descriptors
-                .get_mut(*material_descriptor_id)
-                .expect(
-                    "Material descriptor should exist if it is referenced in the material map.",
-                );
-
-            match event.updated_texture_type {
-                MaterialTextureType::Color => {
-                    let new_color_texture_path = material.color_texture.as_ref();
-                    log::info!(
-                        "Material id {:?} color texture updated to {:?}",
-                        event.material_id,
-                        new_color_texture_path
-                    );
-
-                    // Get or load new texture.
+                    // Register the gpu material.
+                    let material_descriptor_id =
+                        material_bank_gpu.material_descriptors.next_free_handle();
                     let color_texture_id =
-                        new_color_texture_path.as_ref().map(|color_texture_path| {
+                        material.color_texture.as_ref().map(|color_texture_path| {
                             Self::get_or_load_texture_static(
                                 &mut material_bank_gpu.asset_to_texture_map,
                                 &mut material_bank_gpu.loading_textures,
@@ -318,10 +243,10 @@ impl MaterialBankGpu {
                                 &mut device,
                                 &mut assets,
                                 color_texture_path,
-                                *material_descriptor_id,
+                                material_descriptor_id,
                             )
                         });
-                    let sampler_id = (new_color_texture_path.is_some()).then(|| {
+                    let sampler_id = (material.color_texture.is_some()).then(|| {
                         Self::get_or_create_sampler_static(
                             &mut material_bank_gpu.options_to_sampler_map,
                             &mut material_bank_gpu.material_samplers,
@@ -330,24 +255,100 @@ impl MaterialBankGpu {
                         )
                     });
 
-                    if material_descriptor.color_texture_index != color_texture_id
-                        || material_descriptor.color_sampler_index != sampler_id
-                    {
-                        // TODO: Worry about deleting possible old textures or marking
-                        // for garbage collection.
-                        log::info!(
-                            "Updating gpu material descriptor for material id {:?} with new texture index {:?} and sampler index {:?}",
-                            event.material_id,
-                            color_texture_id,
-                            sampler_id
+                    // Create descriptor.
+                    let descriptor = MaterialDescriptor {
+                        material_asset_id: *material_id,
+                        color_texture_index: color_texture_id,
+                        color_sampler_index: sampler_id,
+                    };
+                    assert_eq!(
+                        material_descriptor_id,
+                        material_bank_gpu.material_descriptors.push(descriptor)
+                    );
+                    material_bank_gpu
+                        .material_map
+                        .insert(*material_id, material_descriptor_id);
+                    // Mark for gpu update when textures are ready.
+                    material_bank_gpu.loading_materials.insert(*material_id);
+                }
+                MaterialBankEvent::AssetUpdated {
+                    material_id,
+                    updated_texture_type,
+                } => {
+                    log::info!(
+                        "Got material update event for material id {:?} for texture type {:?}",
+                        material_id,
+                        updated_texture_type
+                    );
+                    let Some(material) = material_bank.materials.get(*material_id) else {
+                        // Material no longer exists in the material bank.
+                        continue;
+                    };
+                    let Some(material_descriptor_id) =
+                        material_bank_gpu.material_map.get(material_id)
+                    else {
+                        panic!(
+                            "GPU side material descriptor should exist by this materials registration event."
                         );
-                        material_descriptor.color_texture_index = color_texture_id;
-                        material_descriptor.color_sampler_index = sampler_id;
+                    };
 
-                        // Mark for gpu update when textures are ready.
-                        material_bank_gpu
-                            .loading_materials
-                            .insert(event.material_id);
+                    let material_descriptor = material_bank_gpu
+                .material_descriptors
+                .get_mut(*material_descriptor_id)
+                .expect(
+                    "Material descriptor should exist if it is referenced in the material map.",
+                );
+
+                    match updated_texture_type {
+                        MaterialTextureType::Color => {
+                            let new_color_texture_path = material.color_texture.as_ref();
+                            log::info!(
+                                "Material id {:?} color texture updated to {:?}",
+                                material_id,
+                                new_color_texture_path
+                            );
+
+                            // Get or load new texture.
+                            let color_texture_id =
+                                new_color_texture_path.as_ref().map(|color_texture_path| {
+                                    Self::get_or_load_texture_static(
+                                        &mut material_bank_gpu.asset_to_texture_map,
+                                        &mut material_bank_gpu.loading_textures,
+                                        &mut material_bank_gpu.material_textures,
+                                        &material_bank,
+                                        &mut device,
+                                        &mut assets,
+                                        color_texture_path,
+                                        *material_descriptor_id,
+                                    )
+                                });
+                            let sampler_id = (new_color_texture_path.is_some()).then(|| {
+                                Self::get_or_create_sampler_static(
+                                    &mut material_bank_gpu.options_to_sampler_map,
+                                    &mut material_bank_gpu.material_samplers,
+                                    &mut device,
+                                    &MaterialSamplerOptions {},
+                                )
+                            });
+
+                            if material_descriptor.color_texture_index != color_texture_id
+                                || material_descriptor.color_sampler_index != sampler_id
+                            {
+                                // TODO: Worry about deleting possible old textures or marking
+                                // for garbage collection.
+                                log::info!(
+                                    "Updating gpu material descriptor for material id {:?} with new texture index {:?} and sampler index {:?}",
+                                    material_id,
+                                    color_texture_id,
+                                    sampler_id
+                                );
+                                material_descriptor.color_texture_index = color_texture_id;
+                                material_descriptor.color_sampler_index = sampler_id;
+
+                                // Mark for gpu update when textures are ready.
+                                material_bank_gpu.loading_materials.insert(*material_id);
+                            }
+                        }
                     }
                 }
             }
@@ -459,7 +460,7 @@ impl MaterialBankGpu {
             let offset = descriptor_id.index() as u64 * MATERIAL_DESCRIPTOR_SHADER_SIZE;
             log::info!(
                 "Writing material descriptor for material id {:?}: texture index {:?}, sampler index {:?} at offset {}",
-                descriptor.material_id,
+                descriptor.material_asset_id,
                 buf[0],
                 buf[1],
                 offset

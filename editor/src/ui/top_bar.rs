@@ -74,40 +74,12 @@ impl TopBarPane {
                 }
             });
             ui.add_enabled_ui(ctx.voxel_editing.is_enabled(), |ui| {
-                ui.menu_button("Editing", |ui| match ctx.voxel_editing.edit_target {
-                    Some(EditorVoxelEditingTarget::Entity(entity)) => {
-                        //if let Some(selection) = ctx
-                        //    .voxel_editing
-                        //    .entity_state
-                        //    .get(&entity)
-                        //    .and_then(|state| state.selection.clone())
-                        //{
-                        //    let renderable = ctx
-                        //        .ecs_world
-                        //        .get::<&RenderableVoxelEntity>(entity)
-                        //        .expect("Target editing entity should have a renderable.");
-                        //    assert!(renderable.is_dynamic());
-                        //    if ui.button("Fill").clicked() {
-                        //        let edit = VoxelModelEdit {
-                        //            region: selection,
-                        //            mask: rogue_engine::voxel::voxel::VoxelModelEditMask::new(),
-                        //            operator:
-                        //                rogue_engine::voxel::voxel::VoxelModelEditOperator::Replace(
-                        //                    Some(ctx.voxel_editing.current_voxel_material()),
-                        //                ),
-                        //        };
-                        //        ctx.voxel_editing.apply_edit(
-                        //            ctx.voxel_registry,
-                        //            ctx.events,
-                        //            edit,
-                        //            renderable.voxel_model_id().unwrap(),
-                        //            true,
-                        //        );
-                        //    }
-                        //}
+                ui.menu_button("Editing", |ui| {
+                    if ui.button("Select terrain").clicked() {
+                        ctx.voxel_editing.edit_target = Some(EditorVoxelEditingTarget::Terrain);
+                        ui.close_menu();
                     }
-                    _ => {}
-                })
+                });
             });
 
             if let Some(project_dir) = &ctx.assets.project_dir() {

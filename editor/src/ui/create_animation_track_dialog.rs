@@ -1,16 +1,10 @@
 use rogue_engine::{
-    animation::{
-        animation::{AnimationPropertyTypeInfo, AnimationTrackId},
-        animation_bank::AnimationId,
-    },
+    animation::animation::AnimationTrackId,
     asset::asset::GameAssetPath,
-    entity::{GameEntity, ecs_world::Entity},
+    entity::{ecs_world::Entity, GameEntity},
 };
-
-use crate::{
-    session::EditorCommandEvent,
-    ui::{EditorCommand, EditorDialog, EditorUIContext},
-};
+use rogue_engine::animation::animation_property::AnimationPropertyTypeInfo;
+use crate::ui::{EditorCommand, EditorDialog, EditorUIContext};
 
 const DIALOG_ID: &str = "create_animation_track_dialog";
 

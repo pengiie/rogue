@@ -1,45 +1,24 @@
-use std::{
-    collections::HashMap,
-    ops::{Deref, DerefMut, Range},
-};
+use std::collections::HashMap;
 
-use downcast::{Any, downcast};
-use nalgebra::Vector3;
-use rogue_macros::Resource;
-
-use super::{
-    attachment::{Attachment, AttachmentId, PTMaterial},
-    flat::VoxelModelFlat,
-    voxel_allocator::VoxelDataAllocator,
-    voxel_registry::VoxelModelId,
-    voxel_transform::VoxelModelTransform,
-};
-use crate::physics::transform::Transform;
-use crate::physics::voxel_collider::{VoxelModelCollider, VoxelModelColliderData};
-use crate::{
-    common::color::{
-        Color, ColorSpace, ColorSpaceSrgb, ColorSpaceSrgbLinear, ColorSpaceTransitionFrom,
-        ColorSpaceTransitionInto,
-    },
-    voxel::rvox_asset::RVOXAsset,
-};
+use super::{voxel_allocator::VoxelDataAllocator, voxel_registry::VoxelModelId};
+use crate::material::material_bank::{MaterialAssetId, MaterialBank, MaterialId, NULL_MATERIAL_ID};
+use crate::material::material_gpu::MaterialBankGpu;
+use crate::material::model_material_map::ModelMaterialMap;
+use crate::physics::voxel_collider::VoxelModelColliderData;
+use crate::voxel::rvox_asset::RVOXAsset;
+use crate::world::terrain::region::WorldChunkData;
+use crate::world::terrain::{chunk_lod::ChunkLOD, region_map::ChunkId};
 use crate::{common::geometry::ray::Ray, consts};
 use crate::{
     common::{color::ColorSrgba, geometry::aabb::AABB},
     voxel::voxel_registry::VoxelModelRegistry,
 };
 use crate::{
-    graphics::{
-        backend::{Buffer, GfxBufferCreateInfo, GraphicsBackendDevice, ResourceId},
-        device::{DeviceResource, GfxDevice},
-        gpu_allocator::GpuBufferAllocator,
-    },
+    graphics::device::GfxDevice,
     world::terrain::{chunk_pos::ChunkPos, region_map::RegionMap},
 };
-use crate::{
-    material::MaterialId,
-    world::terrain::{chunk_lod::ChunkLOD, region_map::ChunkId},
-};
+use downcast::{Any, downcast};
+use nalgebra::Vector3;
 
 pub struct VoxelModelEditMaskSource<'a> {
     pub source: &'a dyn VoxelModelEditMaskSourceMethods,
@@ -121,17 +100,19 @@ impl<'a> VoxelModelEditMaskTerrainSource<'a> {
                         ChunkPos::new(self.chunk_min + chunk_pos.map(|x| x as i32));
                     let region_pos = world_chunk_pos.get_region_pos();
 
-                    let Some(chunk_model_id) =
-                        region_map.get_region(&region_pos).and_then(|region| {
-                            region.get_chunk_model(ChunkId {
-                                chunk_pos: world_chunk_pos,
-                                chunk_lod: ChunkLOD::FULL_RES_LOD,
-                            })
+                    let Some(WorldChunkData {
+                        model_id: Some(chunk_model_id),
+                        ..
+                    }) = region_map.get_region(&region_pos).and_then(|region| {
+                        region.get_chunk_data(ChunkId {
+                            chunk_pos: world_chunk_pos,
+                            chunk_lod: ChunkLOD::FULL_RES_LOD,
                         })
+                    })
                     else {
                         continue;
                     };
-                    required_ids.push(chunk_model_id);
+                    required_ids.push(*chunk_model_id);
                     id_to_chunk_pos.push(chunk_pos);
                 }
             }
@@ -270,7 +251,7 @@ pub struct VoxelModelTrace {
 }
 
 pub struct MaterialPalette {
-    palette: HashMap<u16, MaterialId>,
+    palette: HashMap<u16, MaterialAssetId>,
 }
 
 /// 64 bit material data, two halves:
@@ -278,7 +259,7 @@ pub struct MaterialPalette {
 ///
 #[derive(Clone, strum_macros::EnumIs)]
 pub enum VoxelMaterialData {
-    Unbaked(u32),
+    Unbaked(MaterialId),
     Baked { color: ColorSrgba },
 }
 
@@ -287,10 +268,14 @@ impl VoxelMaterialData {
     pub const NEEDS_MATERIAL_BAKE_FLAG: u64 = 0x8000_0000_0000_0000;
     /// Bakes normal.
     pub const NEED_NORMAL_FLAG: u64 = 0x4000_0000_0000_0000;
-    pub fn encode(&self) -> u64 {
+    pub fn encode(&self, material_map: &ModelMaterialMap) -> u64 {
         match self {
             VoxelMaterialData::Unbaked(material_id) => {
-                *material_id as u64 | Self::NEEDS_MATERIAL_BAKE_FLAG | Self::NEED_NORMAL_FLAG
+                let material_id = material_map
+                    .get_model_material(material_id)
+                    .expect("Material should have been registered first.")
+                    .model_material_id;
+                material_id as u64 | Self::NEEDS_MATERIAL_BAKE_FLAG | Self::NEED_NORMAL_FLAG
             }
             VoxelMaterialData::Baked { color } => {
                 let r = (color.r() * 255.0) as u64;
@@ -303,9 +288,13 @@ impl VoxelMaterialData {
         }
     }
 
-    pub fn decode(encoded: u64) -> Self {
+    pub fn decode(encoded: u64, material_map: &ModelMaterialMap) -> Self {
         if (encoded & Self::NEEDS_MATERIAL_BAKE_FLAG) > 0 {
-            VoxelMaterialData::Unbaked((encoded & 0xFFFF) as u32)
+            let model_mat_id = encoded & 0xFFFF;
+            let material_id = material_map
+                .get_global_material(model_mat_id as u32)
+                .unwrap();
+            VoxelMaterialData::Unbaked(*material_id)
         } else {
             let rgba = encoded & 0xFFFF_FFFF;
             let a = (rgba & 0xFF) as f32 / 255.0;
@@ -446,6 +435,8 @@ pub trait VoxelModelGpuImplMethods: Send + Sync + Any {
     fn update_gpu_objects(
         &mut self,
         device: &mut GfxDevice,
+        material_bank: &MaterialBank,
+        material_bank_gpu: &MaterialBankGpu,
         allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImplMethods,
     ) -> bool;

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::graphics::device::GfxDevice;
+use crate::{
+    graphics::device::GfxDevice,
+    material::{material_bank::MaterialBank, material_gpu::MaterialBankGpu},
+};
 
 use super::{
     attachment::{Attachment, AttachmentId},
@@ -14,6 +17,7 @@ use super::{
 pub struct VoxelModelSFTCompressedGpu {
     // Model side length in voxels.
     side_length: u32,
+    material_gpu_ptrs: Option<Vec<u32>>,
     nodes_allocation: Option<VoxelDataAllocation>,
     attachment_lookup_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
     attachment_raw_allocations: HashMap<AttachmentId, VoxelDataAllocation>,
@@ -110,6 +114,7 @@ impl VoxelModelGpuImpl for VoxelModelSFTCompressedGpu {
     fn construct() -> Self {
         Self {
             side_length: 0,
+            material_gpu_ptrs: None,
             nodes_allocation: None,
             attachment_lookup_allocations: HashMap::new(),
             attachment_raw_allocations: HashMap::new(),
@@ -155,6 +160,12 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
             attachment_raw_indices[*attachment as usize] = raw_allocation.ptr_gpu();
         }
 
+        let Some(material_gpu_ptrs) = &self.material_gpu_ptrs else {
+            log::info!("no material ptrs");
+            return None;
+        };
+        log::info!("gpu ptrs: {:?}", material_gpu_ptrs);
+
         let mut info = vec![
             self.side_length,
             // Node ptr (divide by 4 since 4 bytes in a u32)
@@ -162,6 +173,8 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
         ];
         info.append(&mut attachment_lookup_indices);
         info.append(&mut attachment_raw_indices);
+        info.push(material_gpu_ptrs.len() as u32);
+        info.extend(material_gpu_ptrs);
 
         Some(info)
     }
@@ -169,6 +182,8 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
     fn update_gpu_objects(
         &mut self,
         device: &mut GfxDevice,
+        material_bank: &MaterialBank,
+        material_bank_gpu: &MaterialBankGpu,
         allocator: &mut VoxelDataAllocator,
         model: &dyn VoxelModelImplMethods,
     ) -> bool {
@@ -232,6 +247,22 @@ impl VoxelModelGpuImplMethods for VoxelModelSFTCompressedGpu {
             self.side_length = model.side_length;
             // We don't technically allocate anything if this changes, however we
             // return true so the model info entry is updated.
+            did_allocate |= true;
+        }
+
+        let gpu_ptrs = model
+            .material_map
+            .model_materials
+            .iter()
+            .map(|material| {
+                material_bank
+                    .id_to_asset_map
+                    .get(&material.material_id)
+                    .and_then(|asset_id| material_bank_gpu.get_material_gpu_ptr(asset_id))
+            })
+            .collect::<Option<Vec<_>>>();
+        if gpu_ptrs != self.material_gpu_ptrs {
+            self.material_gpu_ptrs = gpu_ptrs;
             did_allocate |= true;
         }
 

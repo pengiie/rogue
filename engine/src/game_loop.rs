@@ -2,18 +2,20 @@ use crate::animation::animation_bank::AnimationBank;
 use crate::animation::animator::Animator;
 use crate::app::{App, AppStage};
 use crate::asset::asset::Assets;
+use crate::audio::{Audio, AudioPlayer};
 use crate::debug::debug_renderer::DebugRenderer;
-use crate::entity::{ecs_world::ECSWorld, scripting::Scripts};
+use crate::entity::ecs_world::ECSWorld;
 use crate::event::Events;
 use crate::graphics::{device::DeviceResource, renderer::Renderer};
 use crate::input::Input;
-use crate::material::{MaterialBank, material_gpu::MaterialBankGpu};
+use crate::material::material_bank::MaterialBank;
+use crate::material::material_gpu::MaterialBankGpu;
 use crate::physics::physics_world::PhysicsWorld;
 use crate::system::System;
 use crate::voxel::baker_gpu::VoxelBakerGpu;
 use crate::voxel::voxel_registry::VoxelModelRegistry;
 use crate::voxel::voxel_registry_gpu::VoxelModelRegistryGpu;
-use crate::window::time::{Instant, Time};
+use crate::window::time::Time;
 use crate::world::sky::Sky;
 use crate::world::terrain::region_map::RegionMap;
 use crate::world::terrain::region_map_gpu::RegionMapGpu;
@@ -69,6 +71,10 @@ pub fn game_loop(app: &App) {
         }
     }
 
+    // ------- AUDIO ---------
+    app.run_system(AudioPlayer::on_update);
+    app.run_system(Audio::on_update);
+
     // ------- ENTITIES ----------
     app.run_system(WorldEntities::load_entity_models);
     // Handle ECSWorld events.
@@ -86,6 +92,8 @@ pub fn game_loop(app: &App) {
     // Rendered terrain relative to player/camera anchor updating.
     app.run_system(WorldChunkStreamer::update);
 
+    // Process any region map commands like clearing, saving, etc.
+    app.run_system(RegionMap::update_process_commands);
     // Load any regions from disk into memory which have chunk data requested.
     app.run_system(RegionMap::update_region_loading);
     // Update from chunk commands and submits chunk events.

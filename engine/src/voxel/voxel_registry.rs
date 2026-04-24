@@ -11,10 +11,8 @@ use rogue_macros::Resource;
 
 use super::{
     flat::{VoxelModelFlat, VoxelModelFlatGpu},
-    sft::VoxelModelSFT,
     sft_compressed::VoxelModelSFTCompressed,
     sft_compressed_gpu::VoxelModelSFTCompressedGpu,
-    sft_gpu::VoxelModelSFTGpu,
     voxel::{VoxelModelGpuImpl, VoxelModelGpuImplMethods, VoxelModelImpl, VoxelModelImplMethods},
 };
 use crate::event::{EventReader, Events};

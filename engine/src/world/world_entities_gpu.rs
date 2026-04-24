@@ -3,17 +3,16 @@ use std::collections::HashSet;
 use nalgebra::Vector3;
 use rogue_macros::Resource;
 
+use crate::material::material_bank::MaterialBank;
+use crate::voxel::voxel_registry_gpu::GpuModelAllocationContext;
 use crate::{
-    entity::{
-        RenderableVoxelEntity,
-        ecs_world::{ECSWorld, Entity},
-    },
+    entity::{RenderableVoxelEntity, ecs_world::ECSWorld},
     event::{EventReader, Events},
     graphics::{
         backend::{Buffer, ResourceId, ShaderWriter},
         device::DeviceResource,
     },
-    material::{MaterialBank, material_gpu::MaterialBankGpu},
+    material::material_gpu::MaterialBankGpu,
     physics::transform::Transform,
     resource::{Res, ResMut},
     voxel::{
@@ -31,7 +30,8 @@ pub struct WorldEntitiesGpu {
     written_entity_count: u32,
 
     /// Entity models which have their gpu model loaded
-    loaded_models: HashSet<VoxelModelId>,
+    pending_loading_models: HashSet<VoxelModelId>,
+    pending_update_models: HashSet<VoxelModelId>,
     model_event_reader: EventReader<VoxelModelEvent>,
 }
 
@@ -41,7 +41,8 @@ impl WorldEntitiesGpu {
             entity_accel_buf: None,
             written_entity_count: 0,
 
-            loaded_models: HashSet::new(),
+            pending_loading_models: HashSet::new(),
+            pending_update_models: HashSet::new(),
             model_event_reader: EventReader::new(),
         }
     }
@@ -57,26 +58,12 @@ impl WorldEntitiesGpu {
         material_bank_gpu: Res<MaterialBankGpu>,
         events: Res<Events>,
     ) {
-        let mut updated_entity_models = HashSet::new();
+        let entities_gpu = &mut *entities_gpu;
         for event in entities_gpu.model_event_reader.read(&events) {
             match event {
                 VoxelModelEvent::UpdatedModel(voxel_model_id) => {
-                    updated_entity_models.insert(*voxel_model_id);
+                    entities_gpu.pending_update_models.insert(*voxel_model_id);
                 }
-            }
-        }
-
-        // Only load entities if all the material are loaded.
-        // TODO: Figure out possible per voxel model material depenencies so we have proper
-        // palettes but idk that takes time this is easy to wait for all materials for now.
-        let mut can_load_models = true;
-        if material_bank.loading_materials() {
-            can_load_models = false;
-        }
-        for (material_id, _) in material_bank.materials.iter_with_handle() {
-            if !material_bank_gpu.is_material_loaded(material_id) {
-                can_load_models = false;
-                break;
             }
         }
 
@@ -90,42 +77,39 @@ impl WorldEntitiesGpu {
             let Some(voxel_model_id) = renderable.voxel_model_id() else {
                 continue;
             };
-            let Some(gpu_model_ptr) = voxel_registry_gpu.get_model_gpu_ptr(&voxel_model_id) else {
-                if !can_load_models {
-                    // We can't load the model yet, so skip for now.
-                    continue;
+
+            if entities_gpu.pending_update_models.contains(&voxel_model_id)
+                || voxel_registry_gpu
+                    .get_model_gpu_ptr(&voxel_model_id)
+                    .is_none()
+            {
+                // Try and load the gpu model for the entity.
+                let side_length = voxel_registry.get_dyn_model(voxel_model_id).length();
+                let success = voxel_registry_gpu.allocate_or_update_model(
+                    &mut GpuModelAllocationContext {
+                        registry: &voxel_registry,
+                        device: &mut device_resource,
+                        material_bank: &material_bank,
+                        material_bank_gpu: &material_bank_gpu,
+                    },
+                    voxel_model_id,
+                );
+                if success {
+                    entities_gpu.pending_update_models.remove(&voxel_model_id);
+                    baker_gpu.create_model_bake_request(
+                        voxel_model_id,
+                        ModelBakeRequest {
+                            offset: Vector3::new(0, 0, 0),
+                            size: side_length,
+                        },
+                    );
                 }
 
-                // Try and load the gpu model for the entity.
-                if entities_gpu.loaded_models.contains(&voxel_model_id) {
-                    // We encountered this model before and already requested to load it.
-                    continue;
-                }
-                voxel_registry_gpu.load_gpu_model(voxel_model_id);
-                let side_length = voxel_registry.get_dyn_model(voxel_model_id).length();
-                baker_gpu.create_model_bake_request(
-                    voxel_model_id,
-                    ModelBakeRequest {
-                        offset: Vector3::new(0, 0, 0),
-                        size: side_length,
-                    },
-                );
-                entities_gpu.loaded_models.insert(voxel_model_id);
                 continue;
             };
-
-            assert!(entities_gpu.loaded_models.contains(&voxel_model_id));
-            if updated_entity_models.contains(&voxel_model_id) {
-                voxel_registry_gpu.mark_gpu_model_update(&voxel_model_id);
-                let model_side_length = voxel_registry.get_dyn_model(voxel_model_id).length();
-                baker_gpu.create_model_bake_request(
-                    voxel_model_id,
-                    ModelBakeRequest {
-                        offset: Vector3::new(0, 0, 0),
-                        size: model_side_length,
-                    },
-                );
-            }
+            let gpu_model_ptr = voxel_registry_gpu
+                .get_model_gpu_ptr(&voxel_model_id)
+                .expect("Model ptr should exist since we checked above");
 
             #[repr(C)]
             #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
